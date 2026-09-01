@@ -1,0 +1,28 @@
+[project]
+name = "owner-lens"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Shiva Chittamuru", email = "shiva.vy147@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+owner-lens = "owner_lens:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.4",
+]
+
+[[tool.uv.index]]
+url = "https://packagefeedproxy.microsoft.io/pypi/simple"
+default = true
