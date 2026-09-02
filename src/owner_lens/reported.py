@@ -32,10 +32,13 @@ SHARES_UNIT: Final = "shares"
 __all__ = [
     "CAPITAL_EXPENDITURES",
     "DILUTED_SHARES",
+    "DIVIDENDS_PAID",
     "INCOME_TAX_EXPENSE",
     "NET_INCOME",
     "OPERATING_CASH_FLOW",
     "PRETAX_INCOME",
+    "REPURCHASES",
+    "STOCK_BASED_COMPENSATION",
     "AmbiguousValueError",
     "AnnualSeries",
     "ConceptNotFoundError",
@@ -45,10 +48,13 @@ __all__ = [
     "normalize_annual_metric",
     "normalize_capital_expenditures",
     "normalize_diluted_shares",
+    "normalize_dividends_paid",
     "normalize_income_tax_expense",
     "normalize_net_income",
     "normalize_operating_cash_flow",
     "normalize_pretax_income",
+    "normalize_repurchases",
+    "normalize_stock_based_compensation",
 ]
 
 
@@ -95,6 +101,17 @@ PRETAX_INCOME: Final = MetricSpec(
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
     ),
+)
+REPURCHASES: Final = MetricSpec(
+    "repurchases", ("PaymentsForRepurchaseOfCommonStock",)
+)
+STOCK_BASED_COMPENSATION: Final = MetricSpec(
+    "stock_based_compensation",
+    ("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"),
+)
+DIVIDENDS_PAID: Final = MetricSpec(
+    "dividends_paid",
+    ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
 )
 
 
@@ -197,3 +214,58 @@ def normalize_pretax_income(
     return normalize_annual_metric(
         raw_facts, PRETAX_INCOME, ticker=ticker, max_years=max_years
     )
+
+
+def normalize_repurchases(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = SUPPORTED_TICKER,
+    max_years: int = DEFAULT_MAX_YEARS,
+) -> AnnualSeries:
+    """Derive Adobe's canonical annual common-stock repurchase cash outflow.
+
+    The value is the reported positive cash-outflow magnitude; it is never
+    inferred from share-count or treasury-stock changes.
+    """
+    return normalize_annual_metric(
+        raw_facts, REPURCHASES, ticker=ticker, max_years=max_years
+    )
+
+
+def normalize_stock_based_compensation(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = SUPPORTED_TICKER,
+    max_years: int = DEFAULT_MAX_YEARS,
+) -> AnnualSeries:
+    """Derive Adobe's canonical annual stock-based compensation expense."""
+    return normalize_annual_metric(
+        raw_facts, STOCK_BASED_COMPENSATION, ticker=ticker, max_years=max_years
+    )
+
+
+def normalize_dividends_paid(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = SUPPORTED_TICKER,
+    max_years: int = DEFAULT_MAX_YEARS,
+) -> AnnualSeries:
+    """Derive Adobe's canonical annual common dividends paid, tolerant of absence.
+
+    Adobe reports no dividend concept, so a missing concept returns an empty
+    series (the fact is absent) rather than raising, preserving the distinction
+    between a company with no dividend program and unavailable data.
+    """
+    normalized_ticker = ensure_supported_ticker(ticker)
+    try:
+        return normalize_annual_metric(
+            raw_facts, DIVIDENDS_PAID, ticker=ticker, max_years=max_years
+        )
+    except ConceptNotFoundError:
+        return AnnualSeries(
+            metric=DIVIDENDS_PAID.metric,
+            ticker=normalized_ticker,
+            concept="",
+            unit=DIVIDENDS_PAID.unit,
+            observations=(),
+        )

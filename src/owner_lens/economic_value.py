@@ -21,8 +21,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, NamedTuple
+from typing import Any
 
+from owner_lens._trajectory import NetCashTrajectory, net_cash_trajectory
 from owner_lens.capital_efficiency import (
     CapitalEfficiencyRow,
     capital_efficiency_from_facts,
@@ -130,17 +131,7 @@ class EconomicValueSnapshot:
     drivers: tuple[EconomicValueDriver, ...]
 
 
-class _NetCashSignal(NamedTuple):
-    """Year-over-year net-cash movement.
-
-    ``direction`` is +1 improved, -1 deteriorated, 0 immaterial. ``flipped`` is
-    True when the position crossed between net cash and net debt. ``net_debt`` is
-    True when the current position is a net-debt position (value < 0).
-    """
-
-    direction: int
-    flipped: bool
-    net_debt: bool
+_NetCashSignal = NetCashTrajectory
 
 
 def _direction(value: float | None, threshold: float) -> int | None:
@@ -180,20 +171,7 @@ def _delta(current: float | None, prior: float | None) -> float | None:
 def _net_cash_signal(
     current: int | None, prior: int | None, thresholds: EconomicValueThresholds
 ) -> _NetCashSignal | None:
-    if current is None or prior is None:
-        return None
-    if prior >= 0 and current < 0:
-        return _NetCashSignal(-1, True, True)
-    if prior < 0 and current >= 0:
-        return _NetCashSignal(1, True, False)
-    base = abs(prior) or 1
-    rel = (current - prior) / base
-    net_debt = current < 0
-    if rel >= thresholds.material_growth:
-        return _NetCashSignal(1, False, net_debt)
-    if rel <= -thresholds.material_growth:
-        return _NetCashSignal(-1, False, net_debt)
-    return _NetCashSignal(0, False, net_debt)
+    return net_cash_trajectory(prior, current, material=thresholds.material_growth)
 
 
 def _emit_directional_drivers(

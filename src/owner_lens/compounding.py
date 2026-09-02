@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
+from owner_lens._trajectory import net_cash_trajectory
 from owner_lens.capital_efficiency import (
     CapitalEfficiencyRow,
     capital_efficiency_from_facts,
@@ -194,19 +195,8 @@ def _net_cash_direction(
     start: int | None, end: int | None, thresholds: CompoundingThresholds
 ) -> int | None:
     """+1 improved, -1 deteriorated, 0 immaterial, None when an endpoint is absent."""
-    if start is None or end is None:
-        return None
-    if start >= 0 and end < 0:
-        return -1
-    if start < 0 and end >= 0:
-        return 1
-    base = abs(start) or 1
-    rel = (end - start) / base
-    if rel >= thresholds.material_fcf_cagr:
-        return 1
-    if rel <= -thresholds.material_fcf_cagr:
-        return -1
-    return 0
+    trajectory = net_cash_trajectory(start, end, material=thresholds.material_fcf_cagr)
+    return trajectory.direction if trajectory is not None else None
 
 
 def count_annual_classifications(
