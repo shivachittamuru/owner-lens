@@ -15,10 +15,10 @@ from owner_lens.sec import (
     CompanyIdentityMismatchError,
     CompanyResolutionError,
     MalformedSecResponseError,
+    MalformedTickerError,
     SecClient,
     SecResponseError,
     SecTransportError,
-    UnsupportedTickerError,
 )
 
 USER_AGENT = "OwnerLens admin@example.com"
@@ -56,6 +56,33 @@ ADBE_FACTS = {
         }
     },
 }
+
+V_CIK = "0001403161"
+COST_CIK = "0000909832"
+AAPL_CIK = "0000320193"
+
+MULTI_MAPPING = {
+    "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+    "1": {"cik_str": 796343, "ticker": "ADBE", "title": "ADOBE INC."},
+    "2": {"cik_str": 1403161, "ticker": "V", "title": "VISA INC."},
+    "3": {
+        "cik_str": 909832,
+        "ticker": "COST",
+        "title": "COSTCO WHOLESALE CORP /NEW",
+    },
+}
+
+
+def _company_facts(cik: int, entity_name: str) -> dict[str, object]:
+    return {"cik": cik, "entityName": entity_name, "facts": {"us-gaap": {}}}
+
+
+V_FACTS = _company_facts(1403161, "VISA INC.")
+COST_FACTS = _company_facts(909832, "COSTCO WHOLESALE CORP /NEW")
+AAPL_FACTS = _company_facts(320193, "Apple Inc.")
+V_FACTS_URL = COMPANY_FACTS_URL_TEMPLATE.format(cik=V_CIK)
+COST_FACTS_URL = COMPANY_FACTS_URL_TEMPLATE.format(cik=COST_CIK)
+AAPL_FACTS_URL = COMPANY_FACTS_URL_TEMPLATE.format(cik=AAPL_CIK)
 
 
 def _handler(
@@ -148,14 +175,16 @@ def test_company_facts_request_uses_ten_digit_cik() -> None:
     assert str(recorder[0].url).endswith(f"CIK{ADBE_CIK}.json")
 
 
-def test_unsupported_ticker_is_rejected_without_network() -> None:
+def test_wellformed_unmapped_ticker_fails_after_mapping_fetch() -> None:
     recorder: list[httpx.Request] = []
-    client = _client({}, recorder)
+    client = _client({COMPANY_TICKERS_URL: _json_response(MULTI_MAPPING)}, recorder)
 
-    with pytest.raises(UnsupportedTickerError):
+    with pytest.raises(CompanyResolutionError):
         client.retrieve_company_facts("MSFT")
 
-    assert recorder == []
+    # A well-formed but unmapped ticker now reaches the mapping, then fails
+    # resolution, distinct from malformed input which never hits the network.
+    assert [str(r.url) for r in recorder] == [COMPANY_TICKERS_URL]
 
 
 def test_missing_mapping_entry_fails_explicitly() -> None:
@@ -265,3 +294,107 @@ def test_company_facts_with_empty_facts_is_valid() -> None:
 def test_empty_user_agent_is_rejected() -> None:
     with pytest.raises(ValueError):
         SecClient("   ")
+
+
+def test_multi_company_mapping_resolves_each_ticker() -> None:
+    cases = [
+        ("ADBE", "ADOBE INC.", ADBE_CIK, ADBE_FACTS_URL, ADBE_FACTS),
+        ("V", "VISA INC.", V_CIK, V_FACTS_URL, V_FACTS),
+        (
+            "COST",
+            "COSTCO WHOLESALE CORP /NEW",
+            COST_CIK,
+            COST_FACTS_URL,
+            COST_FACTS,
+        ),
+        ("AAPL", "Apple Inc.", AAPL_CIK, AAPL_FACTS_URL, AAPL_FACTS),
+    ]
+    for ticker, name, cik, facts_url, facts in cases:
+        recorder: list[httpx.Request] = []
+        client = _client(
+            {
+                COMPANY_TICKERS_URL: _json_response(MULTI_MAPPING),
+                facts_url: _json_response(facts),
+            },
+            recorder,
+        )
+
+        result = client.retrieve_company_facts(ticker)
+
+        assert result.identity == CompanyIdentity(
+            ticker=ticker, company_name=name, cik=cik
+        )
+        assert result.raw_facts == facts
+        assert [str(r.url) for r in recorder] == [COMPANY_TICKERS_URL, facts_url]
+        assert str(recorder[1].url).endswith(f"CIK{cik}.json")
+
+
+def test_multi_company_raw_payload_is_preserved_for_visa() -> None:
+    client = _client(
+        {
+            COMPANY_TICKERS_URL: _json_response(MULTI_MAPPING),
+            V_FACTS_URL: _json_response(V_FACTS),
+        }
+    )
+
+    result = client.retrieve_company_facts("V")
+
+    assert json.dumps(result.raw_facts, sort_keys=True) == json.dumps(
+        V_FACTS, sort_keys=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "expected_cik"),
+    [
+        ("v", "V", V_CIK),
+        ("  V ", "V", V_CIK),
+        ("cost", "COST", COST_CIK),
+        ("CoSt ", "COST", COST_CIK),
+    ],
+)
+def test_canonicalizes_case_and_whitespace_for_multiple_companies(
+    raw: str, expected: str, expected_cik: str
+) -> None:
+    client = _client({COMPANY_TICKERS_URL: _json_response(MULTI_MAPPING)})
+
+    identity = client.resolve_company(raw)
+
+    assert identity.ticker == expected
+    assert identity.cik == expected_cik
+
+
+@pytest.mark.parametrize("ticker", ["", "   ", "\t\n"])
+def test_empty_or_whitespace_ticker_is_malformed_without_network(
+    ticker: str,
+) -> None:
+    recorder: list[httpx.Request] = []
+    client = _client({}, recorder)
+
+    with pytest.raises(MalformedTickerError):
+        client.retrieve_company_facts(ticker)
+
+    assert recorder == []
+
+
+def test_ambiguous_mapping_entries_fail_for_visa() -> None:
+    mapping = {
+        "0": {"cik_str": 1403161, "ticker": "V", "title": "VISA INC."},
+        "1": {"cik_str": 222222, "ticker": "V", "title": "VISA DUP"},
+    }
+    client = _client({COMPANY_TICKERS_URL: _json_response(mapping)})
+
+    with pytest.raises(CompanyResolutionError):
+        client.resolve_company("V")
+
+
+def test_company_facts_cik_mismatch_fails_for_visa() -> None:
+    client = _client(
+        {
+            COMPANY_TICKERS_URL: _json_response(MULTI_MAPPING),
+            V_FACTS_URL: _json_response(_company_facts(999999, "VISA INC.")),
+        }
+    )
+
+    with pytest.raises(CompanyIdentityMismatchError):
+        client.retrieve_company_facts("V")

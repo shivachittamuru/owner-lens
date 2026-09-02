@@ -120,11 +120,11 @@ from owner_lens.sec import (
     CompanyIdentityMismatchError,
     CompanyResolutionError,
     MalformedSecResponseError,
+    MalformedTickerError,
     SecClient,
     SecError,
     SecResponseError,
     SecTransportError,
-    UnsupportedTickerError,
 )
 
 __all__ = [
@@ -165,6 +165,7 @@ __all__ = [
     "EconomicValueThresholds",
     "MalformedFactsError",
     "MalformedSecResponseError",
+    "MalformedTickerError",
     "MetricSpec",
     "OperatingIncomeConceptNotFoundError",
     "OperatingIncomeNormalizationError",
@@ -178,7 +179,6 @@ __all__ = [
     "SecResponseError",
     "SecTransportError",
     "SummaryDriver",
-    "UnsupportedTickerError",
     "align_annual_metrics",
     "build_capital_allocation_rows",
     "build_compounding_view",
@@ -276,3 +276,5 @@ def main() -> None:
 
 # $env:OWNER_LENS_SEC_USER_AGENT = "OwnerLens admin@example.com"
 # uv run owner-lens ADBE
+# uv run owner-lens V
+# uv run owner-lens COST

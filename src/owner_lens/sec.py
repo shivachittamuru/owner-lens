@@ -1,9 +1,9 @@
 """SEC company identity resolution and raw Company Facts retrieval.
 
-This module supports the first OwnerLens vertical slice: resolving the ADBE
-ticker to Adobe's SEC identity and retrieving the raw Company Facts JSON. It
-performs no financial normalization. The parsed Company Facts payload is
-returned unchanged so callers inspect source truth.
+This module resolves any ticker present in the SEC company ticker mapping to
+its SEC identity and retrieves the raw Company Facts JSON. It performs no
+financial normalization. The parsed Company Facts payload is returned unchanged
+so callers inspect source truth.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from typing import Any, Final, Self
 
 import httpx
 
-SUPPORTED_TICKER: Final = "ADBE"
 COMPANY_TICKERS_URL: Final = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL_TEMPLATE: Final = (
     "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -26,12 +25,12 @@ class SecError(Exception):
     """Base class for every SEC retrieval failure in this feature."""
 
 
-class UnsupportedTickerError(SecError):
-    """Raised when the requested ticker is not supported by this slice."""
+class MalformedTickerError(SecError):
+    """Raised when the requested ticker is empty or whitespace only."""
 
 
 class CompanyResolutionError(SecError):
-    """Raised when the SEC mapping cannot yield one usable ADBE identity."""
+    """Raised when the SEC mapping cannot yield one usable company identity."""
 
 
 class SecTransportError(SecError):
@@ -96,7 +95,7 @@ def _format_cik(number: int) -> str:
 
 
 class SecClient:
-    """Synchronous SEC client for ADBE identity and raw Company Facts."""
+    """Synchronous SEC client for company identity and raw Company Facts."""
 
     def __init__(
         self,
@@ -156,10 +155,9 @@ class SecClient:
     def resolve_company(self, ticker: str) -> CompanyIdentity:
         """Resolve a ticker to its SEC identity via the company mapping."""
         normalized = ticker.strip().upper()
-        if normalized != SUPPORTED_TICKER:
-            raise UnsupportedTickerError(
-                f"Unsupported ticker {ticker!r}; only {SUPPORTED_TICKER} is "
-                "supported by this feature."
+        if not normalized:
+            raise MalformedTickerError(
+                "A non-empty ticker is required to resolve a company identity."
             )
         mapping = self._get_json(COMPANY_TICKERS_URL)
         return _resolve_identity_from_mapping(mapping, normalized)
