@@ -9,6 +9,21 @@ from __future__ import annotations
 import os
 import sys
 
+from owner_lens._annual import AnnualObservation
+from owner_lens.margin import (
+    AnnualMetricRow,
+    OperatingMargin,
+    align_annual_metrics,
+    operating_margins,
+)
+from owner_lens.operating_income import (
+    AmbiguousOperatingIncomeError,
+    AnnualOperatingIncomeObservation,
+    AnnualOperatingIncomeSeries,
+    OperatingIncomeConceptNotFoundError,
+    OperatingIncomeNormalizationError,
+    normalize_annual_operating_income,
+)
 from owner_lens.revenue import (
     AmbiguousRevenueError,
     AnnualRevenueObservation,
@@ -32,7 +47,12 @@ from owner_lens.sec import (
 )
 
 __all__ = [
+    "AmbiguousOperatingIncomeError",
     "AmbiguousRevenueError",
+    "AnnualMetricRow",
+    "AnnualObservation",
+    "AnnualOperatingIncomeObservation",
+    "AnnualOperatingIncomeSeries",
     "AnnualRevenueObservation",
     "AnnualRevenueSeries",
     "CompanyFactsResult",
@@ -41,6 +61,9 @@ __all__ = [
     "CompanyResolutionError",
     "MalformedFactsError",
     "MalformedSecResponseError",
+    "OperatingIncomeConceptNotFoundError",
+    "OperatingIncomeNormalizationError",
+    "OperatingMargin",
     "RevenueConceptNotFoundError",
     "RevenueNormalizationError",
     "SecClient",
@@ -48,8 +71,11 @@ __all__ = [
     "SecResponseError",
     "SecTransportError",
     "UnsupportedTickerError",
+    "align_annual_metrics",
     "main",
+    "normalize_annual_operating_income",
     "normalize_annual_revenue",
+    "operating_margins",
 ]
 
 _USER_AGENT_ENV_VAR = "OWNER_LENS_SEC_USER_AGENT"
