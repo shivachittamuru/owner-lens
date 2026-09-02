@@ -49,6 +49,16 @@ from owner_lens.compounding import (
     compounding_views_from_facts,
     format_compounding_view,
 )
+from owner_lens.economic_summary import (
+    DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS,
+    EconomicSummaryThresholds,
+    EconomicValueSummary,
+    OverallEconomicValueClassification,
+    SummaryDriver,
+    economic_value_summary_from_facts,
+    format_economic_value_summary,
+    synthesize_economic_value_summary,
+)
 from owner_lens.economic_value import (
     DEFAULT_THRESHOLDS,
     EconomicValueClassification,
@@ -120,6 +130,7 @@ from owner_lens.sec import (
 __all__ = [
     "DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS",
     "DEFAULT_COMPOUNDING_THRESHOLDS",
+    "DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS",
     "DEFAULT_THRESHOLDS",
     "AmbiguousOperatingIncomeError",
     "AmbiguousRevenueError",
@@ -146,9 +157,11 @@ __all__ = [
     "CompoundingThresholds",
     "ConceptNotFoundError",
     "EconomicCompoundingView",
+    "EconomicSummaryThresholds",
     "EconomicValueClassification",
     "EconomicValueDriver",
     "EconomicValueSnapshot",
+    "EconomicValueSummary",
     "EconomicValueThresholds",
     "MalformedFactsError",
     "MalformedSecResponseError",
@@ -156,6 +169,7 @@ __all__ = [
     "OperatingIncomeConceptNotFoundError",
     "OperatingIncomeNormalizationError",
     "OperatingMargin",
+    "OverallEconomicValueClassification",
     "OwnerEconomicsRow",
     "RevenueConceptNotFoundError",
     "RevenueNormalizationError",
@@ -163,6 +177,7 @@ __all__ = [
     "SecError",
     "SecResponseError",
     "SecTransportError",
+    "SummaryDriver",
     "UnsupportedTickerError",
     "align_annual_metrics",
     "build_capital_allocation_rows",
@@ -180,8 +195,10 @@ __all__ = [
     "compute_capital_efficiency",
     "compute_owner_economics",
     "economic_value_from_facts",
+    "economic_value_summary_from_facts",
     "format_capital_allocation_view",
     "format_compounding_view",
+    "format_economic_value_summary",
     "format_economic_value_view",
     "main",
     "normalize_annual_metric",
@@ -204,6 +221,7 @@ __all__ = [
     "normalize_total_equity",
     "operating_margins",
     "owner_economics_from_facts",
+    "synthesize_economic_value_summary",
 ]
 
 _USER_AGENT_ENV_VAR = "OWNER_LENS_SEC_USER_AGENT"
