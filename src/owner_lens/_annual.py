@@ -35,6 +35,14 @@ class MalformedFactsError(AnnualNormalizationError):
     """Raised when the payload lacks a usable us-gaap fact structure."""
 
 
+class ConceptNotFoundError(AnnualNormalizationError):
+    """Raised when no preference-order concept has a qualifying observation."""
+
+
+class AmbiguousValueError(AnnualNormalizationError):
+    """Raised when a fiscal year has conflicting distinct full-year values."""
+
+
 @dataclass(frozen=True)
 class AnnualObservation:
     """One canonical full fiscal-year reported value with SEC provenance."""
@@ -82,13 +90,14 @@ def select_annual_series(
     max_years: int,
     concept_error: type[Exception],
     ambiguity_error: type[Exception],
+    unit: str = TARGET_UNIT,
 ) -> tuple[str, tuple[AnnualObservation, ...]]:
     """Select one concept and resolve its canonical annual observations."""
     for concept in concept_preference:
         entry = us_gaap.get(concept)
         if not isinstance(entry, dict):
             continue
-        observations = _qualifying_observations(concept, entry)
+        observations = _qualifying_observations(concept, entry, unit)
         if not observations:
             continue
         by_year: dict[int, list[AnnualObservation]] = {}
@@ -109,11 +118,12 @@ def select_annual_series(
 def _qualifying_observations(
     concept: str,
     entry: dict[str, Any],
+    unit: str,
 ) -> list[AnnualObservation]:
     units = entry.get("units")
     if not isinstance(units, dict):
         return []
-    facts = units.get(TARGET_UNIT)
+    facts = units.get(unit)
     if not isinstance(facts, list):
         return []
 
@@ -123,7 +133,7 @@ def _qualifying_observations(
             continue
         if fact.get("fp") != ANNUAL_FISCAL_PERIOD:
             continue
-        observation = _observation_from_fact(concept, fact)
+        observation = _observation_from_fact(concept, fact, unit)
         if observation is not None:
             observations.append(observation)
     return observations
@@ -132,6 +142,7 @@ def _qualifying_observations(
 def _observation_from_fact(
     concept: str,
     fact: dict[str, Any],
+    unit: str,
 ) -> AnnualObservation | None:
     missing = [field for field in _REQUIRED_FACT_FIELDS if field not in fact]
     if missing:
@@ -161,7 +172,7 @@ def _observation_from_fact(
 
     return AnnualObservation(
         concept=concept,
-        unit=TARGET_UNIT,
+        unit=unit,
         fiscal_year=period_end.year,
         fiscal_period=ANNUAL_FISCAL_PERIOD,
         period_start=period_start,

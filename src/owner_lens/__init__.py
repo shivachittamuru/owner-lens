@@ -24,6 +24,22 @@ from owner_lens.operating_income import (
     OperatingIncomeNormalizationError,
     normalize_annual_operating_income,
 )
+from owner_lens.owner_economics import (
+    OwnerEconomicsRow,
+    compute_owner_economics,
+    owner_economics_from_facts,
+)
+from owner_lens.reported import (
+    AmbiguousValueError,
+    AnnualSeries,
+    ConceptNotFoundError,
+    MetricSpec,
+    normalize_annual_metric,
+    normalize_capital_expenditures,
+    normalize_diluted_shares,
+    normalize_net_income,
+    normalize_operating_cash_flow,
+)
 from owner_lens.revenue import (
     AmbiguousRevenueError,
     AnnualRevenueObservation,
@@ -49,21 +65,26 @@ from owner_lens.sec import (
 __all__ = [
     "AmbiguousOperatingIncomeError",
     "AmbiguousRevenueError",
+    "AmbiguousValueError",
     "AnnualMetricRow",
     "AnnualObservation",
     "AnnualOperatingIncomeObservation",
     "AnnualOperatingIncomeSeries",
     "AnnualRevenueObservation",
     "AnnualRevenueSeries",
+    "AnnualSeries",
     "CompanyFactsResult",
     "CompanyIdentity",
     "CompanyIdentityMismatchError",
     "CompanyResolutionError",
+    "ConceptNotFoundError",
     "MalformedFactsError",
     "MalformedSecResponseError",
+    "MetricSpec",
     "OperatingIncomeConceptNotFoundError",
     "OperatingIncomeNormalizationError",
     "OperatingMargin",
+    "OwnerEconomicsRow",
     "RevenueConceptNotFoundError",
     "RevenueNormalizationError",
     "SecClient",
@@ -72,10 +93,17 @@ __all__ = [
     "SecTransportError",
     "UnsupportedTickerError",
     "align_annual_metrics",
+    "compute_owner_economics",
     "main",
+    "normalize_annual_metric",
     "normalize_annual_operating_income",
     "normalize_annual_revenue",
+    "normalize_capital_expenditures",
+    "normalize_diluted_shares",
+    "normalize_net_income",
+    "normalize_operating_cash_flow",
     "operating_margins",
+    "owner_economics_from_facts",
 ]
 
 _USER_AGENT_ENV_VAR = "OWNER_LENS_SEC_USER_AGENT"
