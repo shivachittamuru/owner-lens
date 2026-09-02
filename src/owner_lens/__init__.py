@@ -23,6 +23,17 @@ from owner_lens.capital_efficiency import (
     capital_efficiency_from_facts,
     compute_capital_efficiency,
 )
+from owner_lens.economic_value import (
+    DEFAULT_THRESHOLDS,
+    EconomicValueClassification,
+    EconomicValueDriver,
+    EconomicValueSnapshot,
+    EconomicValueThresholds,
+    build_economic_value_snapshots,
+    classify_economic_value,
+    economic_value_from_facts,
+    format_economic_value_view,
+)
 from owner_lens.margin import (
     AnnualMetricRow,
     OperatingMargin,
@@ -78,6 +89,7 @@ from owner_lens.sec import (
 )
 
 __all__ = [
+    "DEFAULT_THRESHOLDS",
     "AmbiguousOperatingIncomeError",
     "AmbiguousRevenueError",
     "AmbiguousValueError",
@@ -94,6 +106,10 @@ __all__ = [
     "CompanyIdentityMismatchError",
     "CompanyResolutionError",
     "ConceptNotFoundError",
+    "EconomicValueClassification",
+    "EconomicValueDriver",
+    "EconomicValueSnapshot",
+    "EconomicValueThresholds",
     "MalformedFactsError",
     "MalformedSecResponseError",
     "MetricSpec",
@@ -109,9 +125,13 @@ __all__ = [
     "SecTransportError",
     "UnsupportedTickerError",
     "align_annual_metrics",
+    "build_economic_value_snapshots",
     "capital_efficiency_from_facts",
+    "classify_economic_value",
     "compute_capital_efficiency",
     "compute_owner_economics",
+    "economic_value_from_facts",
+    "format_economic_value_view",
     "main",
     "normalize_annual_metric",
     "normalize_annual_operating_income",
