@@ -21,6 +21,7 @@ DEFAULT_MAX_YEARS: Final = 5
 _MIN_FULL_YEAR_DAYS: Final = 350
 _MAX_FULL_YEAR_DAYS: Final = 380
 _REQUIRED_FACT_FIELDS: Final = ("start", "end", "val", "fp", "form", "filed", "accn")
+_INSTANT_REQUIRED_FACT_FIELDS: Final = ("end", "val", "fp", "form", "filed", "accn")
 
 
 class AnnualNormalizationError(Exception):
@@ -92,7 +93,7 @@ def select_annual_series(
     ambiguity_error: type[Exception],
     unit: str = TARGET_UNIT,
 ) -> tuple[str, tuple[AnnualObservation, ...]]:
-    """Select one concept and resolve its canonical annual observations."""
+    """Select one concept and resolve its canonical duration annual series."""
     for concept in concept_preference:
         entry = us_gaap.get(concept)
         if not isinstance(entry, dict):
@@ -100,18 +101,59 @@ def select_annual_series(
         observations = _qualifying_observations(concept, entry, unit)
         if not observations:
             continue
-        by_year: dict[int, list[AnnualObservation]] = {}
-        for observation in observations:
-            by_year.setdefault(observation.fiscal_year, []).append(observation)
-        years = sorted(by_year, reverse=True)[:max_years]
-        resolved = tuple(
-            _resolve_year(concept, year, by_year[year], ambiguity_error)
-            for year in years
+        return concept, _resolve_series(
+            concept, observations, max_years, ambiguity_error
         )
-        return concept, resolved
     raise concept_error(
         "No supported US-GAAP concept with a full fiscal-year observation was "
         f"found. Tried: {', '.join(concept_preference)}."
+    )
+
+
+def select_instant_series(
+    us_gaap: dict[str, Any],
+    concept_preference: tuple[str, ...],
+    *,
+    max_years: int,
+    concept_error: type[Exception],
+    ambiguity_error: type[Exception],
+    unit: str = TARGET_UNIT,
+) -> tuple[str, tuple[AnnualObservation, ...]]:
+    """Select one concept and resolve its canonical fiscal-year-end instant series.
+
+    Balance-sheet facts are instant (no start date), so they are selected by
+    fiscal-period-end semantics rather than a duration window. This keeps the
+    instant path explicitly distinct from the duration path above.
+    """
+    for concept in concept_preference:
+        entry = us_gaap.get(concept)
+        if not isinstance(entry, dict):
+            continue
+        observations = _qualifying_instant_observations(concept, entry, unit)
+        if not observations:
+            continue
+        return concept, _resolve_series(
+            concept, observations, max_years, ambiguity_error
+        )
+    raise concept_error(
+        "No supported US-GAAP concept with a fiscal-year-end instant observation "
+        f"was found. Tried: {', '.join(concept_preference)}."
+    )
+
+
+def _resolve_series(
+    concept: str,
+    observations: list[AnnualObservation],
+    max_years: int,
+    ambiguity_error: type[Exception],
+) -> tuple[AnnualObservation, ...]:
+    by_year: dict[int, list[AnnualObservation]] = {}
+    for observation in observations:
+        by_year.setdefault(observation.fiscal_year, []).append(observation)
+    years = sorted(by_year, reverse=True)[:max_years]
+    return tuple(
+        _resolve_year(concept, year, by_year[year], ambiguity_error)
+        for year in years
     )
 
 
@@ -131,11 +173,43 @@ def _qualifying_observations(
     for fact in facts:
         if not isinstance(fact, dict):
             continue
+        # Duration facts have a start date; skip instant facts.
+        if "start" not in fact:
+            continue
         if fact.get("fp") != ANNUAL_FISCAL_PERIOD:
             continue
         observation = _observation_from_fact(concept, fact, unit)
         if observation is not None:
             observations.append(observation)
+    return observations
+
+
+def _qualifying_instant_observations(
+    concept: str,
+    entry: dict[str, Any],
+    unit: str,
+) -> list[AnnualObservation]:
+    units = entry.get("units")
+    if not isinstance(units, dict):
+        return []
+    facts = units.get(unit)
+    if not isinstance(facts, list):
+        return []
+
+    observations: list[AnnualObservation] = []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        # Instant facts have no start date; require annual 10-K fiscal-year-end.
+        if "start" in fact:
+            continue
+        if fact.get("fp") != ANNUAL_FISCAL_PERIOD:
+            continue
+        form = fact.get("form")
+        if not isinstance(form, str) or not form.startswith("10-K"):
+            continue
+        observation = _instant_observation_from_fact(concept, fact, unit)
+        observations.append(observation)
     return observations
 
 
@@ -176,6 +250,46 @@ def _observation_from_fact(
         fiscal_year=period_end.year,
         fiscal_period=ANNUAL_FISCAL_PERIOD,
         period_start=period_start,
+        period_end=period_end,
+        form=str(fact["form"]),
+        filed=filed,
+        accession=str(fact["accn"]),
+        value=value,
+    )
+
+
+def _instant_observation_from_fact(
+    concept: str,
+    fact: dict[str, Any],
+    unit: str,
+) -> AnnualObservation:
+    missing = [field for field in _INSTANT_REQUIRED_FACT_FIELDS if field not in fact]
+    if missing:
+        raise MalformedFactsError(
+            f"Instant {concept} fact is missing required field(s): "
+            f"{', '.join(missing)}."
+        )
+    try:
+        period_end = date.fromisoformat(fact["end"])
+        filed = date.fromisoformat(fact["filed"])
+    except (TypeError, ValueError) as exc:
+        raise MalformedFactsError(
+            f"Instant {concept} fact has an invalid date: {exc}"
+        ) from exc
+
+    value = fact["val"]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise MalformedFactsError(
+            f"Instant {concept} fact has a non-integer value: {value!r}"
+        )
+
+    # Instant facts have a single point in time; start equals end.
+    return AnnualObservation(
+        concept=concept,
+        unit=unit,
+        fiscal_year=period_end.year,
+        fiscal_period=ANNUAL_FISCAL_PERIOD,
+        period_start=period_end,
         period_end=period_end,
         form=str(fact["form"]),
         filed=filed,

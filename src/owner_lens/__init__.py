@@ -10,6 +10,19 @@ import os
 import sys
 
 from owner_lens._annual import AnnualObservation
+from owner_lens.balance_sheet import (
+    normalize_cash,
+    normalize_current_debt,
+    normalize_long_term_debt,
+    normalize_short_term_investments,
+    normalize_total_assets,
+    normalize_total_equity,
+)
+from owner_lens.capital_efficiency import (
+    CapitalEfficiencyRow,
+    capital_efficiency_from_facts,
+    compute_capital_efficiency,
+)
 from owner_lens.margin import (
     AnnualMetricRow,
     OperatingMargin,
@@ -37,8 +50,10 @@ from owner_lens.reported import (
     normalize_annual_metric,
     normalize_capital_expenditures,
     normalize_diluted_shares,
+    normalize_income_tax_expense,
     normalize_net_income,
     normalize_operating_cash_flow,
+    normalize_pretax_income,
 )
 from owner_lens.revenue import (
     AmbiguousRevenueError,
@@ -73,6 +88,7 @@ __all__ = [
     "AnnualRevenueObservation",
     "AnnualRevenueSeries",
     "AnnualSeries",
+    "CapitalEfficiencyRow",
     "CompanyFactsResult",
     "CompanyIdentity",
     "CompanyIdentityMismatchError",
@@ -93,15 +109,25 @@ __all__ = [
     "SecTransportError",
     "UnsupportedTickerError",
     "align_annual_metrics",
+    "capital_efficiency_from_facts",
+    "compute_capital_efficiency",
     "compute_owner_economics",
     "main",
     "normalize_annual_metric",
     "normalize_annual_operating_income",
     "normalize_annual_revenue",
     "normalize_capital_expenditures",
+    "normalize_cash",
+    "normalize_current_debt",
     "normalize_diluted_shares",
+    "normalize_income_tax_expense",
+    "normalize_long_term_debt",
     "normalize_net_income",
     "normalize_operating_cash_flow",
+    "normalize_pretax_income",
+    "normalize_short_term_investments",
+    "normalize_total_assets",
+    "normalize_total_equity",
     "operating_margins",
     "owner_economics_from_facts",
 ]

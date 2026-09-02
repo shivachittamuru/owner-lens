@@ -32,8 +32,10 @@ SHARES_UNIT: Final = "shares"
 __all__ = [
     "CAPITAL_EXPENDITURES",
     "DILUTED_SHARES",
+    "INCOME_TAX_EXPENSE",
     "NET_INCOME",
     "OPERATING_CASH_FLOW",
+    "PRETAX_INCOME",
     "AmbiguousValueError",
     "AnnualSeries",
     "ConceptNotFoundError",
@@ -43,8 +45,10 @@ __all__ = [
     "normalize_annual_metric",
     "normalize_capital_expenditures",
     "normalize_diluted_shares",
+    "normalize_income_tax_expense",
     "normalize_net_income",
     "normalize_operating_cash_flow",
+    "normalize_pretax_income",
 ]
 
 
@@ -81,6 +85,16 @@ DILUTED_SHARES: Final = MetricSpec(
     "diluted_shares",
     ("WeightedAverageNumberOfDilutedSharesOutstanding",),
     unit=SHARES_UNIT,
+)
+INCOME_TAX_EXPENSE: Final = MetricSpec(
+    "income_tax_expense", ("IncomeTaxExpenseBenefit",)
+)
+PRETAX_INCOME: Final = MetricSpec(
+    "pretax_income",
+    (
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ),
 )
 
 
@@ -158,4 +172,28 @@ def normalize_diluted_shares(
     """Derive Adobe's canonical annual diluted weighted-average shares series."""
     return normalize_annual_metric(
         raw_facts, DILUTED_SHARES, ticker=ticker, max_years=max_years
+    )
+
+
+def normalize_income_tax_expense(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = SUPPORTED_TICKER,
+    max_years: int = DEFAULT_MAX_YEARS,
+) -> AnnualSeries:
+    """Derive Adobe's canonical annual income tax expense series."""
+    return normalize_annual_metric(
+        raw_facts, INCOME_TAX_EXPENSE, ticker=ticker, max_years=max_years
+    )
+
+
+def normalize_pretax_income(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = SUPPORTED_TICKER,
+    max_years: int = DEFAULT_MAX_YEARS,
+) -> AnnualSeries:
+    """Derive Adobe's canonical annual pretax income series."""
+    return normalize_annual_metric(
+        raw_facts, PRETAX_INCOME, ticker=ticker, max_years=max_years
     )
