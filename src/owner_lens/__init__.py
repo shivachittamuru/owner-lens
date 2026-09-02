@@ -23,6 +23,19 @@ from owner_lens.capital_efficiency import (
     capital_efficiency_from_facts,
     compute_capital_efficiency,
 )
+from owner_lens.compounding import (
+    DEFAULT_COMPOUNDING_THRESHOLDS,
+    CompoundingClassification,
+    CompoundingDriver,
+    CompoundingThresholds,
+    EconomicCompoundingView,
+    build_compounding_view,
+    cagr,
+    classify_compounding,
+    compounding_view_from_facts,
+    compounding_views_from_facts,
+    format_compounding_view,
+)
 from owner_lens.economic_value import (
     DEFAULT_THRESHOLDS,
     EconomicValueClassification,
@@ -89,6 +102,7 @@ from owner_lens.sec import (
 )
 
 __all__ = [
+    "DEFAULT_COMPOUNDING_THRESHOLDS",
     "DEFAULT_THRESHOLDS",
     "AmbiguousOperatingIncomeError",
     "AmbiguousRevenueError",
@@ -105,7 +119,11 @@ __all__ = [
     "CompanyIdentity",
     "CompanyIdentityMismatchError",
     "CompanyResolutionError",
+    "CompoundingClassification",
+    "CompoundingDriver",
+    "CompoundingThresholds",
     "ConceptNotFoundError",
+    "EconomicCompoundingView",
     "EconomicValueClassification",
     "EconomicValueDriver",
     "EconomicValueSnapshot",
@@ -125,12 +143,18 @@ __all__ = [
     "SecTransportError",
     "UnsupportedTickerError",
     "align_annual_metrics",
+    "build_compounding_view",
     "build_economic_value_snapshots",
+    "cagr",
     "capital_efficiency_from_facts",
+    "classify_compounding",
     "classify_economic_value",
+    "compounding_view_from_facts",
+    "compounding_views_from_facts",
     "compute_capital_efficiency",
     "compute_owner_economics",
     "economic_value_from_facts",
+    "format_compounding_view",
     "format_economic_value_view",
     "main",
     "normalize_annual_metric",
