@@ -9,6 +9,15 @@ from __future__ import annotations
 import os
 import sys
 
+from owner_lens.revenue import (
+    AmbiguousRevenueError,
+    AnnualRevenueObservation,
+    AnnualRevenueSeries,
+    MalformedFactsError,
+    RevenueConceptNotFoundError,
+    RevenueNormalizationError,
+    normalize_annual_revenue,
+)
 from owner_lens.sec import (
     CompanyFactsResult,
     CompanyIdentity,
@@ -23,17 +32,24 @@ from owner_lens.sec import (
 )
 
 __all__ = [
+    "AmbiguousRevenueError",
+    "AnnualRevenueObservation",
+    "AnnualRevenueSeries",
     "CompanyFactsResult",
     "CompanyIdentity",
     "CompanyIdentityMismatchError",
     "CompanyResolutionError",
+    "MalformedFactsError",
     "MalformedSecResponseError",
+    "RevenueConceptNotFoundError",
+    "RevenueNormalizationError",
     "SecClient",
     "SecError",
     "SecResponseError",
     "SecTransportError",
     "UnsupportedTickerError",
     "main",
+    "normalize_annual_revenue",
 ]
 
 _USER_AGENT_ENV_VAR = "OWNER_LENS_SEC_USER_AGENT"
@@ -84,3 +100,7 @@ def main() -> None:
     print(sorted(us_gaap.keys())[:10])
     print()
     print("-" * 30)
+
+
+# $env:OWNER_LENS_SEC_USER_AGENT = "OwnerLens admin@example.com"
+# uv run owner-lens ADBE
