@@ -382,3 +382,28 @@ def test_drivers_are_deduplicated_across_layers() -> None:
         ],
     )
     assert summary.key_positive_drivers.count(Sd.ROIC_IMPROVING) == 1
+
+
+def test_costco_full_pipeline_summary_is_not_insufficient() -> None:
+    from _fixtures import costco_facts
+
+    from owner_lens import economic_value_summary_from_facts
+
+    summary = economic_value_summary_from_facts(costco_facts(), ticker="COST")
+
+    assert (
+        summary.overall_economic_value_classification is not Overall.INSUFFICIENT_DATA
+    )
+
+
+def test_visa_summary_is_insufficient_but_preserves_evidence() -> None:
+    from _fixtures import visa_facts
+
+    from owner_lens import economic_value_summary_from_facts
+
+    summary = economic_value_summary_from_facts(visa_facts(), ticker="V")
+
+    assert summary.overall_economic_value_classification is Overall.INSUFFICIENT_DATA
+    # Per-share evidence unavailable, not fabricated; non-per-share evidence kept.
+    assert summary.long_term_fcf_per_share_cagr is None
+    assert summary.latest_roic is not None

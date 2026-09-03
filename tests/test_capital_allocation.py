@@ -328,3 +328,19 @@ def test_roic_context_and_direction_drivers() -> None:
     )
     assert Drv.LOW_ROIC_CONTEXT in row.drivers
     assert Drv.ROIC_DETERIORATING in row.drivers
+
+
+def test_visa_buyback_effectiveness_insufficient_but_facts_available() -> None:
+    from _fixtures import visa_facts
+
+    from owner_lens import capital_allocation_from_facts
+
+    rows = capital_allocation_from_facts(visa_facts(), ticker="V")
+    latest = rows[0]
+
+    assert latest.classification is Cls.INSUFFICIENT_DATA
+    assert latest.buyback_effectiveness is BuybackEffectiveness.INSUFFICIENT_DATA
+    # Reported capital-allocation facts remain available (not fabricated).
+    assert latest.repurchases is not None
+    assert latest.sbc is not None
+    assert latest.free_cash_flow is not None

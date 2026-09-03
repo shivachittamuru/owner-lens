@@ -8,8 +8,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from _fixtures import visa_facts
 
 from owner_lens import (
+    DEFAULT_THRESHOLDS,
     CapitalEfficiencyRow,
     EconomicValueClassification,
     EconomicValueDriver,
@@ -18,6 +20,7 @@ from owner_lens import (
     OwnerEconomicsRow,
     build_economic_value_snapshots,
     classify_economic_value,
+    economic_value_from_facts,
 )
 from owner_lens._annual import AnnualObservation
 
@@ -338,6 +341,72 @@ def test_growth_threshold_boundary_is_inclusive() -> None:
     just_below = _snap(fcf_per_share_growth=0.049)
     assert classify_economic_value(at_boundary)[0] is Cls.IMPROVING
     assert classify_economic_value(just_below)[0] is Cls.STABLE
+
+
+# --- Slice 3C: partial coverage and business-model diversity -----------------
+
+
+def test_visa_snapshots_insufficient_but_non_per_share_levels_present() -> None:
+    snaps = economic_value_from_facts(visa_facts(), ticker="V")
+    latest = snaps[0]
+
+    assert latest.classification is Cls.INSUFFICIENT_DATA
+    assert latest.fcf_per_share is None
+    assert latest.fcf_per_share_growth is None
+    # Non-per-share signals remain populated (no whole-company failure).
+    assert latest.operating_margin is not None
+    assert latest.roic is not None
+
+
+def test_low_margin_healthy_company_is_not_deteriorating() -> None:
+    # Low absolute margins with a healthy per-share trajectory.
+    snap = _snap(
+        fcf_per_share_growth=0.12,
+        operating_margin=0.04,
+        fcf_margin=0.03,
+        roic=0.28,
+        roic_change=0.03,
+        revenue_growth=0.08,
+    )
+    classification, _ = classify_economic_value(snap)
+
+    assert classification is Cls.IMPROVING
+    assert classification is not Cls.DETERIORATING
+
+
+def test_high_margin_weakening_company_is_not_improving() -> None:
+    # High absolute margins with a weakening per-share trajectory.
+    snap = _snap(
+        fcf_per_share_growth=-0.12,
+        operating_margin=0.45,
+        fcf_margin=0.40,
+        roic=0.35,
+        roic_change=-0.06,
+        revenue_growth=-0.03,
+    )
+    classification, _ = classify_economic_value(snap)
+
+    assert classification is Cls.DETERIORATING
+    assert classification is not Cls.IMPROVING
+
+
+def test_strong_roic_is_recognized_regardless_of_margin_level() -> None:
+    low_margin = _snap(fcf_per_share_growth=0.12, operating_margin=0.04, roic=0.30)
+    high_margin = _snap(fcf_per_share_growth=0.12, operating_margin=0.45, roic=0.30)
+
+    assert classify_economic_value(low_margin)[0] is Cls.IMPROVING
+    assert classify_economic_value(high_margin)[0] is Cls.IMPROVING
+
+
+def test_default_thresholds_unchanged_by_slice_3c() -> None:
+    # No threshold was tuned to flatter any golden company (see research.md audit).
+    t = DEFAULT_THRESHOLDS
+    assert t.material_growth == 0.05
+    assert t.material_margin_change == 0.01
+    assert t.material_roic_change == 0.02
+    assert t.severe_roic_change == 0.05
+    assert t.material_share_change == 0.01
+    assert t.high_roic_level == 0.20
 
 
 def test_margin_change_boundary_flips_stable_to_improving() -> None:

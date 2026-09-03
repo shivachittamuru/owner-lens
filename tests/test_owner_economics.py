@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from _fixtures import visa_facts
 
 from owner_lens import (
     AnnualObservation,
@@ -13,6 +14,7 @@ from owner_lens import (
     AnnualSeries,
     OwnerEconomicsRow,
     compute_owner_economics,
+    owner_economics_from_facts,
 )
 
 
@@ -160,3 +162,23 @@ def test_reported_and_derived_fields_are_distinct_types() -> None:
     assert isinstance(row.net_margin, float)
     assert isinstance(row.free_cash_flow, int)
     assert not isinstance(row.free_cash_flow, AnnualObservation)
+
+
+def test_visa_unsupported_diluted_shares_degrades_per_share_only() -> None:
+    rows = owner_economics_from_facts(visa_facts(), ticker="V")
+    latest = rows[0]
+
+    # Per-share fields degrade to None (never a fabricated denominator).
+    assert latest.diluted_shares is None
+    assert latest.fcf_per_share is None
+    assert latest.fcf_per_share_growth is None
+    assert latest.diluted_share_growth is None
+    # Every non-per-share metric still derives.
+    assert latest.revenue is not None
+    assert latest.operating_income is not None
+    assert latest.net_income is not None
+    assert latest.operating_cash_flow is not None
+    assert latest.capital_expenditures is not None
+    assert latest.free_cash_flow is not None
+    assert latest.net_margin is not None
+    assert latest.fcf_margin is not None

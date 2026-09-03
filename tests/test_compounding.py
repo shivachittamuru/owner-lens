@@ -363,3 +363,18 @@ def test_build_view_cagr_and_deltas_match_endpoints() -> None:
     assert view.operating_margin_change == pytest.approx(0.06)
     assert view.roic_change == pytest.approx(0.08)
     assert view.net_cash_or_debt_change == 2000
+
+
+def test_visa_per_share_compounding_insufficient_but_aggregate_available() -> None:
+    from _fixtures import visa_facts
+
+    from owner_lens import compounding_views_from_facts
+
+    recent, long_term = compounding_views_from_facts(visa_facts(), ticker="V")
+
+    assert recent.classification is Cls.INSUFFICIENT_DATA
+    assert long_term.classification is Cls.INSUFFICIENT_DATA
+    assert long_term.fcf_per_share_cagr is None
+    # Non-per-share compounding remains available (never fabricated).
+    assert long_term.revenue_cagr is not None
+    assert long_term.fcf_cagr is not None

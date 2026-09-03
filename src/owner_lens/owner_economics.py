@@ -22,6 +22,7 @@ from owner_lens.operating_income import (
 )
 from owner_lens.reported import (
     AnnualSeries,
+    ConceptNotFoundError,
     normalize_capital_expenditures,
     normalize_diluted_shares,
     normalize_net_income,
@@ -151,7 +152,25 @@ def owner_economics_from_facts(
     ticker: str = "ADBE",
     max_years: int = 5,
 ) -> tuple[OwnerEconomicsRow, ...]:
-    """Normalize all six series from a payload, then derive owner economics."""
+    """Normalize all six series from a payload, then derive owner economics.
+
+    Diluted weighted-average shares can be unsupported for some filers (for
+    example, Visa). When they are, an empty series is substituted so the
+    per-share fields degrade to ``None`` while every non-per-share metric is
+    still derived; no share count is ever fabricated or substituted.
+    """
+    try:
+        diluted_shares = normalize_diluted_shares(
+            raw_facts, ticker=ticker, max_years=max_years
+        )
+    except ConceptNotFoundError:
+        diluted_shares = AnnualSeries(
+            metric="diluted_shares",
+            ticker=ticker.strip().upper(),
+            concept="",
+            unit="shares",
+            observations=(),
+        )
     return compute_owner_economics(
         revenue=normalize_annual_revenue(raw_facts, ticker=ticker, max_years=max_years),
         operating_income=normalize_annual_operating_income(
@@ -164,7 +183,5 @@ def owner_economics_from_facts(
         capital_expenditures=normalize_capital_expenditures(
             raw_facts, ticker=ticker, max_years=max_years
         ),
-        diluted_shares=normalize_diluted_shares(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
+        diluted_shares=diluted_shares,
     )
