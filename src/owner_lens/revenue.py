@@ -14,20 +14,16 @@ from typing import Any, Final
 
 from owner_lens._annual import (
     DEFAULT_MAX_YEARS,
-    SUPPORTED_TICKER,
+    DEFAULT_TICKER,
     AnnualObservation,
     MalformedFactsError,
-    UnsupportedTickerError,
-    ensure_supported_ticker,
+    canonicalize_ticker,
     select_annual_series,
     us_gaap_concepts,
 )
+from owner_lens.metrics import REVENUE, resolve_concepts
 
-REVENUE_CONCEPT_PREFERENCE: Final = (
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "Revenues",
-    "SalesRevenueNet",
-)
+REVENUE_CONCEPT_PREFERENCE: Final = REVENUE.default_concepts
 
 # Re-exported so callers keep referring to the shared reported-fact type.
 AnnualRevenueObservation = AnnualObservation
@@ -40,7 +36,6 @@ __all__ = [
     "MalformedFactsError",
     "RevenueConceptNotFoundError",
     "RevenueNormalizationError",
-    "UnsupportedTickerError",
     "normalize_annual_revenue",
 ]
 
@@ -69,15 +64,15 @@ class AnnualRevenueSeries:
 def normalize_annual_revenue(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualRevenueSeries:
     """Derive a canonical annual revenue series from raw Company Facts."""
-    normalized_ticker = ensure_supported_ticker(ticker)
+    normalized_ticker = canonicalize_ticker(ticker)
     us_gaap = us_gaap_concepts(raw_facts)
     concept, observations = select_annual_series(
         us_gaap,
-        REVENUE_CONCEPT_PREFERENCE,
+        resolve_concepts(REVENUE, normalized_ticker),
         max_years=max_years,
         concept_error=RevenueConceptNotFoundError,
         ambiguity_error=AmbiguousRevenueError,

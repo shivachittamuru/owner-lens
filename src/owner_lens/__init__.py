@@ -76,6 +76,11 @@ from owner_lens.margin import (
     align_annual_metrics,
     operating_margins,
 )
+from owner_lens.metrics import (
+    CanonicalMetricDefinition,
+    MetricKind,
+    resolve_concepts,
+)
 from owner_lens.operating_income import (
     AmbiguousOperatingIncomeError,
     AnnualOperatingIncomeObservation,
@@ -93,7 +98,6 @@ from owner_lens.reported import (
     AmbiguousValueError,
     AnnualSeries,
     ConceptNotFoundError,
-    MetricSpec,
     normalize_annual_metric,
     normalize_capital_expenditures,
     normalize_diluted_shares,
@@ -143,6 +147,7 @@ __all__ = [
     "AnnualRevenueSeries",
     "AnnualSeries",
     "BuybackEffectiveness",
+    "CanonicalMetricDefinition",
     "CapitalAllocationClassification",
     "CapitalAllocationDriver",
     "CapitalAllocationRow",
@@ -166,7 +171,7 @@ __all__ = [
     "MalformedFactsError",
     "MalformedSecResponseError",
     "MalformedTickerError",
-    "MetricSpec",
+    "MetricKind",
     "OperatingIncomeConceptNotFoundError",
     "OperatingIncomeNormalizationError",
     "OperatingMargin",
@@ -221,6 +226,7 @@ __all__ = [
     "normalize_total_equity",
     "operating_margins",
     "owner_economics_from_facts",
+    "resolve_concepts",
     "synthesize_economic_value_summary",
 ]
 

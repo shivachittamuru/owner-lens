@@ -5,13 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _fixtures import adbe_facts, costco_facts, visa_facts
 
 from owner_lens.reported import (
     ConceptNotFoundError,
+    normalize_capital_expenditures,
     normalize_diluted_shares,
     normalize_dividends_paid,
     normalize_income_tax_expense,
     normalize_net_income,
+    normalize_operating_cash_flow,
     normalize_pretax_income,
     normalize_repurchases,
     normalize_stock_based_compensation,
@@ -175,4 +178,67 @@ def test_dividends_present_zero_is_preserved_distinctly() -> None:
     assert len(series.observations) == 1
     assert series.observations[0].value == 0
     assert series.concept == "PaymentsOfDividendsCommonStock"
+
+
+def test_visa_duration_metrics_normalize_via_registry() -> None:
+    facts = visa_facts()
+
+    assert normalize_net_income(facts, ticker="V").observations[0].value == 20058000000
+    assert (
+        normalize_operating_cash_flow(facts, ticker="V").observations[0].value
+        == 23059000000
+    )
+    assert normalize_income_tax_expense(facts, ticker="V").observations[0].value == 4136000000
+    assert normalize_pretax_income(facts, ticker="V").observations[0].value == 24194000000
+
+
+def test_visa_capex_uses_productive_assets_concept() -> None:
+    series = normalize_capital_expenditures(visa_facts(), ticker="V")
+
+    assert series.concept == "PaymentsToAcquireProductiveAssets"
+    assert series.observations[0].value == 1482000000
+
+
+def test_costco_duration_metrics_normalize_via_registry() -> None:
+    facts = costco_facts()
+
+    assert normalize_net_income(facts, ticker="COST").observations[0].value == 8099000000
+    assert (
+        normalize_capital_expenditures(facts, ticker="COST").concept
+        == "PaymentsToAcquirePropertyPlantAndEquipment"
+    )
+    assert (
+        normalize_diluted_shares(facts, ticker="COST").observations[0].value == 444803000
+    )
+    assert normalize_pretax_income(facts, ticker="COST").observations[0].value == 10818000000
+
+
+# --- Canonical invariant: absent != unsupported != zero ---------------------
+
+
+def test_visa_diluted_shares_is_unsupported_not_fabricated() -> None:
+    # Visa tags no weighted-average diluted-share concept: unsupported, never guessed.
+    with pytest.raises(ConceptNotFoundError):
+        normalize_diluted_shares(visa_facts(), ticker="V")
+
+
+def test_adobe_dividends_are_structurally_absent() -> None:
+    series = normalize_dividends_paid(adbe_facts(), ticker="ADBE")
+
+    assert series.observations == ()
+    assert series.concept == ""
+
+
+def test_reported_zero_repurchases_is_a_real_observation() -> None:
+    facts = _facts(
+        "PaymentsForRepurchaseOfCommonStock",
+        [_duration(2025, 0, filed="2026-01-15", accn="repo-zero")],
+    )
+
+    series = normalize_repurchases(facts)
+
+    # A reported zero is a real observation, distinct from absence.
+    assert len(series.observations) == 1
+    assert series.observations[0].value == 0
+    assert series.concept == "PaymentsForRepurchaseOfCommonStock"
 

@@ -11,23 +11,32 @@ and diluted weighted-average shares.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any
 
 from owner_lens._annual import (
     DEFAULT_MAX_YEARS,
-    SUPPORTED_TICKER,
-    TARGET_UNIT,
+    DEFAULT_TICKER,
     AmbiguousValueError,
     AnnualObservation,
     ConceptNotFoundError,
     MalformedFactsError,
-    UnsupportedTickerError,
-    ensure_supported_ticker,
+    canonicalize_ticker,
     select_annual_series,
     us_gaap_concepts,
 )
-
-SHARES_UNIT: Final = "shares"
+from owner_lens.metrics import (
+    CAPITAL_EXPENDITURES,
+    DILUTED_SHARES,
+    DIVIDENDS_PAID,
+    INCOME_TAX_EXPENSE,
+    NET_INCOME,
+    OPERATING_CASH_FLOW,
+    PRETAX_INCOME,
+    REPURCHASES,
+    STOCK_BASED_COMPENSATION,
+    CanonicalMetricDefinition,
+    resolve_concepts,
+)
 
 __all__ = [
     "CAPITAL_EXPENDITURES",
@@ -43,8 +52,6 @@ __all__ = [
     "AnnualSeries",
     "ConceptNotFoundError",
     "MalformedFactsError",
-    "MetricSpec",
-    "UnsupportedTickerError",
     "normalize_annual_metric",
     "normalize_capital_expenditures",
     "normalize_diluted_shares",
@@ -59,15 +66,6 @@ __all__ = [
 
 
 @dataclass(frozen=True)
-class MetricSpec:
-    """How a reported metric is selected from Company Facts."""
-
-    metric: str
-    concept_preference: tuple[str, ...]
-    unit: str = TARGET_UNIT
-
-
-@dataclass(frozen=True)
 class AnnualSeries:
     """The ordered canonical annual series for one reported metric."""
 
@@ -78,66 +76,30 @@ class AnnualSeries:
     observations: tuple[AnnualObservation, ...]
 
 
-# Concept preference orders verified against Adobe's live Company Facts.
-NET_INCOME: Final = MetricSpec("net_income", ("NetIncomeLoss",))
-OPERATING_CASH_FLOW: Final = MetricSpec(
-    "operating_cash_flow", ("NetCashProvidedByUsedInOperatingActivities",)
-)
-CAPITAL_EXPENDITURES: Final = MetricSpec(
-    "capital_expenditures",
-    ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
-)
-DILUTED_SHARES: Final = MetricSpec(
-    "diluted_shares",
-    ("WeightedAverageNumberOfDilutedSharesOutstanding",),
-    unit=SHARES_UNIT,
-)
-INCOME_TAX_EXPENSE: Final = MetricSpec(
-    "income_tax_expense", ("IncomeTaxExpenseBenefit",)
-)
-PRETAX_INCOME: Final = MetricSpec(
-    "pretax_income",
-    (
-        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-    ),
-)
-REPURCHASES: Final = MetricSpec(
-    "repurchases", ("PaymentsForRepurchaseOfCommonStock",)
-)
-STOCK_BASED_COMPENSATION: Final = MetricSpec(
-    "stock_based_compensation",
-    ("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"),
-)
-DIVIDENDS_PAID: Final = MetricSpec(
-    "dividends_paid",
-    ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
-)
-
 
 def normalize_annual_metric(
     raw_facts: dict[str, Any],
-    spec: MetricSpec,
+    definition: CanonicalMetricDefinition,
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive a canonical annual series for one reported metric."""
-    normalized_ticker = ensure_supported_ticker(ticker)
+    """Derive a canonical annual series for one reported metric and company."""
+    normalized_ticker = canonicalize_ticker(ticker)
     us_gaap = us_gaap_concepts(raw_facts)
     concept, observations = select_annual_series(
         us_gaap,
-        spec.concept_preference,
+        resolve_concepts(definition, normalized_ticker),
         max_years=max_years,
         concept_error=ConceptNotFoundError,
         ambiguity_error=AmbiguousValueError,
-        unit=spec.unit,
+        unit=definition.unit,
     )
     return AnnualSeries(
-        metric=spec.metric,
+        metric=definition.name,
         ticker=normalized_ticker,
         concept=concept,
-        unit=spec.unit,
+        unit=definition.unit,
         observations=observations,
     )
 
@@ -145,20 +107,20 @@ def normalize_annual_metric(
 def normalize_net_income(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual net income series."""
+    """Derive the canonical annual net income series."""
     return normalize_annual_metric(raw_facts, NET_INCOME, ticker=ticker, max_years=max_years)
 
 
 def normalize_operating_cash_flow(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual operating cash flow series."""
+    """Derive the canonical annual operating cash flow series."""
     return normalize_annual_metric(
         raw_facts, OPERATING_CASH_FLOW, ticker=ticker, max_years=max_years
     )
@@ -167,10 +129,10 @@ def normalize_operating_cash_flow(
 def normalize_capital_expenditures(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual capital expenditures series.
+    """Derive the canonical annual capital expenditures series.
 
     The reported value is preserved as supplied by the SEC; the positive
     magnitude used for free cash flow is applied in the derivation step.
@@ -183,10 +145,10 @@ def normalize_capital_expenditures(
 def normalize_diluted_shares(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual diluted weighted-average shares series."""
+    """Derive the canonical annual diluted weighted-average shares series."""
     return normalize_annual_metric(
         raw_facts, DILUTED_SHARES, ticker=ticker, max_years=max_years
     )
@@ -195,10 +157,10 @@ def normalize_diluted_shares(
 def normalize_income_tax_expense(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual income tax expense series."""
+    """Derive the canonical annual income tax expense series."""
     return normalize_annual_metric(
         raw_facts, INCOME_TAX_EXPENSE, ticker=ticker, max_years=max_years
     )
@@ -207,10 +169,10 @@ def normalize_income_tax_expense(
 def normalize_pretax_income(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual pretax income series."""
+    """Derive the canonical annual pretax income series."""
     return normalize_annual_metric(
         raw_facts, PRETAX_INCOME, ticker=ticker, max_years=max_years
     )
@@ -219,10 +181,10 @@ def normalize_pretax_income(
 def normalize_repurchases(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual common-stock repurchase cash outflow.
+    """Derive the canonical annual common-stock repurchase cash outflow.
 
     The value is the reported positive cash-outflow magnitude; it is never
     inferred from share-count or treasury-stock changes.
@@ -235,10 +197,10 @@ def normalize_repurchases(
 def normalize_stock_based_compensation(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual stock-based compensation expense."""
+    """Derive the canonical annual stock-based compensation expense."""
     return normalize_annual_metric(
         raw_facts, STOCK_BASED_COMPENSATION, ticker=ticker, max_years=max_years
     )
@@ -247,23 +209,23 @@ def normalize_stock_based_compensation(
 def normalize_dividends_paid(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical annual common dividends paid, tolerant of absence.
+    """Derive the canonical annual common dividends paid, tolerant of absence.
 
-    Adobe reports no dividend concept, so a missing concept returns an empty
-    series (the fact is absent) rather than raising, preserving the distinction
-    between a company with no dividend program and unavailable data.
+    A company with no dividend concept (for example, Adobe) returns an empty
+    series (the fact is structurally absent) rather than raising, preserving the
+    distinction between a company with no dividend program and unavailable data.
     """
-    normalized_ticker = ensure_supported_ticker(ticker)
+    normalized_ticker = canonicalize_ticker(ticker)
     try:
         return normalize_annual_metric(
             raw_facts, DIVIDENDS_PAID, ticker=ticker, max_years=max_years
         )
     except ConceptNotFoundError:
         return AnnualSeries(
-            metric=DIVIDENDS_PAID.metric,
+            metric=DIVIDENDS_PAID.name,
             ticker=normalized_ticker,
             concept="",
             unit=DIVIDENDS_PAID.unit,

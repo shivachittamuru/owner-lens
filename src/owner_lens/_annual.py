@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Final
 
-SUPPORTED_TICKER: Final = "ADBE"
+DEFAULT_TICKER: Final = "ADBE"
 TARGET_UNIT: Final = "USD"
 ANNUAL_FISCAL_PERIOD: Final = "FY"
 DEFAULT_MAX_YEARS: Final = 5
@@ -26,10 +26,6 @@ _INSTANT_REQUIRED_FACT_FIELDS: Final = ("end", "val", "fp", "form", "filed", "ac
 
 class AnnualNormalizationError(Exception):
     """Base class for shared annual-normalization failures."""
-
-
-class UnsupportedTickerError(AnnualNormalizationError):
-    """Raised when the requested ticker is not supported by this feature."""
 
 
 class MalformedFactsError(AnnualNormalizationError):
@@ -60,14 +56,16 @@ class AnnualObservation:
     value: int
 
 
-def ensure_supported_ticker(ticker: str) -> str:
-    """Return the normalized ticker or raise for anything other than ADBE."""
+def canonicalize_ticker(ticker: str) -> str:
+    """Return the canonical uppercase ticker; no company allow-list is applied.
+
+    A company is "unsupported" for a metric only when no trustworthy concept
+    resolves, which surfaces as a typed ConceptNotFoundError, not as a ticker
+    rejection.
+    """
     normalized = ticker.strip().upper()
-    if normalized != SUPPORTED_TICKER:
-        raise UnsupportedTickerError(
-            f"Unsupported ticker {ticker!r}; only {SUPPORTED_TICKER} is "
-            "supported by this feature."
-        )
+    if not normalized:
+        raise ValueError("A non-empty ticker is required for normalization.")
     return normalized
 
 

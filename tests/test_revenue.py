@@ -11,7 +11,6 @@ from owner_lens.revenue import (
     AmbiguousRevenueError,
     MalformedFactsError,
     RevenueConceptNotFoundError,
-    UnsupportedTickerError,
     normalize_annual_revenue,
 )
 
@@ -303,13 +302,15 @@ def test_malformed_payload_without_us_gaap_fails() -> None:
         normalize_annual_revenue({"cik": 796343, "entityName": "ADOBE INC.", "facts": {}})
 
 
-def test_unsupported_ticker_is_rejected() -> None:
+def test_non_adobe_ticker_is_accepted_as_label() -> None:
     facts = _facts(
         {"Revenues": [_annual_fact(2025, 23769000000, filed="2026-01-15", accn="a-2025")]}
     )
 
-    with pytest.raises(UnsupportedTickerError):
-        normalize_annual_revenue(facts, ticker="MSFT")
+    series = normalize_annual_revenue(facts, ticker="MSFT")
+
+    assert series.ticker == "MSFT"
+    assert series.observations[0].value == 23769000000
 
 
 def test_ticker_is_case_and_whitespace_insensitive() -> None:
@@ -329,3 +330,15 @@ def test_annual_fact_missing_required_field_is_malformed() -> None:
 
     with pytest.raises(MalformedFactsError, match="accn"):
         normalize_annual_revenue(facts)
+
+
+def test_visa_and_costco_revenue_use_contract_concept() -> None:
+    from _fixtures import costco_facts, visa_facts
+
+    v = normalize_annual_revenue(visa_facts(), ticker="V")
+    assert v.concept == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert v.observations[0].value == 40000000000
+
+    cost = normalize_annual_revenue(costco_facts(), ticker="COST")
+    assert cost.concept == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert cost.observations[0].value == 275235000000

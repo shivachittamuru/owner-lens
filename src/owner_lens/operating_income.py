@@ -14,16 +14,16 @@ from typing import Any, Final
 
 from owner_lens._annual import (
     DEFAULT_MAX_YEARS,
-    SUPPORTED_TICKER,
+    DEFAULT_TICKER,
     AnnualObservation,
     MalformedFactsError,
-    UnsupportedTickerError,
-    ensure_supported_ticker,
+    canonicalize_ticker,
     select_annual_series,
     us_gaap_concepts,
 )
+from owner_lens.metrics import OPERATING_INCOME, resolve_concepts
 
-OPERATING_INCOME_CONCEPT_PREFERENCE: Final = ("OperatingIncomeLoss",)
+OPERATING_INCOME_CONCEPT_PREFERENCE: Final = OPERATING_INCOME.default_concepts
 
 # Re-exported so callers keep referring to the shared reported-fact type.
 AnnualOperatingIncomeObservation = AnnualObservation
@@ -36,7 +36,6 @@ __all__ = [
     "MalformedFactsError",
     "OperatingIncomeConceptNotFoundError",
     "OperatingIncomeNormalizationError",
-    "UnsupportedTickerError",
     "normalize_annual_operating_income",
 ]
 
@@ -65,15 +64,15 @@ class AnnualOperatingIncomeSeries:
 def normalize_annual_operating_income(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualOperatingIncomeSeries:
     """Derive a canonical annual operating income series from Company Facts."""
-    normalized_ticker = ensure_supported_ticker(ticker)
+    normalized_ticker = canonicalize_ticker(ticker)
     us_gaap = us_gaap_concepts(raw_facts)
     concept, observations = select_annual_series(
         us_gaap,
-        OPERATING_INCOME_CONCEPT_PREFERENCE,
+        resolve_concepts(OPERATING_INCOME, normalized_ticker),
         max_years=max_years,
         concept_error=OperatingIncomeConceptNotFoundError,
         ambiguity_error=AmbiguousOperatingIncomeError,

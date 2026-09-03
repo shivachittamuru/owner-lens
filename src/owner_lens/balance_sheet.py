@@ -9,29 +9,29 @@ preference orders and thin public normalizers. It is deterministic and offline.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Any
 
 from owner_lens._annual import (
     DEFAULT_MAX_YEARS,
-    SUPPORTED_TICKER,
+    DEFAULT_TICKER,
     AmbiguousValueError,
     ConceptNotFoundError,
     MalformedFactsError,
-    UnsupportedTickerError,
-    ensure_supported_ticker,
+    canonicalize_ticker,
     select_instant_series,
     us_gaap_concepts,
 )
-from owner_lens.reported import AnnualSeries, MetricSpec
-
-CASH: Final = MetricSpec("cash", ("CashAndCashEquivalentsAtCarryingValue",))
-SHORT_TERM_INVESTMENTS: Final = MetricSpec(
-    "short_term_investments", ("ShortTermInvestments",)
+from owner_lens.metrics import (
+    CASH,
+    CURRENT_DEBT,
+    LONG_TERM_DEBT,
+    SHORT_TERM_INVESTMENTS,
+    TOTAL_ASSETS,
+    TOTAL_EQUITY,
+    CanonicalMetricDefinition,
+    resolve_concepts,
 )
-CURRENT_DEBT: Final = MetricSpec("current_debt", ("DebtCurrent",))
-LONG_TERM_DEBT: Final = MetricSpec("long_term_debt", ("LongTermDebt",))
-TOTAL_ASSETS: Final = MetricSpec("total_assets", ("Assets",))
-TOTAL_EQUITY: Final = MetricSpec("total_equity", ("StockholdersEquity",))
+from owner_lens.reported import AnnualSeries
 
 __all__ = [
     "CASH",
@@ -43,7 +43,6 @@ __all__ = [
     "AmbiguousValueError",
     "ConceptNotFoundError",
     "MalformedFactsError",
-    "UnsupportedTickerError",
     "normalize_annual_instant",
     "normalize_cash",
     "normalize_current_debt",
@@ -56,27 +55,27 @@ __all__ = [
 
 def normalize_annual_instant(
     raw_facts: dict[str, Any],
-    spec: MetricSpec,
+    definition: CanonicalMetricDefinition,
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive a canonical fiscal-year-end instant series for one metric."""
-    normalized_ticker = ensure_supported_ticker(ticker)
+    """Derive a canonical fiscal-year-end instant series for one metric and company."""
+    normalized_ticker = canonicalize_ticker(ticker)
     us_gaap = us_gaap_concepts(raw_facts)
     concept, observations = select_instant_series(
         us_gaap,
-        spec.concept_preference,
+        resolve_concepts(definition, normalized_ticker),
         max_years=max_years,
         concept_error=ConceptNotFoundError,
         ambiguity_error=AmbiguousValueError,
-        unit=spec.unit,
+        unit=definition.unit,
     )
     return AnnualSeries(
-        metric=spec.metric,
+        metric=definition.name,
         ticker=normalized_ticker,
         concept=concept,
-        unit=spec.unit,
+        unit=definition.unit,
         observations=observations,
     )
 
@@ -84,32 +83,48 @@ def normalize_annual_instant(
 def normalize_cash(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical fiscal-year-end cash series."""
+    """Derive the canonical fiscal-year-end cash series."""
     return normalize_annual_instant(raw_facts, CASH, ticker=ticker, max_years=max_years)
 
 
 def normalize_short_term_investments(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical fiscal-year-end short-term investments series."""
-    return normalize_annual_instant(
-        raw_facts, SHORT_TERM_INVESTMENTS, ticker=ticker, max_years=max_years
-    )
+    """Derive the canonical short-term investments series, tolerant of absence.
+
+    A company that reports no short-term-investments concept (for example, Visa,
+    whose investment securities are deliberately not treated as corporate excess
+    cash) returns an empty series, so cash-plus-short-term-investments equals
+    cash and an absent concept stays distinct from a reported zero.
+    """
+    normalized_ticker = canonicalize_ticker(ticker)
+    try:
+        return normalize_annual_instant(
+            raw_facts, SHORT_TERM_INVESTMENTS, ticker=ticker, max_years=max_years
+        )
+    except ConceptNotFoundError:
+        return AnnualSeries(
+            metric=SHORT_TERM_INVESTMENTS.name,
+            ticker=normalized_ticker,
+            concept="",
+            unit=SHORT_TERM_INVESTMENTS.unit,
+            observations=(),
+        )
 
 
 def normalize_current_debt(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical fiscal-year-end current debt series."""
+    """Derive the canonical fiscal-year-end current debt series."""
     return normalize_annual_instant(
         raw_facts, CURRENT_DEBT, ticker=ticker, max_years=max_years
     )
@@ -118,10 +133,10 @@ def normalize_current_debt(
 def normalize_long_term_debt(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical fiscal-year-end long-term debt series."""
+    """Derive the canonical fiscal-year-end long-term debt series."""
     return normalize_annual_instant(
         raw_facts, LONG_TERM_DEBT, ticker=ticker, max_years=max_years
     )
@@ -130,10 +145,10 @@ def normalize_long_term_debt(
 def normalize_total_assets(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical fiscal-year-end total assets series."""
+    """Derive the canonical fiscal-year-end total assets series."""
     return normalize_annual_instant(
         raw_facts, TOTAL_ASSETS, ticker=ticker, max_years=max_years
     )
@@ -142,10 +157,10 @@ def normalize_total_assets(
 def normalize_total_equity(
     raw_facts: dict[str, Any],
     *,
-    ticker: str = SUPPORTED_TICKER,
+    ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive Adobe's canonical fiscal-year-end total stockholders' equity series."""
+    """Derive the canonical fiscal-year-end total stockholders' equity series."""
     return normalize_annual_instant(
         raw_facts, TOTAL_EQUITY, ticker=ticker, max_years=max_years
     )

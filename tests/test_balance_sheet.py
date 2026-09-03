@@ -6,13 +6,16 @@ from datetime import date
 from typing import Any
 
 import pytest
+from _fixtures import adbe_facts, costco_facts, visa_facts
 
 from owner_lens.balance_sheet import (
     AmbiguousValueError,
     ConceptNotFoundError,
     MalformedFactsError,
-    UnsupportedTickerError,
     normalize_cash,
+    normalize_current_debt,
+    normalize_long_term_debt,
+    normalize_short_term_investments,
     normalize_total_assets,
     normalize_total_equity,
 )
@@ -183,13 +186,76 @@ def test_missing_concept_fails() -> None:
         normalize_total_assets(facts)
 
 
-def test_unsupported_ticker_rejected() -> None:
+def test_non_adobe_ticker_is_accepted_as_label() -> None:
     facts = _facts("Assets", [_instant(2025, 1, filed="2026-01-15", accn="x")])
 
-    with pytest.raises(UnsupportedTickerError):
-        normalize_total_assets(facts, ticker="MSFT")
+    series = normalize_total_assets(facts, ticker="MSFT")
+
+    assert series.ticker == "MSFT"
+    assert series.observations[0].value == 1
 
 
 def test_malformed_payload_fails() -> None:
     with pytest.raises(MalformedFactsError):
         normalize_total_assets({"cik": 796343, "entityName": "ADOBE INC.", "facts": {}})
+
+
+def test_multi_company_cash_assets_equity_normalize() -> None:
+    for facts, ticker, cash, assets, equity in (
+        (adbe_facts(), "ADBE", 5431000000, 29496000000, 11623000000),
+        (visa_facts(), "V", 17164000000, 99627000000, 37909000000),
+        (costco_facts(), "COST", 14161000000, 77099000000, 29164000000),
+    ):
+        assert normalize_cash(facts, ticker=ticker).observations[0].value == cash
+        assert normalize_total_assets(facts, ticker=ticker).observations[0].value == assets
+        assert normalize_total_equity(facts, ticker=ticker).observations[0].value == equity
+
+
+def test_visa_equity_uses_including_noncontrolling_interest_override() -> None:
+    series = normalize_total_equity(visa_facts(), ticker="V")
+
+    assert series.concept == (
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+    )
+    assert series.metric == "total_equity"
+    assert series.ticker == "V"
+
+
+def test_visa_and_costco_debt_use_current_noncurrent_split_without_double_count() -> None:
+    for facts, ticker, current, noncurrent in (
+        (visa_facts(), "V", 5569000000, 19602000000),
+        (costco_facts(), "COST", 75000000, 5713000000),
+    ):
+        cur = normalize_current_debt(facts, ticker=ticker)
+        lt = normalize_long_term_debt(facts, ticker=ticker)
+        assert cur.concept == "LongTermDebtCurrent"
+        assert lt.concept == "LongTermDebtNoncurrent"
+        assert cur.observations[0].value == current
+        assert lt.observations[0].value == noncurrent
+        # LongTermDebtNoncurrent excludes the current portion, so the sum is total
+        # debt with no double count.
+        assert cur.observations[0].value + lt.observations[0].value == current + noncurrent
+
+
+def test_adobe_debt_keeps_default_concepts() -> None:
+    facts = adbe_facts()
+
+    assert normalize_current_debt(facts, ticker="ADBE").concept == "DebtCurrent"
+    assert normalize_long_term_debt(facts, ticker="ADBE").concept == "LongTermDebt"
+    assert normalize_long_term_debt(facts, ticker="ADBE").observations[0].value == 6210000000
+
+
+def test_visa_short_term_investments_absent_by_policy() -> None:
+    # Visa reports no ShortTermInvestments concept; its investment securities are
+    # deliberately not absorbed as corporate cash -> tolerant empty series.
+    series = normalize_short_term_investments(visa_facts(), ticker="V")
+
+    assert series.observations == ()
+    assert series.concept == ""
+
+
+def test_costco_short_term_investments_present() -> None:
+    series = normalize_short_term_investments(costco_facts(), ticker="COST")
+
+    assert series.concept == "ShortTermInvestments"
+    assert series.observations[0].value == 1123000000

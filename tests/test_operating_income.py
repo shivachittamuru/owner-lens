@@ -11,7 +11,6 @@ from owner_lens.operating_income import (
     AmbiguousOperatingIncomeError,
     MalformedFactsError,
     OperatingIncomeConceptNotFoundError,
-    UnsupportedTickerError,
     normalize_annual_operating_income,
 )
 
@@ -205,13 +204,27 @@ def test_missing_operating_income_concept_fails_explicitly() -> None:
         normalize_annual_operating_income(facts)
 
 
-def test_unsupported_ticker_is_rejected() -> None:
+def test_non_adobe_ticker_is_accepted_as_label() -> None:
     facts = _facts([_annual_fact(2025, 8706000000, filed="2026-01-15", accn="a-2025")])
 
-    with pytest.raises(UnsupportedTickerError):
-        normalize_annual_operating_income(facts, ticker="MSFT")
+    series = normalize_annual_operating_income(facts, ticker="MSFT")
+
+    assert series.ticker == "MSFT"
+    assert series.observations[0].value == 8706000000
 
 
 def test_malformed_payload_without_us_gaap_fails() -> None:
     with pytest.raises(MalformedFactsError):
         normalize_annual_operating_income({"cik": 796343, "entityName": "ADOBE INC.", "facts": {}})
+
+
+def test_visa_and_costco_operating_income_use_shared_concept() -> None:
+    from _fixtures import costco_facts, visa_facts
+
+    v = normalize_annual_operating_income(visa_facts(), ticker="V")
+    assert v.concept == "OperatingIncomeLoss"
+    assert v.observations[0].value == 23994000000
+
+    cost = normalize_annual_operating_income(costco_facts(), ticker="COST")
+    assert cost.concept == "OperatingIncomeLoss"
+    assert cost.observations[0].value == 10383000000
