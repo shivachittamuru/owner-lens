@@ -112,6 +112,81 @@ def _fresh_store(tmp_path: Path, name: str = "owner_lens.db") -> SqliteStore:
     return store
 
 
+# -- Slice 4B additive store support ----------------------------------------
+
+
+def test_source_snapshot_exists_and_matches_versions(tmp_path: Path) -> None:
+    store = _fresh_store(tmp_path)
+    snapshot = _persist(store, "ADBE")
+    cik = snapshot.cik
+    assert store.source_snapshot_exists(cik, snapshot.content_hash)
+    assert not store.source_snapshot_exists(cik, "deadbeef")
+    assert not store.source_snapshot_exists("0000000000", snapshot.content_hash)
+    assert store.snapshot_matches_versions(
+        cik,
+        snapshot.content_hash,
+        calculation_version="1.0",
+        analysis_rule_version="1.0",
+    )
+    assert not store.snapshot_matches_versions(
+        cik,
+        snapshot.content_hash,
+        calculation_version="2.0",
+        analysis_rule_version="1.0",
+    )
+
+
+def test_transaction_rolls_back_structured_writes(tmp_path: Path) -> None:
+    store = _fresh_store(tmp_path)
+    facts = adbe_facts()
+    cik = _CIKS["ADBE"]
+    identity = CompanyIdentity(ticker="ADBE", company_name=_NAMES["ADBE"], cik=cik)
+    snapshot = _snapshot("ADBE", facts)
+    store.save_company(company_record(identity))
+    store.save_source_snapshot(snapshot, raw_payload=_payload(facts))
+    fact_records = reported_fact_records(
+        cik,
+        owner_economics_from_facts(facts, ticker="ADBE"),
+        capital_efficiency_from_facts(facts, ticker="ADBE"),
+    )
+
+    with pytest.raises(StorageWriteError), store.transaction():
+        store.save_reported_facts(fact_records, snapshot=snapshot)
+        raise StorageWriteError("boom")
+
+    # The committed snapshot remains; the structured write was rolled back.
+    assert store.source_snapshot_exists(cik, snapshot.content_hash)
+    assert store.get_fact_provenance(cik, "revenue", 2025) is None
+
+
+def test_set_snapshot_processing_status_updates_row(tmp_path: Path) -> None:
+    store = _fresh_store(tmp_path)
+    snapshot = _persist(store, "ADBE")
+    store.set_snapshot_processing_status(snapshot.cik, snapshot.content_hash, "partial")
+    stored = store.get_source_snapshot(snapshot.cik, snapshot.content_hash)
+    assert stored is not None
+    assert stored.processing_status == "partial"
+
+
+# -- Raw snapshot store layout ----------------------------------------------
+
+
+def test_filesystem_raw_store_uses_cik_subdir(tmp_path: Path) -> None:
+    raw = FilesystemRawSnapshotStore(tmp_path / "raw")
+    payload = json.dumps({"cik": 796343, "facts": {}}, sort_keys=True).encode()
+    digest = compute_content_hash(payload)
+    ref = Path(raw.put(digest, payload))
+    assert ref.parent.name == "0000796343"  # CIK-grouped, not ticker
+    assert ref.name == f"{digest}.json"
+    # a fresh store resolves by content hash alone (no payload in hand)
+    fresh = FilesystemRawSnapshotStore(tmp_path / "raw")
+    assert fresh.exists(digest) is True
+    assert fresh.get(digest) == payload
+    # identical content is idempotent — no second file
+    raw.put(digest, payload)
+    assert len(list((tmp_path / "raw").rglob("*.json"))) == 1
+
+
 # -- Schema (T016) ----------------------------------------------------------
 
 

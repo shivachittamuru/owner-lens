@@ -204,53 +204,75 @@ def _layer_coverage(
     except _CONCEPT_ERRORS as exc:
         layers["capital_efficiency"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
 
-    snapshots = economic_value_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    if snapshots and all(
-        s.classification is EconomicValueClassification.INSUFFICIENT_DATA
-        for s in snapshots
-    ):
-        layers["economic_value"] = LayerResult(
-            LayerCoverage.INSUFFICIENT_DATA, share_reason, share_input
+    try:
+        snapshots = economic_value_from_facts(
+            raw_facts, ticker=ticker, max_years=max_years
         )
+    except _CONCEPT_ERRORS as exc:
+        layers["economic_value"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
-        layers["economic_value"] = LayerResult(LayerCoverage.AVAILABLE)
+        if snapshots and all(
+            s.classification is EconomicValueClassification.INSUFFICIENT_DATA
+            for s in snapshots
+        ):
+            layers["economic_value"] = LayerResult(
+                LayerCoverage.INSUFFICIENT_DATA, share_reason, share_input
+            )
+        else:
+            layers["economic_value"] = LayerResult(LayerCoverage.AVAILABLE)
 
-    recent, long_term = compounding_views_from_facts(
-        raw_facts, ticker=ticker, max_years=max_years
-    )
-    if (
-        recent.classification is CompoundingClassification.INSUFFICIENT_DATA
-        and long_term.classification is CompoundingClassification.INSUFFICIENT_DATA
-    ):
-        layers["compounding"] = LayerResult(
-            LayerCoverage.INSUFFICIENT_DATA, share_reason, share_input
+    try:
+        recent, long_term = compounding_views_from_facts(
+            raw_facts, ticker=ticker, max_years=max_years
         )
+    except _CONCEPT_ERRORS as exc:
+        layers["compounding"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
-        layers["compounding"] = LayerResult(LayerCoverage.AVAILABLE)
+        if (
+            recent.classification is CompoundingClassification.INSUFFICIENT_DATA
+            and long_term.classification is CompoundingClassification.INSUFFICIENT_DATA
+        ):
+            layers["compounding"] = LayerResult(
+                LayerCoverage.INSUFFICIENT_DATA, share_reason, share_input
+            )
+        else:
+            layers["compounding"] = LayerResult(LayerCoverage.AVAILABLE)
 
-    allocation = capital_allocation_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    if allocation and all(
-        r.classification is CapitalAllocationClassification.INSUFFICIENT_DATA
-        for r in allocation
-    ):
-        # Reported repurchase, SBC, and dividend facts remain available; only the
-        # classification is blocked, so the layer is partial rather than absent.
-        layers["capital_allocation"] = LayerResult(
-            LayerCoverage.PARTIAL, share_reason, share_input
+    try:
+        allocation = capital_allocation_from_facts(
+            raw_facts, ticker=ticker, max_years=max_years
         )
+    except _CONCEPT_ERRORS as exc:
+        layers["capital_allocation"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
-        layers["capital_allocation"] = LayerResult(LayerCoverage.AVAILABLE)
+        if allocation and all(
+            r.classification is CapitalAllocationClassification.INSUFFICIENT_DATA
+            for r in allocation
+        ):
+            # Reported repurchase, SBC, and dividend facts remain available; only
+            # the classification is blocked, so the layer is partial not absent.
+            layers["capital_allocation"] = LayerResult(
+                LayerCoverage.PARTIAL, share_reason, share_input
+            )
+        else:
+            layers["capital_allocation"] = LayerResult(LayerCoverage.AVAILABLE)
 
-    summary = economic_value_summary_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    if (
-        summary.overall_economic_value_classification
-        is OverallEconomicValueClassification.INSUFFICIENT_DATA
-    ):
-        layers["economic_summary"] = LayerResult(
-            LayerCoverage.INSUFFICIENT_DATA, share_reason, share_input
+    try:
+        summary = economic_value_summary_from_facts(
+            raw_facts, ticker=ticker, max_years=max_years
         )
+    except _CONCEPT_ERRORS as exc:
+        layers["economic_summary"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
-        layers["economic_summary"] = LayerResult(LayerCoverage.AVAILABLE)
+        if (
+            summary.overall_economic_value_classification
+            is OverallEconomicValueClassification.INSUFFICIENT_DATA
+        ):
+            layers["economic_summary"] = LayerResult(
+                LayerCoverage.INSUFFICIENT_DATA, share_reason, share_input
+            )
+        else:
+            layers["economic_summary"] = LayerResult(LayerCoverage.AVAILABLE)
 
     return layers
 

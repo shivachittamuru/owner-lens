@@ -9,6 +9,7 @@ satisfy the same protocol in Slice 4B with no relational schema change.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -24,6 +25,23 @@ __all__ = [
 def compute_content_hash(payload: bytes) -> str:
     """Return the SHA-256 hex digest identifying a raw payload."""
     return hashlib.sha256(payload).hexdigest()
+
+
+# Snapshots whose CIK cannot be derived from the payload are grouped here.
+_UNSCOPED = "_unscoped"
+
+
+def _cik_from_payload(payload: bytes) -> str | None:
+    """Return the zero-padded 10-digit CIK carried by a Company Facts payload."""
+    try:
+        obj = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    cik = obj.get("cik") if isinstance(obj, dict) else None
+    if isinstance(cik, bool) or not isinstance(cik, (int, str)):
+        return None
+    digits = str(cik).strip()
+    return digits.zfill(10) if digits.isdigit() else None
 
 
 @runtime_checkable
@@ -44,7 +62,14 @@ class RawSnapshotStore(Protocol):
 
 
 class FilesystemRawSnapshotStore:
-    """A local filesystem ``RawSnapshotStore`` keyed by content hash."""
+    """A local filesystem ``RawSnapshotStore`` addressed by content hash.
+
+    Payloads are laid out as ``<root>/<CIK>/<content-hash>.json``: the content
+    hash is the identity and the CIK (derived from the payload, never the mutable
+    ticker) groups a company's snapshots. ``get``/``exists`` resolve by content
+    hash alone via a cache and a filename fallback, so they work in a fresh
+    process without the payload in hand.
+    """
 
     def __init__(self, root: Path) -> None:
         self._root = Path(root)
@@ -54,23 +79,35 @@ class FilesystemRawSnapshotStore:
             raise StorageWriteError(
                 f"Cannot create raw snapshot root {self._root}: {exc}"
             ) from exc
-
-    def _path(self, content_hash: str) -> Path:
-        return self._root / f"{content_hash}.json"
+        self._by_hash: dict[str, Path] = {}
 
     def put(self, content_hash: str, payload: bytes) -> str:
-        path = self._path(content_hash)
+        prefix = _cik_from_payload(payload) or _UNSCOPED
+        path = self._root / prefix / f"{content_hash}.json"
         try:
             if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(payload)
         except OSError as exc:
             raise StorageWriteError(
                 f"Cannot write raw snapshot {content_hash}: {exc}"
             ) from exc
+        self._by_hash[content_hash] = path
         return str(path)
 
+    def _resolve(self, content_hash: str) -> Path | None:
+        cached = self._by_hash.get(content_hash)
+        if cached is not None:
+            return cached
+        found = next(self._root.rglob(f"{content_hash}.json"), None)
+        if found is not None:
+            self._by_hash[content_hash] = found
+        return found
+
     def get(self, content_hash: str) -> bytes:
-        path = self._path(content_hash)
+        path = self._resolve(content_hash)
+        if path is None:
+            raise StorageReadError(f"Raw snapshot {content_hash} not found.")
         try:
             return path.read_bytes()
         except OSError as exc:
@@ -79,4 +116,4 @@ class FilesystemRawSnapshotStore:
             ) from exc
 
     def exists(self, content_hash: str) -> bool:
-        return self._path(content_hash).exists()
+        return self._resolve(content_hash) is not None

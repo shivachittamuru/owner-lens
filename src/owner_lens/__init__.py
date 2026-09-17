@@ -6,9 +6,6 @@ console entry point used to validate it.
 
 from __future__ import annotations
 
-import os
-import sys
-
 from owner_lens._annual import AnnualObservation
 from owner_lens.balance_sheet import (
     normalize_cash,
@@ -49,6 +46,11 @@ from owner_lens.compounding import (
     compounding_views_from_facts,
     format_compounding_view,
 )
+from owner_lens.config import (
+    OwnerLensSettings,
+    build_local_store,
+    load_settings,
+)
 from owner_lens.coverage import (
     CompanyCoverage,
     LayerCoverage,
@@ -78,6 +80,15 @@ from owner_lens.economic_value import (
     classify_economic_value,
     economic_value_from_facts,
     format_economic_value_view,
+)
+from owner_lens.ingestion import (
+    FailureClass,
+    IngestionFailure,
+    IngestionItem,
+    IngestionResult,
+    IngestionStatus,
+    ProcessingStatus,
+    ingest_company,
 )
 from owner_lens.margin import (
     AnnualMetricRow,
@@ -207,7 +218,12 @@ __all__ = [
     "EconomicValueSnapshot",
     "EconomicValueSummary",
     "EconomicValueThresholds",
+    "FailureClass",
     "FilesystemRawSnapshotStore",
+    "IngestionFailure",
+    "IngestionItem",
+    "IngestionResult",
+    "IngestionStatus",
     "LayerCoverage",
     "LayerResult",
     "MalformedFactsError",
@@ -220,8 +236,10 @@ __all__ = [
     "OperatingMargin",
     "OverallEconomicValueClassification",
     "OwnerEconomicsRow",
+    "OwnerLensSettings",
     "OwnerLensStore",
     "PersistenceError",
+    "ProcessingStatus",
     "RawSnapshotStore",
     "ReportedFactRecord",
     "RevenueConceptNotFoundError",
@@ -242,6 +260,7 @@ __all__ = [
     "build_capital_allocation_rows",
     "build_compounding_view",
     "build_economic_value_snapshots",
+    "build_local_store",
     "cagr",
     "capital_allocation_from_facts",
     "capital_allocation_summary",
@@ -266,6 +285,8 @@ __all__ = [
     "format_coverage_report",
     "format_economic_value_summary",
     "format_economic_value_view",
+    "ingest_company",
+    "load_settings",
     "main",
     "normalize_annual_metric",
     "normalize_annual_operating_income",
@@ -292,57 +313,15 @@ __all__ = [
     "synthesize_economic_value_summary",
 ]
 
-_USER_AGENT_ENV_VAR = "OWNER_LENS_SEC_USER_AGENT"
-
 
 def main() -> None:
-    """Validate the slice by retrieving raw Company Facts for one ticker."""
-    args = sys.argv[1:]
-    if len(args) != 1:
-        print("Usage: owner-lens <TICKER>", file=sys.stderr)
-        raise SystemExit(2)
-    ticker = args[0]
+    """Console entry point; delegates to the CLI dispatcher."""
+    from owner_lens.cli import main as cli_main
 
-    user_agent = os.environ.get(_USER_AGENT_ENV_VAR, "").strip()
-    if not user_agent:
-        print(
-            f"Set {_USER_AGENT_ENV_VAR} to an SEC User-Agent identifying the "
-            "application and an administrative contact, for example "
-            "'OwnerLens admin@example.com'.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-    try:
-        with SecClient(user_agent) as client:
-            result = client.retrieve_company_facts(ticker)
-    except SecError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
-    identity = result.identity
-    raw = result.raw_facts
-    print(f"ticker: {identity.ticker}")
-    print(f"company: {identity.company_name}")
-    print(f"CIK: {identity.cik}")
-    print()
-    print("top-level keys:")
-    print(list(raw.keys()))
-    print()
-
-    facts = raw.get("facts", {})
-    print("facts namespaces:")
-    print(sorted(facts.keys()))
-    print()
-
-    us_gaap = facts.get("us-gaap", {})
-    print("sample us-gaap concepts:")
-    print(sorted(us_gaap.keys())[:10])
-    print()
-    print("-" * 30)
+    raise SystemExit(cli_main())
 
 
 # $env:OWNER_LENS_SEC_USER_AGENT = "OwnerLens admin@example.com"
-# uv run owner-lens ADBE
-# uv run owner-lens V
-# uv run owner-lens COST
+# uv run owner-lens ingest ADBE
+# uv run owner-lens ingest V
+# uv run owner-lens ingest COST

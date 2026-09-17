@@ -14,7 +14,8 @@ as the persistence-category errors in ``owner_lens.persistence.errors``.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Protocol, Self
 
@@ -152,7 +153,30 @@ class OwnerLensStore(Protocol):
         self, coverage: Sequence[CoverageResultRecord], *, snapshot: SourceSnapshotRecord
     ) -> None: ...
 
+    def source_snapshot_exists(self, cik: str, content_hash: str) -> bool: ...
+
+    def get_source_snapshot(
+        self, cik: str, content_hash: str
+    ) -> SourceSnapshotRecord | None: ...
+
+    def snapshot_matches_versions(
+        self,
+        cik: str,
+        content_hash: str,
+        *,
+        calculation_version: str,
+        analysis_rule_version: str,
+    ) -> bool: ...
+
+    def set_snapshot_processing_status(
+        self, cik: str, content_hash: str, status: str
+    ) -> None: ...
+
+    def transaction(self) -> AbstractContextManager[None]: ...
+
     def get_company(self, cik: str) -> CompanyRecord | None: ...
+
+    def list_companies(self) -> tuple[CompanyRecord, ...]: ...
 
     def get_metric_history(
         self, cik: str, metric: str, *, limit: int | None = None
@@ -179,6 +203,7 @@ class SqliteStore:
     ) -> None:
         self._db_path = Path(db_path)
         self._raw_store = raw_store
+        self._in_transaction = False
         try:
             self._conn = sqlite3.connect(self._db_path)
         except sqlite3.Error as exc:
@@ -227,6 +252,32 @@ class SqliteStore:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    def _commit(self) -> None:
+        if not self._in_transaction:
+            self._conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group structured writes into one atomic unit.
+
+        Per-call commits are deferred until clean exit; any exception rolls the
+        whole group back. Used outside this context, ``save_*`` keep committing
+        immediately, so Slice 4A behavior is unchanged.
+        """
+        if self._in_transaction:
+            yield
+            return
+        self._in_transaction = True
+        try:
+            yield
+        except BaseException:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        finally:
+            self._in_transaction = False
 
     # -- Internal resolution -------------------------------------------------
 
@@ -291,7 +342,7 @@ class SqliteStore:
                 "company_name = excluded.company_name, updated_at = datetime('now')",
                 (company.cik, company.ticker, company.company_name),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as exc:
             raise StorageWriteError(f"Cannot save company {company.cik}: {exc}") from exc
 
@@ -320,7 +371,7 @@ class SqliteStore:
                     snapshot.processing_status,
                 ),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as exc:
             raise StorageWriteError(
                 f"Cannot save source snapshot for {snapshot.cik}: {exc}"
@@ -358,7 +409,7 @@ class SqliteStore:
                     for fact in facts
                 ],
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as exc:
             raise StorageWriteError(
                 f"Cannot save reported facts for {snapshot.cik}: {exc}"
@@ -391,7 +442,7 @@ class SqliteStore:
                     for metric in metrics
                 ],
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as exc:
             raise StorageWriteError(
                 f"Cannot save derived metrics for {snapshot.cik}: {exc}"
@@ -430,7 +481,7 @@ class SqliteStore:
                         for driver in result.drivers
                     ],
                 )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as exc:
             raise StorageWriteError(
                 f"Cannot save analysis result for {snapshot.cik}: {exc}"
@@ -459,7 +510,7 @@ class SqliteStore:
                     for result in coverage
                 ],
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as exc:
             raise StorageWriteError(
                 f"Cannot save coverage for {snapshot.cik}: {exc}"
@@ -479,6 +530,20 @@ class SqliteStore:
             return None
         return CompanyRecord(
             cik=row["cik"], ticker=row["ticker"], company_name=row["company_name"]
+        )
+
+    def list_companies(self) -> tuple[CompanyRecord, ...]:
+        try:
+            rows = self._conn.execute(
+                "SELECT cik, ticker, company_name FROM companies ORDER BY ticker ASC"
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot list companies: {exc}") from exc
+        return tuple(
+            CompanyRecord(
+                cik=row["cik"], ticker=row["ticker"], company_name=row["company_name"]
+            )
+            for row in rows
         )
 
     def _metric_from_row(self, row: sqlite3.Row) -> DerivedMetricRecord:
@@ -628,3 +693,80 @@ class SqliteStore:
             if history:
                 result[cik] = history[-1]
         return result
+
+    # -- Snapshot identity / idempotency support -----------------------------
+
+    def get_source_snapshot(
+        self, cik: str, content_hash: str
+    ) -> SourceSnapshotRecord | None:
+        company_id = self._company_id(cik)
+        if company_id is None:
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT source_provider, source_type, fetched_at, source_uri, "
+                "content_hash, raw_object_ref, processing_status "
+                "FROM source_snapshots WHERE company_id = ? AND content_hash = ?",
+                (company_id, content_hash),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read source snapshot for {cik}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return SourceSnapshotRecord(
+            cik=cik,
+            source_provider=row["source_provider"],
+            source_type=row["source_type"],
+            fetched_at=row["fetched_at"],
+            source_uri=row["source_uri"],
+            content_hash=row["content_hash"],
+            raw_object_ref=row["raw_object_ref"],
+            processing_status=row["processing_status"],
+        )
+
+    def source_snapshot_exists(self, cik: str, content_hash: str) -> bool:
+        return self.get_source_snapshot(cik, content_hash) is not None
+
+    def snapshot_matches_versions(
+        self,
+        cik: str,
+        content_hash: str,
+        *,
+        calculation_version: str,
+        analysis_rule_version: str,
+    ) -> bool:
+        company_id = self._company_id(cik)
+        if company_id is None:
+            return False
+        try:
+            row = self._conn.execute(
+                "SELECT s.id FROM source_snapshots s WHERE s.company_id = ? "
+                "AND s.content_hash = ? AND EXISTS (SELECT 1 FROM derived_metrics m "
+                "WHERE m.snapshot_id = s.id AND m.calculation_version = ?) "
+                "AND EXISTS (SELECT 1 FROM analysis_results r "
+                "WHERE r.snapshot_id = s.id AND r.analysis_rule_version = ?)",
+                (company_id, content_hash, calculation_version, analysis_rule_version),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read snapshot versions for {cik}: {exc}"
+            ) from exc
+        return row is not None
+
+    def set_snapshot_processing_status(
+        self, cik: str, content_hash: str, status: str
+    ) -> None:
+        company_id = self._require_company_id(cik)
+        try:
+            self._conn.execute(
+                "UPDATE source_snapshots SET processing_status = ? "
+                "WHERE company_id = ? AND content_hash = ?",
+                (status, company_id, content_hash),
+            )
+            self._commit()
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot update processing status for {cik}: {exc}"
+            ) from exc

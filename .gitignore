@@ -14,3 +14,9 @@ wheels/
 # Virtual environments
 .venv/
 .env
+
+# Local runtime data — SQLite database and raw SEC payloads are not committed.
+# Keep the directory scaffold (.gitkeep) but ignore generated contents.
+/data/**
+!/data/**/
+!/data/**/.gitkeep

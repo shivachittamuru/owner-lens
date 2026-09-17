@@ -15,7 +15,10 @@ Deliberate gaps encode the canonical coverage policy:
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Self
+
+from owner_lens.sec import CompanyFactsResult, CompanyIdentity
 
 _MILL = 1_000_000
 
@@ -220,3 +223,57 @@ def costco_facts() -> dict[str, Any]:
             "StockholdersEquity": _usd({2023: 25058, 2024: 23622, 2025: 29164}),
         },
     )
+
+
+# -- Shared offline SEC client stand-in for ingestion/CLI tests ---------------
+
+FIXTURE_CIKS = {"ADBE": "0000796343", "V": "0001403161", "COST": "0000909832"}
+FIXTURE_NAMES = {
+    "ADBE": "ADOBE INC.",
+    "V": "VISA INC.",
+    "COST": "COSTCO WHOLESALE CORP /NEW",
+}
+FIXTURE_FACTS: dict[str, Callable[[], dict[str, Any]]] = {
+    "ADBE": adbe_facts,
+    "V": visa_facts,
+    "COST": costco_facts,
+}
+
+
+class FakeSecClient:
+    """An offline ``SecClient`` stand-in that returns fixture payloads."""
+
+    def __init__(
+        self,
+        *,
+        facts: dict[str, Callable[[], dict[str, Any]]] | None = None,
+        resolve_error: Exception | None = None,
+    ) -> None:
+        self._facts = facts if facts is not None else FIXTURE_FACTS
+        self._resolve_error = resolve_error
+
+    def resolve_company(self, ticker: str) -> CompanyIdentity:
+        if self._resolve_error is not None:
+            raise self._resolve_error
+        symbol = ticker.strip().upper()
+        return CompanyIdentity(
+            ticker=symbol, company_name=FIXTURE_NAMES[symbol], cik=FIXTURE_CIKS[symbol]
+        )
+
+    def get_company_facts(self, identity: CompanyIdentity) -> dict[str, Any]:
+        return self._facts[identity.ticker]()
+
+    def retrieve_company_facts(self, ticker: str) -> CompanyFactsResult:
+        identity = self.resolve_company(ticker)
+        return CompanyFactsResult(
+            identity=identity, raw_facts=self.get_company_facts(identity)
+        )
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def close(self) -> None:
+        pass
