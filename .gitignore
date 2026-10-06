@@ -20,3 +20,5 @@ wheels/
 /data/**
 !/data/**/
 !/data/**/.gitkeep
+# Raw FMP API response cache, wherever it is created (for example from notebooks/).
+**/data/raw/fmp/

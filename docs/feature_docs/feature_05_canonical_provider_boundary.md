@@ -235,6 +235,23 @@ Failures are typed so callers can distinguish them:
 | `MalformedFmpResponseError` | Non-JSON, wrong shape, symbol mismatch, non-FY period, bad date |
 | `FmpSymbolNotFoundError`    | Empty statement list                                        |
 
+### Local raw-response cache
+
+To avoid spending free-tier API calls on repeated development and Slice 5C reconciliation runs, `FmpClient` caches successful raw responses by default under `data/raw/fmp/`, which is gitignored:
+
+```text
+data/raw/fmp/income-statement/ADBE.annual.limit5.json
+data/raw/fmp/balance-sheet-statement/ADBE.annual.limit5.json
+data/raw/fmp/cash-flow-statement/ADBE.annual.limit5.json
+```
+
+* A cache hit deserializes and validates the stored raw JSON, with no network call.
+* A cache miss calls FMP and saves the raw body only after the response passes validation. HTTP errors, 402 plan restrictions, 429 rate limits, error messages, empty lists, and malformed JSON are never cached.
+* The file name includes the period and `limit`, so requests that change the response never collide.
+* Entries never expire. `refresh=True` bypasses the read, calls FMP, and overwrites the entry only if the new response is valid. `cache=None` disables caching.
+* A cached entry that is unreadable or fails validation is treated as a miss, refetched, and overwritten.
+* The cache stores response bodies only, never the API key. It lives entirely inside the FMP client, so the adapter, the canonical history, and OwnerLens calculations cannot tell cached data from fresh data.
+
 ## Mapping FMP to canonical facts
 
 `canonical_history_from_fmp(statements, *, max_years=5)` maps exactly one FMP field to each of the 17 existing canonical metrics. No canonical metric was added.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -16,6 +17,7 @@ from owner_lens.fmp import (
     FmpConfigurationError,
     FmpPlanRestrictionError,
     FmpRateLimitError,
+    FmpResponseCache,
     FmpResponseError,
     FmpSymbolNotFoundError,
     FmpTransportError,
@@ -25,8 +27,13 @@ from owner_lens.fmp import (
 KEY = "secret-test-key-123"
 
 
-def _client(handler: Callable[[httpx.Request], httpx.Response]) -> FmpClient:
-    return FmpClient(KEY, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+def _client(
+    handler: Callable[[httpx.Request], httpx.Response],
+    cache: FmpResponseCache | None = None,
+) -> FmpClient:
+    return FmpClient(
+        KEY, http_client=httpx.Client(transport=httpx.MockTransport(handler)), cache=cache
+    )
 
 
 def _ok(payloads: dict[str, Any], seen: list[httpx.Request] | None = None):
@@ -148,3 +155,152 @@ def test_invalid_limit_is_rejected_before_any_request(limit: Any) -> None:
 
     with pytest.raises(ValueError, match="limit"):
         _client(handler).retrieve_annual_statements("ADBE", limit=limit)
+
+
+# --- Local raw-response cache -------------------------------------------------
+
+
+def _counting(payloads: dict[str, Any], calls: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.url.path}?limit={request.url.params['limit']}")
+        endpoint = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=payloads[endpoint])
+
+    return handler
+
+
+def test_default_client_caches_under_data_raw_fmp() -> None:
+    client = FmpClient(KEY)
+    assert client.cache is not None
+    assert client.cache.root == Path("data/raw/fmp")
+
+
+def test_cache_miss_calls_fmp_and_writes_raw_json(tmp_path: Path) -> None:
+    calls: list[str] = []
+    cache = FmpResponseCache(tmp_path)
+    rows = _client(_counting(fmp_payloads(), calls), cache).get_income_statement("adbe")
+
+    assert len(calls) == 1
+    path = tmp_path / "income-statement" / "ADBE.annual.limit5.json"
+    assert path.is_file()
+    assert json.loads(path.read_text(encoding="utf-8")) == list(rows)
+    assert KEY not in path.read_text(encoding="utf-8")
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_cache_hit_makes_no_network_call(tmp_path: Path) -> None:
+    calls: list[str] = []
+    cache = FmpResponseCache(tmp_path)
+    first = _client(_counting(fmp_payloads(), calls), cache).retrieve_annual_statements("ADBE")
+
+    def offline(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("cache hit must not call FMP")
+
+    second = _client(offline, cache).retrieve_annual_statements("ADBE")
+    assert len(calls) == 3
+    assert second == first
+
+
+def test_endpoints_and_parameters_do_not_collide(tmp_path: Path) -> None:
+    calls: list[str] = []
+    cache = FmpResponseCache(tmp_path)
+    client = _client(_counting(fmp_payloads(), calls), cache)
+    client.get_income_statement("ADBE", limit=5)
+    client.get_income_statement("ADBE", limit=3)
+    client.get_cash_flow_statement("ADBE", limit=5)
+    client.get_income_statement("ADBE", limit=3)  # cached
+
+    assert calls == [
+        "/stable/income-statement?limit=5",
+        "/stable/income-statement?limit=3",
+        "/stable/cash-flow-statement?limit=5",
+    ]
+    names = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*.json"))
+    assert names == [
+        "cash-flow-statement/ADBE.annual.limit5.json",
+        "income-statement/ADBE.annual.limit3.json",
+        "income-statement/ADBE.annual.limit5.json",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "error"),
+    [
+        (402, "Premium Query Parameter", FmpPlanRestrictionError),
+        (429, '{"Error Message": "Limit Reach"}', FmpRateLimitError),
+        (500, "server error", FmpResponseError),
+        (200, "<html>not json</html>", MalformedFmpResponseError),
+        (200, '{"Error Message": "bad"}', FmpResponseError),
+        (200, "[]", FmpSymbolNotFoundError),
+    ],
+)
+def test_failed_responses_are_not_cached(
+    tmp_path: Path, status: int, body: str, error: type
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text=body)
+
+    with pytest.raises(error):
+        _client(handler, FmpResponseCache(tmp_path)).get_income_statement("ADBE")
+    assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    ["{not json", '{"rows": []}', '[{"symbol": "MSFT", "period": "FY", "date": "2025-11-30"}]'],
+)
+def test_invalid_cache_entry_is_refetched_and_overwritten(tmp_path: Path, corrupt: str) -> None:
+    cache = FmpResponseCache(tmp_path)
+    path = cache.path("income-statement", "ADBE", period="annual", limit=5)
+    assert path is not None
+    path.parent.mkdir(parents=True)
+    path.write_text(corrupt, encoding="utf-8")
+
+    calls: list[str] = []
+    rows = _client(_counting(fmp_payloads(), calls), cache).get_income_statement("ADBE")
+    assert len(calls) == 1
+    assert rows[0]["symbol"] == "ADBE"
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["symbol"] == "ADBE"
+
+
+def test_refresh_bypasses_cache_and_overwrites(tmp_path: Path) -> None:
+    cache = FmpResponseCache(tmp_path)
+    calls: list[str] = []
+    payloads = fmp_payloads()
+    client = _client(_counting(payloads, calls), cache)
+    client.get_income_statement("ADBE")
+    payloads["income-statement"][0]["revenue"] = 1
+
+    refreshed = client.get_income_statement("ADBE", refresh=True)
+    assert len(calls) == 2
+    assert refreshed[0]["revenue"] == 1
+    assert client.get_income_statement("ADBE")[0]["revenue"] == 1
+    assert len(calls) == 2
+
+
+def test_failed_refresh_keeps_previous_cache_entry(tmp_path: Path) -> None:
+    cache = FmpResponseCache(tmp_path)
+    _client(_ok(fmp_payloads()), cache).get_income_statement("ADBE")
+    path = tmp_path / "income-statement" / "ADBE.annual.limit5.json"
+    before = path.read_text(encoding="utf-8")
+
+    def limited(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="Limit Reach")
+
+    with pytest.raises(FmpRateLimitError):
+        _client(limited, cache).get_income_statement("ADBE", refresh=True)
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_path_unsafe_symbol_is_never_cached(tmp_path: Path) -> None:
+    cache = FmpResponseCache(tmp_path)
+    assert cache.path("income-statement", "../ADBE", period="annual", limit=5) is None
+    assert cache.path("income-statement", "BRK.B", period="annual", limit=5) is not None
+
+
+def test_disabled_cache_always_calls_fmp(tmp_path: Path) -> None:
+    calls: list[str] = []
+    client = _client(_counting(fmp_payloads(), calls), cache=None)
+    client.get_income_statement("ADBE")
+    client.get_income_statement("ADBE")
+    assert len(calls) == 2

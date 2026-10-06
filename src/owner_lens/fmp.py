@@ -7,17 +7,36 @@ returned unchanged so the FMP adapter can map them into canonical facts.
 
 The API key is a secret. It is sent only as the ``apikey`` query parameter and
 is redacted from every error message and recorded source URL.
+
+Successful raw responses are cached locally (``data/raw/fmp/`` by default) so
+development and reconciliation do not repeatedly consume free-tier API calls:
+
+* cache hit: the stored raw JSON is deserialized, validated, and returned;
+* cache miss: FMP is called, and only a successful, valid response is saved;
+* ``refresh=True`` bypasses the cache read, calls FMP, and overwrites the entry.
+
+Cache entries never expire; annual statements change only on refresh. A cached
+entry that is unreadable or fails validation is treated as a miss and refetched
+(and overwritten on success). Errors, plan restrictions, rate limits, and
+malformed responses are never cached. The cache stores response bodies only, so
+it never contains the API key. Callers above this module cannot tell whether
+statements came from the cache or the network.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import re
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any, Final, Self
 
 import httpx
 
 __all__ = [
+    "DEFAULT_FMP_CACHE_DIR",
     "FMP_BASE_URL",
     "FMP_STATEMENT_ENDPOINTS",
     "FmpAuthenticationError",
@@ -26,6 +45,7 @@ __all__ = [
     "FmpError",
     "FmpPlanRestrictionError",
     "FmpRateLimitError",
+    "FmpResponseCache",
     "FmpResponseError",
     "FmpStatements",
     "FmpSymbolNotFoundError",
@@ -39,7 +59,10 @@ FMP_STATEMENT_ENDPOINTS: Final = {
     "balance_sheet": "balance-sheet-statement",
     "cash_flow": "cash-flow-statement",
 }
+DEFAULT_FMP_CACHE_DIR: Final = Path("data/raw/fmp")
 _ANNUAL_PERIOD: Final = "FY"
+_REQUEST_PERIOD: Final = "annual"
+_CACHEABLE_SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9.\-]*")
 _REQUEST_TIMEOUT_SECONDS: Final = 30.0
 _REDACTED: Final = "<redacted>"
 
@@ -106,8 +129,50 @@ class FmpStatements:
         return rows
 
 
+class _DefaultCache:
+    """Sentinel type: use the default on-disk cache."""
+
+
+_DEFAULT_CACHE: Final = _DefaultCache()
+
+
+class FmpResponseCache:
+    """Local store of successful raw FMP response bodies, one file per request identity.
+
+    Paths are endpoint-aware and include every parameter that changes the
+    response: ``<root>/<endpoint>/<SYMBOL>.<period>.limit<N>.json``.
+    """
+
+    def __init__(self, root: str | Path = DEFAULT_FMP_CACHE_DIR) -> None:
+        self.root = Path(root)
+
+    def path(self, endpoint: str, symbol: str, *, period: str, limit: int) -> Path | None:
+        """Return the cache file for a request, or ``None`` if the symbol is not path-safe."""
+        if not _CACHEABLE_SYMBOL.fullmatch(symbol):
+            return None
+        return self.root / endpoint / f"{symbol}.{period}.limit{limit}.json"
+
+    def load(self, path: Path) -> Any | None:
+        """Return the cached JSON payload, or ``None`` when missing or unreadable."""
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def save(self, path: Path, body: str) -> None:
+        """Atomically write a raw response body."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(body, encoding="utf-8")
+        os.replace(temporary, path)
+
+
 class FmpClient:
-    """Synchronous FMP client for annual income, balance-sheet, and cash-flow statements."""
+    """Synchronous FMP client for annual income, balance-sheet, and cash-flow statements.
+
+    ``cache`` defaults to a ``FmpResponseCache`` rooted at ``data/raw/fmp``;
+    pass ``cache=None`` to disable caching entirely.
+    """
 
     def __init__(
         self,
@@ -115,6 +180,7 @@ class FmpClient:
         *,
         http_client: httpx.Client | None = None,
         base_url: str = FMP_BASE_URL,
+        cache: FmpResponseCache | _DefaultCache | None = _DEFAULT_CACHE,
     ) -> None:
         key = (api_key or "").strip()
         if not key:
@@ -125,6 +191,9 @@ class FmpClient:
         self._base_url = base_url.rstrip("/")
         self._http_client = http_client
         self._owns_client = http_client is None
+        self.cache: FmpResponseCache | None = (
+            FmpResponseCache() if isinstance(cache, _DefaultCache) else cache
+        )
 
     def __repr__(self) -> str:
         return f"FmpClient(base_url={self._base_url!r})"
@@ -155,11 +224,12 @@ class FmpClient:
             f"&limit={limit}&apikey={_REDACTED}"
         )
 
-    def _get_json(self, endpoint: str, symbol: str, limit: int) -> Any:
+    def _get_json(self, endpoint: str, symbol: str, limit: int) -> tuple[Any, str]:
+        """Call FMP and return the parsed payload with its raw body text."""
         url = f"{self._base_url}/{endpoint}"
         params: dict[str, str | int] = {
             "symbol": symbol,
-            "period": "annual",
+            "period": _REQUEST_PERIOD,
             "limit": limit,
             "apikey": self._api_key,
         }
@@ -204,30 +274,69 @@ class FmpClient:
                 self._redact(f"FMP {endpoint} error: {payload['Error Message']}"),
                 status_code=status,
             )
-        return payload
+        return payload, response.text
 
     def get_annual_statement(
-        self, statement: str, symbol: str, *, limit: int = 5
+        self, statement: str, symbol: str, *, limit: int = 5, refresh: bool = False
     ) -> tuple[dict[str, Any], ...]:
-        """Retrieve and validate one annual statement for a symbol."""
+        """Retrieve and validate one annual statement, using the local cache first.
+
+        ``refresh=True`` skips the cache read and overwrites the entry on success.
+        """
         if statement not in FMP_STATEMENT_ENDPOINTS:
             raise KeyError(f"Unknown FMP statement: {statement!r}.")
         normalized = _normalize_symbol(symbol)
         _validate_limit(limit)
         endpoint = FMP_STATEMENT_ENDPOINTS[statement]
-        payload = self._get_json(endpoint, normalized, limit)
-        return _validate_rows(payload, endpoint, normalized)
+        path = (
+            self.cache.path(endpoint, normalized, period=_REQUEST_PERIOD, limit=limit)
+            if self.cache is not None
+            else None
+        )
+        if path is not None and self.cache is not None and not refresh:
+            cached = self.cache.load(path)
+            if cached is not None:
+                try:
+                    return _validate_rows(cached, endpoint, normalized)
+                except (MalformedFmpResponseError, FmpSymbolNotFoundError):
+                    pass  # invalid cache entry: refetch and overwrite
+        payload, body = self._get_json(endpoint, normalized, limit)
+        rows = _validate_rows(payload, endpoint, normalized)
+        if path is not None and self.cache is not None:
+            self.cache.save(path, body)
+        return rows
 
-    def retrieve_annual_statements(self, symbol: str, *, limit: int = 5) -> FmpStatements:
+    def get_income_statement(
+        self, symbol: str, *, limit: int = 5, refresh: bool = False
+    ) -> tuple[dict[str, Any], ...]:
+        """Retrieve the annual income statement for a symbol."""
+        return self.get_annual_statement("income", symbol, limit=limit, refresh=refresh)
+
+    def get_balance_sheet_statement(
+        self, symbol: str, *, limit: int = 5, refresh: bool = False
+    ) -> tuple[dict[str, Any], ...]:
+        """Retrieve the annual balance-sheet statement for a symbol."""
+        return self.get_annual_statement("balance_sheet", symbol, limit=limit, refresh=refresh)
+
+    def get_cash_flow_statement(
+        self, symbol: str, *, limit: int = 5, refresh: bool = False
+    ) -> tuple[dict[str, Any], ...]:
+        """Retrieve the annual cash-flow statement for a symbol."""
+        return self.get_annual_statement("cash_flow", symbol, limit=limit, refresh=refresh)
+
+    def retrieve_annual_statements(
+        self, symbol: str, *, limit: int = 5, refresh: bool = False
+    ) -> FmpStatements:
         """Retrieve all three annual statements for a symbol as one result.
 
         ``limit`` is the number of most recent fiscal years requested per
-        statement; the FMP free tier accepts at most 5.
+        statement; the FMP free tier accepts at most 5. Each statement is served
+        from the local cache when present unless ``refresh=True``.
         """
         normalized = _normalize_symbol(symbol)
         _validate_limit(limit)
         rows = {
-            name: self.get_annual_statement(name, normalized, limit=limit)
+            name: self.get_annual_statement(name, normalized, limit=limit, refresh=refresh)
             for name in FMP_STATEMENT_ENDPOINTS
         }
         return FmpStatements(
