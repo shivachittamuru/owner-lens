@@ -94,39 +94,33 @@ def test_adobe_has_no_findings() -> None:
 # --- Diagnosis rules ---------------------------------------------------------------
 
 
-def test_alternative_concept_is_an_override_candidate_never_applied() -> None:
+def test_single_component_resolves_without_an_override() -> None:
+    # Slice 6D: LongTermDebtCurrent is a registry component, so no override is needed.
     facts = _set(_without("DebtCurrent"), "LongTermDebtCurrent", [_instant(y, 10 * _M) for y in (2023, 2024, 2025)])
     survey = survey_company(facts, ticker="ADBE")
     finding = survey.metrics["current_debt"]
-    assert finding.status is MetricStatus.UNSUPPORTED  # recorded, not applied
-    assert finding.diagnosis is D.ALTERNATIVE_CONCEPT
-    assert finding.candidates == ("LongTermDebtCurrent",)
-    assert survey.layers["capital_efficiency"].state is LayerState.UNAVAILABLE
-    assert survey.layers["capital_efficiency"].blocking_metric == "current_debt"
-    assert survey.overall is Overall.PARTIAL
+    assert (finding.status, finding.diagnosis) == (MetricStatus.AVAILABLE, D.NONE)
+    assert finding.concept_used == "LongTermDebtCurrent"
+    assert survey.layers["capital_efficiency"].state is LayerState.AVAILABLE
+    assert survey.overall is Overall.FULL
 
 
-def test_two_nonzero_components_make_a_composite_candidate() -> None:
+def test_two_nonzero_components_are_composed() -> None:
     facts = _set(_without("DebtCurrent"), "LongTermDebtCurrent", [_instant(y, 10 * _M) for y in (2023, 2024, 2025)])
     _set(facts, "CommercialPaper", [_instant(y, 5 * _M) for y in (2023, 2024, 2025)])
     finding = survey_company(facts, ticker="ADBE").metrics["current_debt"]
-    assert finding.diagnosis is D.COMPOSITE_CANDIDATE
-    assert not finding.value_level
-    assert "LongTermDebtCurrent + CommercialPaper" in (finding.reason or "")
+    assert (finding.status, finding.diagnosis) == (MetricStatus.AVAILABLE, D.NONE)
+    assert finding.concept_used == "LongTermDebtCurrent + CommercialPaper"
 
 
-def test_value_level_composite_on_available_metric() -> None:
-    # MSFT override selects LongTermDebtCurrent; commercial paper in one year is excluded.
-    facts = _without("DebtCurrent")
-    _set(facts, "LongTermDebtCurrent", [_instant(y, 10 * _M) for y in (2023, 2024, 2025)])
-    _set(facts, "LongTermDebtNoncurrent", [_instant(y, 90 * _M) for y in (2023, 2024, 2025)])
-    _set(facts, "CommercialPaper", [_instant(2023, 0), _instant(2024, 6693 * _M), _instant(2025, 0)])
-    survey = survey_company(facts, ticker="MSFT")
+def test_lease_bundled_concept_blocks_composition() -> None:
+    facts = _set(_without("DebtCurrent"), "CommercialPaper", [_instant(y, 5 * _M) for y in (2023, 2024, 2025)])
+    _set(facts, "LongTermDebtAndCapitalLeaseObligationsCurrent",
+         [_instant(y, 9 * _M) for y in (2023, 2024, 2025)])
+    survey = survey_company(facts, ticker="ADBE")
     finding = survey.metrics["current_debt"]
-    assert finding.status is MetricStatus.AVAILABLE
-    assert (finding.diagnosis, finding.value_level) == (D.COMPOSITE_CANDIDATE, True)
-    assert "FY2024 CommercialPaper 6,693,000,000" in (finding.reason or "")
-    assert survey.overall is Overall.FULL  # value-level composites are findings, not blockers
+    assert (finding.status, finding.diagnosis) == (MetricStatus.UNSUPPORTED, D.COMPOSITION_BLOCKED)
+    assert "LongTermDebtAndCapitalLeaseObligationsCurrent" in (finding.reason or "")
 
 
 def test_concept_with_only_quarterly_filings_is_a_period_issue() -> None:
@@ -290,7 +284,11 @@ def test_offline_replay_reproduces_the_live_survey(tmp_path: Path) -> None:
 
 
 def _alternative(ticker: str) -> universe.CompanySurvey:
-    facts = _set(_without("DebtCurrent"), "LongTermDebtCurrent", [_instant(y, 10 * _M) for y in (2023, 2024, 2025)])
+    # A company whose cash concept was retagged to an alternative OwnerLens does
+    # not adopt: unsupported, with the alternative recorded as a candidate.
+    facts = _set(_without("CashAndCashEquivalentsAtCarryingValue"),
+                 "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+                 [_instant(y, 10 * _M) for y in (2023, 2024, 2025)])
     return survey_company(facts, ticker=ticker)
 
 
@@ -310,24 +308,24 @@ def _report() -> UniverseReport:
 def test_distribution_and_metric_view() -> None:
     report = _report()
     assert report.distribution() == {"FULL": 1, "PARTIAL": 4, "FAILED": 1}
-    debt = next(m for m in report.metric_view() if m.metric == "current_debt")
+    debt = next(m for m in report.metric_view() if m.metric == "cash")
     assert debt.counts["AVAILABLE"] == 2 and debt.counts["UNSUPPORTED"] == 3
     assert debt.affected["UNSUPPORTED"] == ("AAA", "BBB", "CCC")
     assert debt.blocking_companies == ("AAA", "BBB", "CCC")
     assert debt.dominant_diagnosis == "ALTERNATIVE_CONCEPT"
-    assert report.top_blockers()[0] == ("current_debt", 3)
+    assert report.top_blockers()[0] == ("cash", 3)
 
 
 def test_recurring_versus_quirk_threshold() -> None:
     recurring = _report().recurring_candidates()
-    assert recurring == (("current_debt", "LongTermDebtCurrent", ("AAA", "BBB", "CCC"), True),)
+    assert recurring == (("cash", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", ("AAA", "BBB", "CCC"), True),)
     two = UniverseReport((_alternative("AAA"), _alternative("BBB"))).recurring_candidates()
     assert two[0][3] is False
 
 
 def test_unblocked_by_what_if() -> None:
     report = _report()
-    resolves_debt = lambda _t, f: f.metric == "current_debt"
+    resolves_debt = lambda _t, f: f.metric == "cash"
     assert report.unblocked_by(resolves_debt) == ("AAA", "BBB", "CCC")
     assert report.unblocked_by(lambda _t, f: False) == ()
 
@@ -337,4 +335,4 @@ def test_json_export_is_deterministic_and_views_render() -> None:
     data = json.loads(_report().to_json())
     assert set(data) >= {"distribution", "metric_view", "companies", "recurring_candidates", "silently_stale"}
     for text in (format_company_view(_report()), format_metric_view(_report()), format_pattern_view(_report())):
-        assert "AAA" in text or "current_debt" in text
+        assert "AAA" in text or "cash" in text

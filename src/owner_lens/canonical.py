@@ -30,6 +30,7 @@ __all__ = [
     "CanonicalSeries",
     "ConflictResolution",
     "ConflictResolutionKind",
+    "FactComponent",
     "MetricInvalidError",
     "MetricKind",
     "MetricStatus",
@@ -151,6 +152,21 @@ class ConflictResolution:
 
 
 @dataclass(frozen=True)
+class FactComponent:
+    """One provider field that contributed additively to a composed fact."""
+
+    provider_field: str
+    value: int
+    form: str | None = None
+    filed: date | None = None
+    accession: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.provider_field:
+            raise ValueError("A fact component requires a provider field.")
+
+
+@dataclass(frozen=True)
 class CanonicalFact:
     """One reported annual value for one canonical metric, with source provenance.
 
@@ -166,6 +182,12 @@ class CanonicalFact:
     the year and a deterministic rule (re-rounding or stock-split restatement)
     chose this one; it records the as-filed value, any split factor applied, and
     the superseded values.
+
+    ``components`` is set only when the provider reports the metric split across
+    several additive fields and the adapter composed them. It lists every
+    contributing field with its own value and provenance, so a composed value is
+    never auditable only through its formatted ``provider_field`` label. A fact
+    resolved from a single field carries no components.
     """
 
     metric: str
@@ -181,6 +203,7 @@ class CanonicalFact:
     filed: date | None
     accession: str | None
     resolution: ConflictResolution | None = None
+    components: tuple[FactComponent, ...] = ()
 
     def __post_init__(self) -> None:
         if self.metric not in _SPECS:
@@ -201,6 +224,18 @@ class CanonicalFact:
             raise ValueError("A canonical fact requires a provider.")
         if not self.provider_field:
             raise ValueError("A canonical fact requires a provider field.")
+        if self.components:
+            if len(self.components) < 2:
+                raise ValueError(
+                    f"{self.metric} composition needs at least two components; a "
+                    "single-field value must be recorded as a plain fact."
+                )
+            total = sum(component.value for component in self.components)
+            if total != self.value:
+                raise ValueError(
+                    f"{self.metric} FY{self.fiscal_year} composed value {self.value} "
+                    f"does not equal the sum of its components ({total})."
+                )
 
 
 @dataclass(frozen=True)

@@ -25,6 +25,7 @@ from owner_lens._annual import (
     AnnualObservation,
     ConceptNotFoundError,
     MalformedFactsError,
+    StructurallyAbsentError,
     canonicalize_ticker,
 )
 from owner_lens.balance_sheet import (
@@ -121,6 +122,7 @@ def _to_fact(metric: str, kind: MetricKind, obs: AnnualObservation) -> Canonical
         filed=obs.filed,
         accession=obs.accession,
         resolution=obs.resolution,
+        components=obs.components,
     )
 
 
@@ -145,6 +147,13 @@ def canonical_history_from_sec(
             )
         except _UNSUPPORTED_ERRORS as exc:
             series.append(_failed(spec.name, spec.unit, MetricStatus.UNSUPPORTED, exc))
+            continue
+        except StructurallyAbsentError as exc:
+            # Proven absent by the company's own totals, not a data failure.
+            series.append(
+                CanonicalSeries(spec.name, spec.unit, MetricStatus.STRUCTURALLY_ABSENT,
+                                reason=str(exc))
+            )
             continue
         except _INVALID_ERRORS as exc:
             series.append(_failed(spec.name, spec.unit, MetricStatus.INVALID, exc))

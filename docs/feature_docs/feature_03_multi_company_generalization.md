@@ -236,6 +236,8 @@ Therefore Feature 3B established **replacement overrides**, not merely appended 
 
 Slice 5C reconciliation later showed Microsoft needs the same pair: it reports no `DebtCurrent`, and its `LongTermDebt` *includes* the current portion (FY2025: 43,151M = 40,152M noncurrent + 2,999M current). MSFT now uses the `LongTermDebtCurrent`/`LongTermDebtNoncurrent` replacement override, so total debt is no longer double counted. See Feature 5, Slice 5C follow-up.
 
+Slice 6D then replaced the **current-debt** half of all three overrides with a general policy. `current_debt` declares an additive composition (`LongTermDebtCurrent`, `CommercialPaper`, `ShortTermBorrowings`, `OtherShortTermBorrowings`) that is used when no total concept resolves, so V, COST, MSFT, CRM, INTU, NKE, AMZN, and CAT all resolve without a per-company entry. The **long-term-debt** overrides above remain: `LongTermDebt` really is a different quantity for these filers, which a fallback order cannot express. See [Feature 6, Slice 6D](feature_06_universe_coverage.md#slice-6d--current-debt-normalization-and-composition).
+
 This is a key architectural decision.
 
 ---

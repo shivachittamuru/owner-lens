@@ -198,19 +198,19 @@ def test_stale_only_short_term_investments_are_unsupported_not_absent() -> None:
 
 
 def test_current_override_wins_over_a_current_default_concept() -> None:
-    facts = _with(visa_facts(), "DebtCurrent", _instant("DC", range(2021, 2026), end_md="09-30"))
+    facts = _with(visa_facts(), "LongTermDebt", _instant("LTD", range(2021, 2026), end_md="09-30"))
     history = canonical_history_from_sec(facts, ticker="V")
-    assert {f.provider_field for f in history.series_for("current_debt").observations} == {
-        "LongTermDebtCurrent"
+    assert {f.provider_field for f in history.series_for("long_term_debt").observations} == {
+        "LongTermDebtNoncurrent"
     }
 
 
 def test_stale_override_is_unsupported_and_never_falls_back_to_the_default() -> None:
     facts = visa_facts()
-    _with(facts, "LongTermDebtCurrent", _instant("LTDC", range(2015, 2020), end_md="09-30"))
-    _with(facts, "DebtCurrent", _instant("DC", range(2021, 2026), end_md="09-30"))
+    _with(facts, "LongTermDebtNoncurrent", _instant("LTDN", range(2015, 2020), end_md="09-30"))
+    _with(facts, "LongTermDebt", _instant("LTD", range(2021, 2026), end_md="09-30"))
     history = canonical_history_from_sec(facts, ticker="V")
-    assert history.series_for("current_debt").status is MetricStatus.UNSUPPORTED
+    assert history.series_for("long_term_debt").status is MetricStatus.UNSUPPORTED
 
 
 def test_msft_debt_override_pair_is_unchanged_when_current() -> None:

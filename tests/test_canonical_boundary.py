@@ -64,6 +64,10 @@ def _sec_concepts() -> set[str]:
             concepts.update(value.default_concepts)
             for override in value.overrides.values():
                 concepts.update(override)
+            if value.composition is not None:
+                concepts.update(value.composition.components)
+                concepts.update(value.composition.unsafe)
+                concepts.update(value.composition.absence_proof or ())
     return concepts
 
 

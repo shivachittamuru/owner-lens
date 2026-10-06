@@ -60,7 +60,8 @@ ticker ─→ ingest_company (dedicated data/universe_6a.db, shared raw-snapshot
 | `MISSING_CONCEPT` | No preferred or catalog concept has a recent annual value |
 | `STALE_CONCEPT` | The preferred concept has annual history but nothing recent. In 6A this included **silently stale** `AVAILABLE` series; since 6B a stale concept is never selected, so the finding is always `UNSUPPORTED` |
 | `ALTERNATIVE_CONCEPT` | Exactly one catalog alternative has recent values; an override candidate, recorded and never applied |
-| `COMPOSITE_CANDIDATE` | Two or more non-zero component concepts are needed, or the selected concept excludes a non-zero component (value-level) |
+| `COMPOSITE_CANDIDATE` | Two or more non-zero component concepts are needed, or the selected concept excludes a non-zero component (value-level). Slice 6D implemented the only measured case (current debt), so this now reports nothing |
+| `COMPOSITION_BLOCKED` | The registry declares a composition the company's tagging makes unsafe, because a concept bundles economics the metric excludes (Slice 6D) |
 | `AMBIGUOUS_DUPLICATE` | Conflicting full-year values, sub-classified as `PRECISION`, `STOCK_SPLIT`, or `VALUE_CHANGE`. Since 6C the normalizer resolves re-roundings and evidenced splits, so remaining cases are normally `VALUE_CHANGE` |
 | `PERIOD_ISSUE` | A concept is present without annual 10-K facts, or fiscal years are missing or have gaps |
 | `BUSINESS_STRUCTURE` | Industry-specific concepts replace the canonical ones |
@@ -98,8 +99,8 @@ Survey of 2026-10-06 (live SEC, replayed offline):
   Most sit in the oldest window year (the restated baseline).
 
   *Correction from Slice 6C:* 6A's "precision" label used a 1% heuristic. The exact re-rounding rule shows that only the four NOW cases are re-roundings. CRM and INTU long-term debt, META capital expenditures, and PFE cash are genuine revisions that happen to be under 1%.
-* **Current debt is a taxonomy pattern, not a set of quirks.** Three alternatives each recur in 3–4 companies: `ShortTermBorrowings`, `LongTermDebtAndCapitalLeaseObligationsCurrent`, and `LongTermDebtCurrent`. In companies with no short-term debt (NOW, META, CMG), the concept is simply absent.
-* **Composite metrics are needed only for current debt.** There are 5 cases. Three are unsupported: AMZN and NKE (`LongTermDebtCurrent + ShortTermBorrowings`) and KO (`CommercialPaper + OtherShortTermBorrowings`). Two are value-level understatements: MSFT FY2024 commercial paper (6,693M) and COST FY2021–FY2022 other short-term borrowings.
+* **Current debt is a taxonomy pattern, not a set of quirks.** Three alternatives each recur in 3–4 companies: `ShortTermBorrowings`, `LongTermDebtAndCapitalLeaseObligationsCurrent`, and `LongTermDebtCurrent`. In companies with no short-term debt (NOW, META, CMG), the concept is simply absent. *(Addressed in Slice 6D.)*
+* **Composite metrics are needed only for current debt.** There are 5 cases. Three are unsupported: AMZN and NKE (`LongTermDebtCurrent + ShortTermBorrowings`) and KO (`CommercialPaper + OtherShortTermBorrowings`). Two are value-level understatements: MSFT FY2024 commercial paper (6,693M) and COST FY2021–FY2022 other short-term borrowings. *(All implemented in Slice 6D.)*
 * **Operating income is missing by business structure.** Energy companies (XOM, CVX), PFE, and NKE do not tag `OperatingIncomeLoss`.
 * **XOM is a period/identity case.** SEC now maps the ticker to the new successor registrant *ExxonMobil Holdings Corp*, which has only 10-Q filings and therefore no annual facts yet.
 
@@ -413,3 +414,151 @@ The survey tests now assert that precision and split conflicts resolve, while a 
 - reverse or fractional split handling,
 - composite debt, catalog-concept adoption, or an operating-income policy,
 - persistence schema changes.
+
+---
+
+# Slice 6D — Current-Debt Normalization and Composition
+
+## Goal
+
+Current debt was the largest recurring SEC blocker: 9 of 24 companies. 6A showed three patterns behind it — an alternative concept, several components that must be summed, and genuinely absent borrowings — and 6D resolves all three with general registry policy rather than per-company overrides.
+
+## The policy
+
+`CanonicalMetricDefinition` gained an optional `MetricComposition`, so a metric can declare how it resolves beyond a single concept. Current debt is the only metric that declares one. The resolution ladder in the shared instant normalizer is:
+
+1. **A total concept wins.** `DebtCurrent` already includes every component, so it is preferred and never summed. This is the double-counting guard. Adobe reports `DebtCurrent` 1,499M and `LongTermDebtCurrent` 1,500M for the same FY2024 balance; the total wins and the two are never added.
+2. **Otherwise compose the components** reported at each fiscal-year end, in policy order: `LongTermDebtCurrent`, `CommercialPaper`, `ShortTermBorrowings`, `OtherShortTermBorrowings`. A component reported as zero contributes nothing and is not recorded, so a year with one real component stays byte-identical to a plain single-concept selection.
+3. **Otherwise, if the company's own totals prove absence**, the metric is `STRUCTURALLY_ABSENT`.
+4. **Otherwise** the existing unsupported or invalid semantics apply.
+
+Per-company current-debt overrides were deleted: V, COST, and MSFT now resolve through the shared policy, as do CRM, INTU, NKE, AMZN, and CAT.
+
+### What is deliberately not a component
+
+Lease liabilities are not borrowings. `OperatingLeaseLiabilityCurrent`, `FinanceLeaseLiabilityCurrent`, and `CapitalLeaseObligationsCurrent` are never summed. The Slice 5C Costco reconciliation, where FMP's FY2025 current debt silently included 286M of lease liabilities, is the standing warning against widening the metric.
+
+Concepts that *restate* part of the current portion rather than adding to it are also excluded: `ConvertibleDebtCurrent`, `NotesPayableCurrent`, `LinesOfCreditCurrent`, and `SecuredDebtCurrent`. Salesforce reports `ConvertibleDebtCurrent` equal to its entire `LongTermDebtCurrent` (4,000M), so summing them would double count.
+
+`LongTermDebtAndCapitalLeaseObligationsCurrent` is marked **unsafe**: it bundles the current portion of debt with capital leases and cannot be split. A non-zero value refuses composition for that company rather than understating current debt (by composing only commercial paper) or widening it (by adopting the bundle). HD, KO, and LOW stay explicitly unsupported for this reason.
+
+### Structural absence
+
+Absence is never inferred from a missing tag. It is proven from the company's own reported totals: current debt equals `LongTermDebt` minus `LongTermDebtNoncurrent`, so at the latest fiscal-year end a reported `LongTermDebt` that **equals `LongTermDebtNoncurrent`** (all debt is noncurrent) or **is zero** (no debt at all) proves there is nothing to report. META (58,744M noncurrent, nothing current) and CMG (no debt) qualify. NOW and LULU report no debt totals at all, so their current debt stays `UNSUPPORTED` — honest, not assumed absent. No reported zero is ever fabricated; a filed zero remains an `AVAILABLE` zero.
+
+Downstream, a structurally absent current debt contributes nothing to total debt, exactly as an absent short-term-investments series already did for Visa.
+
+## Provenance
+
+A composed `CanonicalFact` carries `components`: every contributing concept with its own value, form, filing date, and accession. The fact's own value must equal the sum (enforced in `__post_init__`), and a single-source fact carries no components at all.
+
+**Persistence limitation (documented, not redesigned).** `reported_facts` stores one concept, form, filing date, and accession per row, so structured composition metadata lives on the canonical model. The stored `concept` string names every component and value, for example:
+
+```text
+LongTermDebtCurrent 2249000000 + CommercialPaper 6693000000
+```
+
+The row's form, filing date, and accession are the first contributing component's. Changing the schema would require a version bump that invalidates existing databases, which is out of scope for this slice.
+
+## Preserved behavior
+
+* The SEC characterization baseline changed in **one synthetic scenario and only in an error string**: `ADBE_NO_CURRENT_DEBT` now reports `Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings` instead of `Tried: DebtCurrent`. No value in any scenario changed, and ADBE, V, and COST fixture outputs are untouched.
+* MSFT changed **only FY2024**, as intended. FY2026, FY2025, FY2023, FY2022, and FY2021 keep single-source `LongTermDebtCurrent` provenance.
+* 6B recency and 6C conflict resolution apply to each component before summing.
+* FMP mapping, economic formulas, and the persistence schema are unchanged.
+
+### The one live correction beyond MSFT
+
+**COST FY2021 and FY2022 current debt changed**, correcting the value-level understatement 6A had recorded:
+
+| Year | Before | After | Composition |
+|---|---:|---:|---|
+| FY2022 | 73M | **161M** | `LongTermDebtCurrent` 73M + `OtherShortTermBorrowings` 88M |
+| FY2021 | 799M | **840M** | `LongTermDebtCurrent` 799M + `OtherShortTermBorrowings` 41M |
+
+These are genuine Costco short-term borrowings that the single-concept path omitted; 6A listed them as a known gap. The effect is small (FY2022 ROIC 0.4033, invested capital 16,238M) but real, and excluding `OtherShortTermBorrowings` purely to freeze a golden number would have fitted the rule to the fixture. The COST test fixtures carry only `LongTermDebtCurrent`, so the characterization baseline is unaffected.
+
+### MSFT FY2024, confirmed by the second provider
+
+| | Before | After |
+|---|---:|---:|
+| Current debt FY2024 | 2,249M | **8,942M** |
+| Total debt FY2024 | 44,937M | **51,630M** |
+| ROIC FY2024 | 0.4627 | 0.4627 |
+
+Reconciliation independently confirms the composed value: the MSFT FY2024 current-debt row moved from `EXPLAINED` to `MATCH` (MATCH 80 to 81), because SEC now reports the same 8,942M that FMP always did. The Slice 5C `KnownDiscrepancy` for it went stale and was retired, exactly as that audit trail intends. MSFT's verdict stays `ELIGIBLE_WITH_EXPLAINED_DIFFERENCES`; ADBE, V, and COST stay `NOT_ELIGIBLE`.
+
+Reconciliation also surfaced the mirror image of the Costco lease case: FMP's `shortTermDebt` **omits** Costco's other short-term borrowings in FY2021 and FY2022 while **adding** lease liabilities in FY2025. A new `KnownDiscrepancy` records it with evidence.
+
+## Survey: before versus after
+
+Same 24 companies, same stored SEC snapshots (no content-hash change):
+
+| | 6C (before) | 6D (after) |
+|---|---:|---:|
+| `FULL` | 4 | **5** (+CMG) |
+| `PARTIAL` | 13 | 12 |
+| `FAILED` | 7 | 7 |
+| Companies blocked by current debt | **9** | **4** |
+| Current debt `AVAILABLE` | 11 | **16** |
+| Current debt `UNSUPPORTED` | 13 | **6** |
+| Current debt `STRUCTURALLY_ABSENT` | 0 | **2** |
+| Companies with a blocking input | 19 | 18 |
+
+**Patterns solved:**
+
+| Pattern | Companies | Resolution |
+|---|---|---|
+| Alternative concept (no `DebtCurrent`) | V, COST, MSFT, CRM, INTU, CAT | Component policy, no override |
+| Components that must be summed | MSFT (commercial paper), AMZN and NKE (short-term borrowings), COST (other short-term borrowings) | Composition |
+| Genuinely no current borrowings | META, CMG | Proven structural absence |
+
+**Companies newly unblocked for current debt:** CRM, META, AMZN, INTU, and CMG. CMG reaches `FULL`. META and AMZN gain capital efficiency, and AMZN also gains economic value. For CRM and INTU the blocker moves to their genuine FY2021 `LongTermDebt` restatement, which 6C correctly refuses to resolve, so they remain `PARTIAL`.
+
+**Remaining current-debt exceptions (4):**
+
+* **HD, KO, LOW** — `LongTermDebtAndCapitalLeaseObligationsCurrent` is non-zero, so composition is refused (`COMPOSITION_BLOCKED`). Resolving these needs a decision about splitting debt from capital leases, not a mapping change.
+* **NOW** — reports no current-borrowing concept and no debt totals, so absence cannot be proven. ServiceNow most likely has no current borrowings, but the payload does not say so.
+* LULU is the same shape as NOW; it is already blocked by `cash`.
+
+**No unexpected regression.** No golden company changed, no `LIKELY_BUG` or `ERROR` appeared, and the 24 content hashes are identical.
+
+## Remaining blockers
+
+Top blocking metrics after 6D: operating income (5 companies), current debt (4), long-term debt (3), cash (2), and revenue (2).
+
+What-if over the post-6D diagnoses (18 blocked companies):
+
+| Improvement | Unblocked alone | Cumulative |
+|---|---:|---:|
+| Catalog concept policy (restricted cash, NCI equity, `ProfitLoss`, `LongTermDebtNoncurrent`) | 3 (PG, CAT, UNH) | — |
+| Long-term-debt alternatives and restatements | 2 (CRM, INTU) | with catalog: 5 |
+| A policy for genuine revisions | 3 (CRM, META, INTU) | all three: 6 |
+| Remaining current debt (debt/lease split) | 2 (HD, LOW) | — |
+| Operating-income derivation | 0 alone (NKE, PFE, CVX, XOM, DE need other fixes too) | — |
+
+Current debt is no longer the top blocker; **operating income** is.
+
+## Tests
+
+`tests/test_current_debt_composition.py` (30 tests) covers the ten required cases:
+
+* single-concept current debt (total, and each single component);
+* two-component composition with per-component provenance;
+* the MSFT FY2024 commercial-paper case, including that other years stay single-source, and its flow into capital efficiency;
+* no double counting: a reported total wins over its components (the ADBE 1,499/1,500 case), and restating concepts such as `ConvertibleDebtCurrent` are never summed;
+* structural absence proven two ways, its downstream effect, and the two ways it must not be inferred;
+* lease liabilities never added (three concepts), a lease-only company, and the unsafe bundle refusing composition (plus a zero bundle not refusing);
+* recency and conflict resolution on components: a stale component set, a stale component still contributing to older years, a precision restatement resolved before summing, and a genuine conflict still failing;
+* persistence provenance for composed and single-source facts;
+* ADBE, V, and COST unchanged, and metrics without a composition policy unaffected.
+
+The survey's composite-candidate registry is now empty (the pattern it measured is implemented) and a `COMPOSITION_BLOCKED` diagnosis reports the unsafe-bundle companies.
+
+## What Slice 6D Deliberately Did Not Build
+
+- splitting debt from capital leases in a bundled concept (HD, KO, LOW),
+- inferring absence from a missing tag,
+- a generic expression engine: the registry declares one optional additive composition, not arbitrary formulas,
+- structured composition columns in the persistence schema,
+- catalog-concept adoption, operating-income policy, or any change to FMP mapping or economic formulas.

@@ -307,10 +307,10 @@ def test_msft_debt_uses_current_noncurrent_split_without_double_count() -> None:
     assert rows[2025].roic is not None
 
 
-def test_msft_override_does_not_affect_other_filers_with_the_same_tagging() -> None:
-    # The override is keyed by ticker: another filer with identical tagging keeps
-    # the default concepts (and fails loudly without DebtCurrent), unchanged.
+def test_long_term_debt_override_does_not_affect_other_filers_with_the_same_tagging() -> None:
+    # The long-term-debt override is keyed by ticker: another filer with identical
+    # tagging keeps the default concept. Current debt needs no override at all,
+    # so the same payload composes for any ticker (Slice 6D).
     facts = _msft_like_facts()
     assert normalize_long_term_debt(facts, ticker="CRM").concept == "LongTermDebt"
-    with pytest.raises(ConceptNotFoundError):
-        normalize_current_debt(facts, ticker="CRM")
+    assert normalize_current_debt(facts, ticker="CRM").concept == "LongTermDebtCurrent"

@@ -114,13 +114,27 @@ def _fact_record(
 
 
 def _persisted_concept(obs: CanonicalFact) -> str:
-    """The source concept, annotated when the stored value is split-adjusted.
+    """The source concept, annotated when the stored value is not a filed figure.
 
-    A split-adjusted value was not filed verbatim in its source accession, so
-    the row states the adjustment and the as-filed value rather than implying
-    the filing reported it. Verbatim values (including precision-resolved ones)
-    keep the plain concept name.
+    Two cases are annotated. A split-adjusted value was not filed verbatim in
+    its source accession, so the row states the adjustment and the as-filed
+    value rather than implying the filing reported it. A composed value
+    (Slice 6D) is a sum, so the row names every contributing concept and its
+    value. Verbatim values (including precision-resolved ones) keep the plain
+    concept name.
+
+    Persistence limitation: ``reported_facts`` stores one concept, form, filing
+    date, and accession per fact, so structured composition metadata lives on
+    ``CanonicalFact.components`` in the canonical model rather than in the
+    database. The annotated string keeps a composed row auditable without a
+    schema change; its form, filing date, and accession are the first
+    contributing component's.
     """
+    if obs.components:
+        return " + ".join(
+            f"{component.provider_field} {component.value}"
+            for component in obs.components
+        )
     resolution = obs.resolution
     if resolution is None or resolution.split_factor == 1:
         return obs.provider_field

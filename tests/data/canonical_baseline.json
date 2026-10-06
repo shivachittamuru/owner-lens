@@ -4029,19 +4029,19 @@
     "capital_allocation": {
       "error": [
         "ConceptNotFoundError",
-        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent."
+        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings."
       ]
     },
     "capital_efficiency": {
       "error": [
         "ConceptNotFoundError",
-        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent."
+        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings."
       ]
     },
     "compounding": {
       "error": [
         "ConceptNotFoundError",
-        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent."
+        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings."
       ]
     },
     "coverage": {
@@ -4068,27 +4068,27 @@
         "layers": {
           "capital_allocation": {
             "blocking_input": null,
-            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
             "state": "UNAVAILABLE"
           },
           "capital_efficiency": {
             "blocking_input": null,
-            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
             "state": "UNAVAILABLE"
           },
           "compounding": {
             "blocking_input": null,
-            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
             "state": "UNAVAILABLE"
           },
           "economic_summary": {
             "blocking_input": null,
-            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
             "state": "UNAVAILABLE"
           },
           "economic_value": {
             "blocking_input": null,
-            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+            "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
             "state": "UNAVAILABLE"
           },
           "owner_economics": {
@@ -4103,13 +4103,13 @@
     "economic_summary": {
       "error": [
         "ConceptNotFoundError",
-        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent."
+        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings."
       ]
     },
     "economic_value": {
       "error": [
         "ConceptNotFoundError",
-        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent."
+        "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings."
       ]
     },
     "owner_economics": {
@@ -4479,7 +4479,7 @@
         {
           "blocking_input": null,
           "cik": "0000000000",
-          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
           "state": "UNAVAILABLE",
           "subject": "capital_efficiency",
           "subject_kind": "layer"
@@ -4487,7 +4487,7 @@
         {
           "blocking_input": null,
           "cik": "0000000000",
-          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
           "state": "UNAVAILABLE",
           "subject": "economic_value",
           "subject_kind": "layer"
@@ -4495,7 +4495,7 @@
         {
           "blocking_input": null,
           "cik": "0000000000",
-          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
           "state": "UNAVAILABLE",
           "subject": "compounding",
           "subject_kind": "layer"
@@ -4503,7 +4503,7 @@
         {
           "blocking_input": null,
           "cik": "0000000000",
-          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
           "state": "UNAVAILABLE",
           "subject": "capital_allocation",
           "subject_kind": "layer"
@@ -4511,7 +4511,7 @@
         {
           "blocking_input": null,
           "cik": "0000000000",
-          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.",
+          "reason": "No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.",
           "state": "UNAVAILABLE",
           "subject": "economic_summary",
           "subject_kind": "layer"
@@ -4985,8 +4985,8 @@
       ]
     },
     "views": {
-      "company_output": "ADBE - OwnerLens Coverage (partial)\n\nAvailable layers: owner_economics\nLimited layers:\n  capital_efficiency: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.)\n  economic_value: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.)\n  compounding: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.)\n  capital_allocation: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.)\n  economic_summary: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.)\nUnsupported inputs: current_debt\nStructurally absent inputs: dividends_paid\n\nNo classification is fabricated for unavailable per-share analysis.",
-      "coverage_report": "Company     owner_economics  capital_efficiency  economic_value  compounding  capital_allocation  economic_summary\n----------  ---------------  ------------------  --------------  -----------  ------------------  ----------------\nADBE        AVAILABLE        UNAVAILABLE         UNAVAILABLE     UNAVAILABLE  UNAVAILABLE         UNAVAILABLE     \n\nReasons:\n  ADBE capital_efficiency: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.\n  ADBE economic_value: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.\n  ADBE compounding: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.\n  ADBE capital_allocation: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent.\n  ADBE economic_summary: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent."
+      "company_output": "ADBE - OwnerLens Coverage (partial)\n\nAvailable layers: owner_economics\nLimited layers:\n  capital_efficiency: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.)\n  economic_value: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.)\n  compounding: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.)\n  capital_allocation: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.)\n  economic_summary: UNAVAILABLE (No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.)\nUnsupported inputs: current_debt\nStructurally absent inputs: dividends_paid\n\nNo classification is fabricated for unavailable per-share analysis.",
+      "coverage_report": "Company     owner_economics  capital_efficiency  economic_value  compounding  capital_allocation  economic_summary\n----------  ---------------  ------------------  --------------  -----------  ------------------  ----------------\nADBE        AVAILABLE        UNAVAILABLE         UNAVAILABLE     UNAVAILABLE  UNAVAILABLE         UNAVAILABLE     \n\nReasons:\n  ADBE capital_efficiency: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.\n  ADBE economic_value: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.\n  ADBE compounding: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.\n  ADBE capital_allocation: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings.\n  ADBE economic_summary: No supported US-GAAP concept with a fiscal-year-end instant observation was found. Tried: DebtCurrent, LongTermDebtCurrent, CommercialPaper, ShortTermBorrowings, OtherShortTermBorrowings."
     }
   },
   "COST": {

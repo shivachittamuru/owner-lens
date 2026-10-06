@@ -51,6 +51,7 @@ from typing import Any, Final
 from owner_lens.canonical import (
     ConflictResolution,
     ConflictResolutionKind,
+    FactComponent,
     MetricInvalidError,
     MetricUnsupportedError,
     SupersededValue,
@@ -92,6 +93,15 @@ class AmbiguousValueError(AnnualNormalizationError, MetricInvalidError):
     """Raised when a fiscal year has conflicting distinct full-year values."""
 
 
+class StructurallyAbsentError(AnnualNormalizationError):
+    """Raised when the payload proves a metric has no value to report.
+
+    Not a data failure: the company's own reported totals show the metric is
+    zero, so the series is empty rather than unsupported. Callers translate it
+    into ``STRUCTURALLY_ABSENT``.
+    """
+
+
 @dataclass(frozen=True)
 class AnnualObservation:
     """One canonical full fiscal-year reported value with SEC provenance."""
@@ -107,6 +117,7 @@ class AnnualObservation:
     accession: str
     value: int
     resolution: ConflictResolution | None = None
+    components: tuple[FactComponent, ...] = ()
 
 
 def canonicalize_ticker(ticker: str) -> str:
@@ -257,6 +268,178 @@ def has_annual_history(
         and bool(qualify(concept, us_gaap[concept], unit))
         for concept in concept_preference
     )
+
+
+def compose_instant_series(
+    us_gaap: dict[str, Any],
+    components: tuple[str, ...],
+    *,
+    max_years: int,
+    concept_error: type[Exception],
+    ambiguity_error: type[Exception],
+    unit: str = TARGET_UNIT,
+    unsafe: tuple[str, ...] = (),
+    totals_tried: tuple[str, ...] = (),
+) -> tuple[str, tuple[AnnualObservation, ...]]:
+    """Add the component concepts reported at each fiscal-year end (Slice 6D).
+
+    Each component is resolved on its own with the usual per-year conflict rules,
+    then the components present at a year end are summed. The composite must
+    cover the company's latest fiscal year, exactly like single-concept
+    selection; otherwise it is stale and ``concept_error`` is raised. A year
+    where an ``unsafe`` concept holds a non-zero value cannot be decomposed, so
+    the whole metric is refused rather than silently understated.
+
+    A year with only one contributing component yields that component's
+    observation unchanged, so composition never alters single-source provenance.
+    Components reported as zero are not contributors.
+    """
+    reference_end = latest_annual_period_end(us_gaap)
+    tried = ", ".join((*totals_tried, *components))
+    present: dict[str, dict[int, list[AnnualObservation]]] = {}
+    for concept in components:
+        entry = us_gaap.get(concept)
+        if not isinstance(entry, dict):
+            continue
+        by_year: dict[int, list[AnnualObservation]] = {}
+        for observation in _qualifying_instant_observations(concept, entry, unit):
+            by_year.setdefault(observation.fiscal_year, []).append(observation)
+        if by_year:
+            present[concept] = by_year
+    if not present:
+        raise concept_error(
+            "No supported US-GAAP concept with a fiscal-year-end instant observation "
+            f"was found. Tried: {tried}."
+        )
+
+    years = sorted({year for by_year in present.values() for year in by_year}, reverse=True)
+    composed = [
+        _compose_year(
+            year,
+            [
+                _resolve_year(concept, year, present[concept][year], ambiguity_error)
+                for concept in components
+                if year in present.get(concept, {})
+            ],
+            ambiguity_error,
+        )
+        for year in years[:max_years]
+    ]
+    _refuse_unsafe(us_gaap, composed, unit, concept_error, unsafe)
+    if not is_current(composed, reference_end):
+        newest = max(observation.period_end for observation in composed)
+        raise concept_error(
+            "No supported US-GAAP concept with a fiscal-year-end instant observation "
+            f"was found. Tried: {tried}. Stale (no value for the latest fiscal "
+            f"year): {', '.join(present)} (last period end {newest.isoformat()})"
+            + (
+                f"; company latest fiscal-year end {reference_end.isoformat()}."
+                if reference_end is not None
+                else "."
+            )
+        )
+    return " + ".join(present), tuple(composed)
+
+
+def _compose_year(
+    fiscal_year: int,
+    parts: list[AnnualObservation],
+    ambiguity_error: type[Exception],
+) -> AnnualObservation:
+    # A component reported as zero adds nothing to the sum, so it is not a
+    # contributor: dropping it keeps a year with one real component identical to
+    # a plain single-concept selection. A year where every component is zero
+    # keeps the first, so a reported zero stays distinct from an absent value.
+    contributors = [part for part in parts if part.value != 0] or parts[:1]
+    if len(contributors) == 1:
+        return contributors[0]
+    ends = {part.period_end for part in contributors}
+    if len(ends) > 1:
+        raise ambiguity_error(
+            f"Fiscal year {fiscal_year} components end on different dates: "
+            f"{sorted(end.isoformat() for end in ends)}."
+        )
+    primary = contributors[0]
+    return replace(
+        primary,
+        concept=" + ".join(part.concept for part in contributors),
+        value=sum(part.value for part in contributors),
+        resolution=None,
+        components=tuple(
+            FactComponent(
+                provider_field=part.concept,
+                value=part.value,
+                form=part.form,
+                filed=part.filed,
+                accession=part.accession,
+            )
+            for part in contributors
+        ),
+    )
+
+
+def _refuse_unsafe(
+    us_gaap: dict[str, Any],
+    composed: list[AnnualObservation],
+    unit: str,
+    concept_error: type[Exception],
+    unsafe: tuple[str, ...],
+) -> None:
+    ends = {observation.period_end for observation in composed}
+    for concept in unsafe:
+        entry = us_gaap.get(concept)
+        if not isinstance(entry, dict):
+            continue
+        blocking = sorted(
+            {
+                observation.period_end.isoformat()
+                for observation in _qualifying_instant_observations(concept, entry, unit)
+                if observation.value != 0 and observation.period_end in ends
+            }
+        )
+        if blocking:
+            raise concept_error(
+                f"{concept} is non-zero at {', '.join(blocking)} and bundles "
+                "economics this metric excludes, so the reported components "
+                "cannot be composed without understating or widening the metric."
+            )
+
+
+def proves_absence(
+    us_gaap: dict[str, Any],
+    absence_proof: tuple[str, str],
+    *,
+    unit: str = TARGET_UNIT,
+) -> bool:
+    """True when the company's own totals prove the metric is zero (Slice 6D).
+
+    ``absence_proof`` is a ``(total, remainder)`` concept pair where the metric
+    equals ``total - remainder``. At the company's latest fiscal-year end, a
+    reported total that equals the remainder (or is itself zero) proves there is
+    nothing to report. A missing tag proves nothing and returns False.
+    """
+    reference_end = latest_annual_period_end(us_gaap)
+    if reference_end is None:
+        return False
+    total_concept, remainder_concept = absence_proof
+
+    def at_reference(concept: str) -> int | None:
+        entry = us_gaap.get(concept)
+        if not isinstance(entry, dict):
+            return None
+        values = {
+            observation.value
+            for observation in _qualifying_instant_observations(concept, entry, unit)
+            if observation.period_end == reference_end
+        }
+        return values.pop() if len(values) == 1 else None
+
+    total = at_reference(total_concept)
+    if total is None:
+        return False
+    if total == 0:
+        return True
+    return total == at_reference(remainder_concept)
 
 
 def select_annual_series(

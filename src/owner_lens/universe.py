@@ -168,6 +168,9 @@ class DiagnosisCategory(Enum):
     AMBIGUOUS_DUPLICATE = "AMBIGUOUS_DUPLICATE"
     MALFORMED = "MALFORMED"
     STALE_CONCEPT = "STALE_CONCEPT"
+    # A composition the registry declares cannot be performed for this company,
+    # because a concept bundles economics the canonical metric excludes.
+    COMPOSITION_BLOCKED = "COMPOSITION_BLOCKED"
     COMPOSITE_CANDIDATE = "COMPOSITE_CANDIDATE"
     ALTERNATIVE_CONCEPT = "ALTERNATIVE_CONCEPT"
     MISSING_CONCEPT = "MISSING_CONCEPT"
@@ -282,31 +285,20 @@ CANDIDATE_CATALOG: Final[dict[str, tuple[str, ...]]] = {
         "MarketableSecuritiesCurrent",
         "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
     ),
-    "current_debt": (
-        "LongTermDebtCurrent",
-        "CommercialPaper",
-        "ShortTermBorrowings",
-        "OtherShortTermBorrowings",
-        "DebtCurrent",
-        "LongTermDebtAndCapitalLeaseObligationsCurrent",
-    ),
+    "current_debt": ("LongTermDebtAndCapitalLeaseObligationsCurrent",),
     "long_term_debt": ("LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"),
     "total_assets": (),
     "total_equity": ("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",),
 }
 # Concepts that are additive parts of a canonical metric (composite candidates).
-_COMPONENTS: Final[dict[str, frozenset[str]]] = {
-    "current_debt": frozenset(
-        {"LongTermDebtCurrent", "CommercialPaper", "ShortTermBorrowings", "OtherShortTermBorrowings"}
-    ),
-}
+# Slice 6D implemented current-debt composition in the metric registry, so the
+# only pattern the survey had measured is now resolved before diagnosis; an
+# entry here means a metric still needs a sum OwnerLens cannot yet perform.
+_COMPONENTS: Final[dict[str, frozenset[str]]] = {}
 # When the selected concept excludes these, a non-zero value means the metric is
-# likely understated (value-level composite). DebtCurrent is a total and excluded.
-_VALUE_LEVEL_ADDENDS: Final[dict[tuple[str, str], frozenset[str]]] = {
-    ("current_debt", "LongTermDebtCurrent"): frozenset(
-        {"CommercialPaper", "ShortTermBorrowings", "OtherShortTermBorrowings"}
-    ),
-}
+# likely understated (value-level composite). Current debt no longer appears
+# here: its components are composed, so it can no longer be silently understated.
+_VALUE_LEVEL_ADDENDS: Final[dict[tuple[str, str], frozenset[str]]] = {}
 # Concepts suggesting a business structure the canonical model does not target.
 _STRUCTURE_MARKERS: Final = (
     "PremiumsEarnedNet",
@@ -527,6 +519,22 @@ def _us_gaap(raw_facts: Mapping[str, Any]) -> Mapping[str, Any]:
 # --- Per-metric diagnosis -------------------------------------------------------
 
 
+def _unsafe_present(
+    definition: CanonicalMetricDefinition,
+    us_gaap: Mapping[str, Any],
+    kind: MetricKind,
+    recent: Callable[[str], dict[date, int]],
+) -> bool:
+    """True when a registry 'unsafe' concept holds a recent non-zero value."""
+    composition = definition.composition
+    if composition is None:
+        return False
+    return any(
+        any(value != 0 for value in recent(concept).values())
+        for concept in composition.unsafe
+    )
+
+
 def _diagnose(
     metric: str,
     history: CanonicalFinancialHistory,
@@ -538,6 +546,8 @@ def _diagnose(
     definition = _DEFINITIONS[metric]
     spec_kind = definition.kind
     tried = resolve_concepts(definition, ticker)
+    if definition.composition is not None:
+        tried = (*tried, *definition.composition.components)
     recent_cutoff = reference - timedelta(days=_RECENT_DAYS) if reference else None
 
     def recent(concept: str) -> dict[date, int]:
@@ -615,7 +625,11 @@ def _diagnose(
             c for c in tried
             if c in us_gaap and not _fy_values(us_gaap, c, definition.unit, spec_kind)
         ]
-        if present_no_annual and not candidates and not stale:
+        if _unsafe_present(definition, us_gaap, spec_kind, recent):
+            category, reason = DiagnosisCategory.COMPOSITION_BLOCKED, (
+                series.reason or "components cannot be composed safely"
+            )
+        elif present_no_annual and not candidates and not stale:
             category, reason = DiagnosisCategory.PERIOD_ISSUE, (
                 f"{', '.join(present_no_annual)} present but with no annual 10-K "
                 "observation (for example a new registrant with only 10-Q filings)"

@@ -17,8 +17,11 @@ from owner_lens._annual import (
     AmbiguousValueError,
     ConceptNotFoundError,
     MalformedFactsError,
+    StructurallyAbsentError,
     canonicalize_ticker,
+    compose_instant_series,
     has_annual_history,
+    proves_absence,
     select_instant_series,
     us_gaap_concepts,
 )
@@ -44,6 +47,7 @@ __all__ = [
     "AmbiguousValueError",
     "ConceptNotFoundError",
     "MalformedFactsError",
+    "StructurallyAbsentError",
     "normalize_annual_instant",
     "normalize_cash",
     "normalize_current_debt",
@@ -61,17 +65,53 @@ def normalize_annual_instant(
     ticker: str = DEFAULT_TICKER,
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> AnnualSeries:
-    """Derive a canonical fiscal-year-end instant series for one metric and company."""
+    """Derive a canonical fiscal-year-end instant series for one metric and company.
+
+    Resolution order (Slice 6D): a total concept from the preference order wins,
+    because a total already includes every component and summing on top of it
+    would double count. Otherwise a metric that declares a composition is
+    composed from the components reported at each fiscal-year end. Otherwise, if
+    the company's own totals prove the metric is zero, it is structurally
+    absent. A metric with no composition policy keeps single-concept selection
+    unchanged.
+    """
     normalized_ticker = canonicalize_ticker(ticker)
     us_gaap = us_gaap_concepts(raw_facts)
-    concept, observations = select_instant_series(
-        us_gaap,
-        resolve_concepts(definition, normalized_ticker),
-        max_years=max_years,
-        concept_error=ConceptNotFoundError,
-        ambiguity_error=AmbiguousValueError,
-        unit=definition.unit,
-    )
+    composition = definition.composition
+    try:
+        concept, observations = select_instant_series(
+            us_gaap,
+            resolve_concepts(definition, normalized_ticker),
+            max_years=max_years,
+            concept_error=ConceptNotFoundError,
+            ambiguity_error=AmbiguousValueError,
+            unit=definition.unit,
+        )
+    except ConceptNotFoundError:
+        if composition is None:
+            raise
+        try:
+            concept, observations = compose_instant_series(
+                us_gaap,
+                composition.components,
+                max_years=max_years,
+                concept_error=ConceptNotFoundError,
+                ambiguity_error=AmbiguousValueError,
+                unit=definition.unit,
+                unsafe=composition.unsafe,
+                totals_tried=resolve_concepts(definition, normalized_ticker),
+            )
+        except ConceptNotFoundError:
+            if composition.absence_proof is not None and proves_absence(
+                us_gaap, composition.absence_proof, unit=definition.unit
+            ):
+                raise StructurallyAbsentError(
+                    f"{definition.name} is structurally absent: the company reports "
+                    f"{composition.absence_proof[0]} equal to "
+                    f"{composition.absence_proof[1]} (or zero) at its latest "
+                    "fiscal-year end, so there is no value to report."
+                ) from None
+            raise
     return AnnualSeries(
         metric=definition.name,
         ticker=normalized_ticker,

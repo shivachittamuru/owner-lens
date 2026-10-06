@@ -457,7 +457,7 @@ Every compared fact either matches, rounds, or is explained. No `REVIEW` rows an
 | V FY2025 repurchases | SEC 18,316M filed vs FMP 13,389M (~4.9B moved to other financing) | Provider normalization | No |
 | COST FY2025 current debt | SEC 75M vs FMP 361M = 75M + 286M current leases, in this year only | Provider normalization | No (core) |
 | COST FY2026 | FMP only: period ended 2026-08-30, FMP filing date 2026-09-24, no FY2026 10-K at the SEC yet | Period timing | Pre-10-K data |
-| MSFT FY2024 current debt | After the debt-override fix: SEC `LongTermDebtCurrent` 2,249M omits 6,693M of filed `CommercialPaper`; FMP `shortTermDebt` 8,942M is complete. Other years carry no commercial paper and match. | SEC concept selection | Yes |
+| MSFT FY2024 current debt | After the debt-override fix: SEC `LongTermDebtCurrent` 2,249M omits 6,693M of filed `CommercialPaper`; FMP `shortTermDebt` 8,942M is complete. Other years carry no commercial paper and match. *(Closed in Slice 6D: SEC now composes 8,942M and the row is a `MATCH`.)* | SEC concept selection | Yes |
 | MSFT short-term investments | FMP 6–12M below the filed amount every year | Provider normalization | No (non-core) |
 
 ### OwnerLens outputs
@@ -469,11 +469,11 @@ Every compared fact either matches, rounds, or is explained. No `REVIEW` rows an
 
 ## Follow-up: Microsoft SEC debt mapping (fixed)
 
-The 5C evidence showed the SEC default `LongTermDebt` concept is the **total** including the current portion for Microsoft, and that Microsoft reports no `DebtCurrent`. MSFT now uses the same `LongTermDebtCurrent`/`LongTermDebtNoncurrent` replacement override as Visa and Costco, added through the Feature 3 metric registry with no ticker logic in calculations.
+The 5C evidence showed the SEC default `LongTermDebt` concept is the **total** including the current portion for Microsoft, and that Microsoft reports no `DebtCurrent`. MSFT now uses the same `LongTermDebtCurrent`/`LongTermDebtNoncurrent` replacement override as Visa and Costco, added through the Feature 3 metric registry with no ticker logic in calculations. *(Slice 6D removed the current-debt half of all three overrides: current debt now resolves through a shared component policy, so V, COST, and MSFT need no per-company current-debt entry. The long-term-debt overrides remain.)*
 
 | MSFT (SEC path)        | Before                                   | After                                        |
 |------------------------|------------------------------------------|----------------------------------------------|
-| Current debt           | `UNSUPPORTED` (no `DebtCurrent`)         | `LongTermDebtCurrent`: 9,227M FY2026, 2,999M FY2025 |
+| Current debt           | `UNSUPPORTED` (no `DebtCurrent`)         | `LongTermDebtCurrent`: 9,227M FY2026, 2,999M FY2025 *(FY2024 became 8,942M in Slice 6D)* |
 | Long-term debt         | `LongTermDebt` 40,294M FY2026 (total)     | `LongTermDebtNoncurrent` 31,067M FY2026        |
 | Total debt FY2026      | not computable                           | 40,294M = 9,227M + 31,067M (49,521M if double counted) |
 | ROIC FY2026 / FY2025   | not computable                           | 35.9% / 40.0%                                |
@@ -481,7 +481,7 @@ The 5C evidence showed the SEC default `LongTermDebt` concept is the **total** i
 
 ADBE, V, and COST outputs are unchanged (characterization baseline byte-identical). CRM and NOW SEC behavior is unchanged. Both still fail loudly on ambiguous FY2021 restatements (`LongTermDebt` for CRM, `NetIncomeLoss` for NOW). *(Slice 6C later resolved NOW's case as an exact re-rounding to millions; CRM's is a genuine revision and still fails.)* A regression test proves MSFT-style tagging yields `total debt = LongTermDebtCurrent + LongTermDebtNoncurrent`, never `+ LongTermDebt`, and that the override does not leak to other tickers.
 
-Re-running reconciliation retired both former MSFT explanations: they went stale, which is how the audit trail is meant to behave. It also exposed a residual SEC gap, FY2024 commercial paper (see the table above). The single-concept registry cannot sum `LongTermDebtCurrent + CommercialPaper`, so that remains a documented follow-up rather than a broadened fix.
+Re-running reconciliation retired both former MSFT explanations: they went stale, which is how the audit trail is meant to behave. It also exposed a residual SEC gap, FY2024 commercial paper (see the table above). The single-concept registry could not sum `LongTermDebtCurrent + CommercialPaper`, so that remained a documented follow-up rather than a broadened fix. *(Slice 6D closed it: the metric registry now supports an explicit additive composition, so SEC reports the complete 8,942M and the explanation above was retired as stale.)*
 
 The re-run also exposed a flaw in the audit trail itself. The year-wildcard "MSFT current debt is unsupported" explanation silently absorbed the new 6,693M value difference. Explanations are now category-compatible: an `UNSUPPORTED` explanation applies only to unsupported rows, and a `POLICY_DIFFERENCE` explanation only to semantic differences. An explanation whose premise no longer holds goes stale instead of masking a new discrepancy.
 
@@ -493,7 +493,7 @@ Three policies were evaluated against the 5C evidence (live SEC, cached FMP, ADB
 
 **C. Metric-by-metric mixed sourcing.** Rejected. FMP's errors are not confined to particular metrics; they are year-specific deviations inside otherwise-matching series (Visa cash matches FY2021–FY2024 and deviates in FY2025). A per-metric source choice therefore cannot isolate them. A per-company, per-year source choice would mean every company needs the reconciliation table maintained before it can be trusted. That is complexity without a trust gain. Mixed sourcing would also combine provider conventions inside one calculation, for example SEC debt with FMP cash, which breaks the single-provenance-per-history property that makes outputs auditable.
 
-**B. SEC primary, FMP secondary for reconciliation.** **Recommended.** SEC values are the filed facts, and with the MSFT fix the SEC path now runs every layer for all four companies. The remaining SEC gaps are explicit, never silent: Visa diluted shares are `UNSUPPORTED`, and Microsoft FY2024 commercial paper is omitted (documented). FMP's real advantages are coverage, such as Visa's as-converted diluted shares and MSFT's complete FY2024 current debt, and timeliness, such as Costco FY2026 before the 10-K. Those are kept as reconciliation evidence and as candidates for targeted SEC-path improvements, not as substituted values. This is the simplest trustworthy policy: one provider per history, filed values as truth, and a second provider that detects drift.
+**B. SEC primary, FMP secondary for reconciliation.** **Recommended.** SEC values are the filed facts, and with the MSFT fix the SEC path now runs every layer for all four companies. The remaining SEC gaps are explicit, never silent: Visa diluted shares are `UNSUPPORTED`, and Microsoft FY2024 commercial paper is omitted (documented; *closed in Slice 6D*). FMP's real advantages are coverage, such as Visa's as-converted diluted shares and MSFT's complete FY2024 current debt, and timeliness, such as Costco FY2026 before the 10-K. Those are kept as reconciliation evidence and as candidates for targeted SEC-path improvements, not as substituted values. This is the simplest trustworthy policy: one provider per history, filed values as truth, and a second provider that detects drift.
 
 Revisit the policy only when a re-run of `scripts/reconcile_providers.py` shows no untrusted core FMP facts. At that point the corresponding explanations go stale and force review.
 

@@ -50,10 +50,14 @@ def test_default_resolution_when_no_override() -> None:
     assert resolve_concepts(CASH, "V") == CASH.default_concepts
 
 
-def test_current_debt_override_for_v_and_cost() -> None:
-    assert resolve_concepts(CURRENT_DEBT, "V") == ("LongTermDebtCurrent",)
-    assert resolve_concepts(CURRENT_DEBT, "COST") == ("LongTermDebtCurrent",)
+def test_current_debt_needs_no_per_company_override() -> None:
+    # Slice 6D: V, COST, and MSFT resolve through the shared component policy.
+    assert resolve_concepts(CURRENT_DEBT, "V") == ("DebtCurrent",)
+    assert resolve_concepts(CURRENT_DEBT, "COST") == ("DebtCurrent",)
     assert resolve_concepts(CURRENT_DEBT, "ADBE") == ("DebtCurrent",)
+    assert CURRENT_DEBT.overrides == {}
+    assert CURRENT_DEBT.composition is not None
+    assert CURRENT_DEBT.composition.components[0] == "LongTermDebtCurrent"
 
 
 def test_long_term_debt_override_for_v_and_cost() -> None:
@@ -71,8 +75,8 @@ def test_total_equity_override_only_for_visa() -> None:
 
 
 def test_resolution_canonicalizes_ticker_case_and_whitespace() -> None:
-    assert resolve_concepts(CURRENT_DEBT, "  v ") == ("LongTermDebtCurrent",)
-    assert resolve_concepts(CURRENT_DEBT, "cost") == ("LongTermDebtCurrent",)
+    assert resolve_concepts(LONG_TERM_DEBT, "  v ") == ("LongTermDebtNoncurrent",)
+    assert resolve_concepts(LONG_TERM_DEBT, "cost") == ("LongTermDebtNoncurrent",)
 
 
 def test_resolution_is_deterministic() -> None:
@@ -96,4 +100,8 @@ def test_every_override_is_scoped_and_excludes_adobe() -> None:
 
 def test_only_debt_and_equity_carry_overrides() -> None:
     with_overrides = {d.name for d in ALL_DEFINITIONS if d.overrides}
-    assert with_overrides == {"current_debt", "long_term_debt", "total_equity"}
+    assert with_overrides == {"long_term_debt", "total_equity"}
+
+
+def test_only_current_debt_declares_a_composition() -> None:
+    assert {d.name for d in ALL_DEFINITIONS if d.composition} == {"current_debt"}

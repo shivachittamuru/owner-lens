@@ -146,6 +146,25 @@ KNOWN_DISCREPANCIES: Final[tuple[KnownDiscrepancy, ...]] = (
         ),
         fmp_trusted=False,
     ),
+    KnownDiscrepancy(
+        ticker="COST",
+        metric="current_debt",
+        fiscal_year=2022,
+        category=_C.PROVIDER_NORMALIZATION,
+        explanation=(
+            "Costco reported 88M of other short-term borrowings alongside 73M of current "
+            "long-term debt at FY2022 year-end. Since Slice 6D the SEC path composes both "
+            "(161M); FMP's shortTermDebt reports only the 73M current portion, so it "
+            "understates current debt in the years Costco carried those borrowings."
+        ),
+        evidence=(
+            "SEC FY2022 (10-K filed 2022-10-05): LongTermDebtCurrent = 73M and "
+            "OtherShortTermBorrowings = 88M; FMP shortTermDebt FY2022 = 73M. FY2021 shows "
+            "the same pattern (799M + 41M). Note the opposite direction to the FY2025 "
+            "lease-liability entry above: FMP both omits borrowings and adds leases."
+        ),
+        fmp_trusted=False,
+    ),
     *(
         KnownDiscrepancy(
             ticker="COST",
@@ -183,29 +202,12 @@ KNOWN_DISCREPANCIES: Final[tuple[KnownDiscrepancy, ...]] = (
         )
     ),
     # --- MSFT -----------------------------------------------------------------
-    # The former long_term_debt (SEC concept selection) and current_debt
-    # (unsupported) entries were retired once MSFT gained the
-    # LongTermDebtCurrent/LongTermDebtNoncurrent override; both went stale, as intended.
-    KnownDiscrepancy(
-        ticker="MSFT",
-        metric="current_debt",
-        fiscal_year=2024,
-        category=_C.SEC_CONCEPT_SELECTION,
-        explanation=(
-            "At FY2024 year-end Microsoft held 6,693M of commercial paper in addition to "
-            "2,249M of current long-term debt. The SEC path selects one concept "
-            "(LongTermDebtCurrent) and so omits the commercial paper; FMP shortTermDebt "
-            "(8,942M) is the complete current debt. Other years carry no commercial paper "
-            "and match."
-        ),
-        evidence=(
-            "FY2024 (10-K filed 2024-07-30): SEC LongTermDebtCurrent = 2,249M and "
-            "CommercialPaper = 6,693M; FMP shortTermDebt = 8,942M = 2,249M + 6,693M. "
-            "CommercialPaper is 0 at FY2023 and FY2025 year-ends. The canonical registry "
-            "selects a single concept per metric and cannot sum concepts; follow-up."
-        ),
-        fmp_trusted=True,
-    ),
+    # Three entries were retired as their SEC-side causes were fixed, each going
+    # stale exactly as the audit trail intends: long_term_debt (SEC concept
+    # selection) and current_debt (unsupported) when MSFT gained the
+    # LongTermDebtCurrent/LongTermDebtNoncurrent override, and current_debt
+    # FY2024 (commercial paper omitted) when Slice 6D made current debt a
+    # composition, so SEC now reports the same 8,942M that FMP does.
     KnownDiscrepancy(
         ticker="MSFT",
         metric="short_term_investments",
