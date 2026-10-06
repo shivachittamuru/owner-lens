@@ -15,6 +15,16 @@ from owner_lens.balance_sheet import (
     normalize_total_assets,
     normalize_total_equity,
 )
+from owner_lens.canonical import (
+    CANONICAL_METRICS,
+    CanonicalDataError,
+    CanonicalFact,
+    CanonicalFinancialHistory,
+    CanonicalSeries,
+    MetricInvalidError,
+    MetricStatus,
+    MetricUnsupportedError,
+)
 from owner_lens.capital_allocation import (
     DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS,
     BuybackEffectiveness,
@@ -24,6 +34,7 @@ from owner_lens.capital_allocation import (
     CapitalAllocationThresholds,
     build_capital_allocation_rows,
     capital_allocation_from_facts,
+    capital_allocation_from_history,
     capital_allocation_summary,
     classify_buyback_effectiveness,
     format_capital_allocation_view,
@@ -31,6 +42,7 @@ from owner_lens.capital_allocation import (
 from owner_lens.capital_efficiency import (
     CapitalEfficiencyRow,
     capital_efficiency_from_facts,
+    capital_efficiency_from_history,
     compute_capital_efficiency,
 )
 from owner_lens.compounding import (
@@ -43,7 +55,9 @@ from owner_lens.compounding import (
     cagr,
     classify_compounding,
     compounding_view_from_facts,
+    compounding_view_from_history,
     compounding_views_from_facts,
+    compounding_views_from_history,
     format_compounding_view,
 )
 from owner_lens.config import (
@@ -57,7 +71,9 @@ from owner_lens.coverage import (
     LayerResult,
     MetricCoverage,
     company_coverage,
+    company_coverage_from_history,
     company_output,
+    company_output_from_history,
     format_coverage_report,
 )
 from owner_lens.economic_summary import (
@@ -67,6 +83,7 @@ from owner_lens.economic_summary import (
     OverallEconomicValueClassification,
     SummaryDriver,
     economic_value_summary_from_facts,
+    economic_value_summary_from_history,
     format_economic_value_summary,
     synthesize_economic_value_summary,
 )
@@ -79,6 +96,7 @@ from owner_lens.economic_value import (
     build_economic_value_snapshots,
     classify_economic_value,
     economic_value_from_facts,
+    economic_value_from_history,
     format_economic_value_view,
 )
 from owner_lens.ingestion import (
@@ -113,6 +131,7 @@ from owner_lens.owner_economics import (
     OwnerEconomicsRow,
     compute_owner_economics,
     owner_economics_from_facts,
+    owner_economics_from_history,
 )
 from owner_lens.persistence import (
     AnalysisDriverRecord,
@@ -174,12 +193,15 @@ from owner_lens.sec import (
     SecResponseError,
     SecTransportError,
 )
+from owner_lens.sec_adapter import SEC_PROVIDER, canonical_history_from_sec
 
 __all__ = [
+    "CANONICAL_METRICS",
     "DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS",
     "DEFAULT_COMPOUNDING_THRESHOLDS",
     "DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS",
     "DEFAULT_THRESHOLDS",
+    "SEC_PROVIDER",
     "AmbiguousOperatingIncomeError",
     "AmbiguousRevenueError",
     "AmbiguousValueError",
@@ -193,7 +215,11 @@ __all__ = [
     "AnnualRevenueSeries",
     "AnnualSeries",
     "BuybackEffectiveness",
+    "CanonicalDataError",
+    "CanonicalFact",
+    "CanonicalFinancialHistory",
     "CanonicalMetricDefinition",
+    "CanonicalSeries",
     "CapitalAllocationClassification",
     "CapitalAllocationDriver",
     "CapitalAllocationRow",
@@ -230,7 +256,10 @@ __all__ = [
     "MalformedSecResponseError",
     "MalformedTickerError",
     "MetricCoverage",
+    "MetricInvalidError",
     "MetricKind",
+    "MetricStatus",
+    "MetricUnsupportedError",
     "OperatingIncomeConceptNotFoundError",
     "OperatingIncomeNormalizationError",
     "OperatingMargin",
@@ -262,24 +291,33 @@ __all__ = [
     "build_economic_value_snapshots",
     "build_local_store",
     "cagr",
+    "canonical_history_from_sec",
     "capital_allocation_from_facts",
+    "capital_allocation_from_history",
     "capital_allocation_summary",
     "capital_efficiency_from_facts",
+    "capital_efficiency_from_history",
     "classify_buyback_effectiveness",
     "classify_compounding",
     "classify_economic_value",
     "company_coverage",
+    "company_coverage_from_history",
     "company_output",
+    "company_output_from_history",
     "company_record",
     "compounding_view_from_facts",
+    "compounding_view_from_history",
     "compounding_views_from_facts",
+    "compounding_views_from_history",
     "compute_capital_efficiency",
     "compute_content_hash",
     "compute_owner_economics",
     "coverage_result_records",
     "derived_metric_records",
     "economic_value_from_facts",
+    "economic_value_from_history",
     "economic_value_summary_from_facts",
+    "economic_value_summary_from_history",
     "format_capital_allocation_view",
     "format_compounding_view",
     "format_coverage_report",
@@ -308,6 +346,7 @@ __all__ = [
     "normalize_total_equity",
     "operating_margins",
     "owner_economics_from_facts",
+    "owner_economics_from_history",
     "reported_fact_records",
     "resolve_concepts",
     "synthesize_economic_value_summary",

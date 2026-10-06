@@ -7,6 +7,23 @@ testable Python.
 
 See [docs/PRD.md](docs/PRD.md) for product context and [ROADMAP.md](ROADMAP.md) for the slice history.
 
+## Architecture
+
+OwnerLens separates data providers from its deterministic financial logic with a canonical boundary:
+
+```text
+providers (SEC today)
+   ↓  provider adapter (owner_lens.sec_adapter)
+canonical facts (owner_lens.canonical.CanonicalFinancialHistory)
+   ↓
+OwnerLens deterministic logic (owner economics, capital efficiency, Economic Value Lens, coverage)
+```
+
+Provider-specific concepts, such as SEC XBRL tags, stay above the boundary and survive below it only as
+provenance on each canonical fact. See
+[Feature 5: Provider Boundary](docs/feature_docs/feature_05_canonical_provider_boundary.md) for the
+model, the boundary rule, and how it is enforced.
+
 ## Requirements
 
 - Python 3.12 or later

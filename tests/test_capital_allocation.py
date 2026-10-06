@@ -20,22 +20,28 @@ from owner_lens import (
     build_capital_allocation_rows,
     classify_buyback_effectiveness,
 )
-from owner_lens._annual import AnnualObservation
-from owner_lens.reported import AnnualSeries
+from owner_lens.canonical import (
+    CanonicalFact,
+    CanonicalSeries,
+    MetricStatus,
+    metric_spec,
+)
 
 Eff = BuybackEffectiveness
 Cls = CapitalAllocationClassification
 Drv = CapitalAllocationDriver
 
 
-def _obs(value: int, year: int) -> AnnualObservation:
-    return AnnualObservation(
-        concept="X",
-        unit="USD",
+def _obs(metric: str, value: int, year: int) -> CanonicalFact:
+    return CanonicalFact(
+        metric=metric,
+        unit=metric_spec(metric).unit,
         fiscal_year=year,
         fiscal_period="FY",
         period_start=date(year - 1, 12, 1),
         period_end=date(year, 11, 30),
+        provider="test",
+        provider_field="X",
         form="10-K",
         filed=date(year + 1, 1, 15),
         accession=f"acc-{year}",
@@ -43,20 +49,17 @@ def _obs(value: int, year: int) -> AnnualObservation:
     )
 
 
-def _series(metric: str, values: dict[int, int], *, concept: str = "C") -> AnnualSeries:
-    observations = tuple(_obs(v, y) for y, v in sorted(values.items(), reverse=True))
-    return AnnualSeries(
-        metric=metric,
-        ticker="ADBE",
-        concept=concept if observations else "",
-        unit="USD",
-        observations=observations,
+def _series(metric: str, values: dict[int, int]) -> CanonicalSeries:
+    observations = tuple(_obs(metric, v, y) for y, v in sorted(values.items(), reverse=True))
+    status = MetricStatus.AVAILABLE if observations else MetricStatus.STRUCTURALLY_ABSENT
+    return CanonicalSeries(
+        metric=metric, unit="USD", status=status, observations=observations
     )
 
 
-def _empty_dividends() -> AnnualSeries:
-    return AnnualSeries(
-        metric="dividends_paid", ticker="ADBE", concept="", unit="USD", observations=()
+def _empty_dividends() -> CanonicalSeries:
+    return CanonicalSeries(
+        metric="dividends_paid", unit="USD", status=MetricStatus.STRUCTURALLY_ABSENT
     )
 
 
@@ -191,7 +194,7 @@ def _build_one_year(
     prior_net_cash: int,
     roic: float,
     roic_change: float | None = None,
-    dividends: AnnualSeries | None = None,
+    dividends: CanonicalSeries | None = None,
     thresholds: CapitalAllocationThresholds | None = None,
 ):
     year = 2025

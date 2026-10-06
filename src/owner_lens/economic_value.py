@@ -24,11 +24,13 @@ from enum import Enum
 from typing import Any
 
 from owner_lens._trajectory import NetCashTrajectory, net_cash_trajectory
+from owner_lens.canonical import CanonicalFinancialHistory
 from owner_lens.capital_efficiency import (
     CapitalEfficiencyRow,
-    capital_efficiency_from_facts,
+    capital_efficiency_from_history,
 )
-from owner_lens.owner_economics import OwnerEconomicsRow, owner_economics_from_facts
+from owner_lens.owner_economics import OwnerEconomicsRow, owner_economics_from_history
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "DEFAULT_THRESHOLDS",
@@ -39,6 +41,7 @@ __all__ = [
     "build_economic_value_snapshots",
     "classify_economic_value",
     "economic_value_from_facts",
+    "economic_value_from_history",
     "format_economic_value_view",
 ]
 
@@ -480,6 +483,19 @@ def _attr(row: Any, name: str) -> Any:
     return getattr(row, name)
 
 
+def economic_value_from_history(
+    history: CanonicalFinancialHistory,
+    *,
+    thresholds: EconomicValueThresholds = DEFAULT_THRESHOLDS,
+) -> tuple[EconomicValueSnapshot, ...]:
+    """Derive Feature 1 outputs from a canonical history, then build snapshots."""
+    owner_economics = owner_economics_from_history(history)
+    capital_efficiency = capital_efficiency_from_history(history)
+    return build_economic_value_snapshots(
+        owner_economics, capital_efficiency, thresholds=thresholds
+    )
+
+
 def economic_value_from_facts(
     raw_facts: dict[str, Any],
     *,
@@ -487,19 +503,10 @@ def economic_value_from_facts(
     max_years: int = 5,
     thresholds: EconomicValueThresholds = DEFAULT_THRESHOLDS,
 ) -> tuple[EconomicValueSnapshot, ...]:
-    """Normalize Feature 1 outputs from a payload, then build snapshots.
-
-    All SEC retrieval and normalization happen inside the Feature 1 entry points;
-    this interpretation layer performs no network access.
-    """
-    owner_economics = owner_economics_from_facts(
-        raw_facts, ticker=ticker, max_years=max_years
-    )
-    capital_efficiency = capital_efficiency_from_facts(
-        raw_facts, ticker=ticker, max_years=max_years
-    )
-    return build_economic_value_snapshots(
-        owner_economics, capital_efficiency, thresholds=thresholds
+    """Compatibility wrapper: map raw SEC Company Facts, then build snapshots."""
+    return economic_value_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years),
+        thresholds=thresholds,
     )
 
 

@@ -8,6 +8,10 @@ metrics are calculated deterministically in application code and are kept in a
 distinct row type so a consumer can tell a filed fact from a calculated metric.
 A derived value is produced only when its inputs exist and its denominator is
 non-zero.
+
+Since Slice 5A the module consumes only a provider-neutral
+``CanonicalFinancialHistory``; ``owner_economics_from_facts`` remains as a thin
+compatibility wrapper that maps raw SEC Company Facts through the SEC adapter.
 """
 
 from __future__ import annotations
@@ -15,25 +19,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from owner_lens._annual import AnnualObservation
-from owner_lens.operating_income import (
-    AnnualOperatingIncomeSeries,
-    normalize_annual_operating_income,
+from owner_lens.canonical import (
+    CanonicalFact,
+    CanonicalFinancialHistory,
+    CanonicalSeries,
 )
-from owner_lens.reported import (
-    AnnualSeries,
-    ConceptNotFoundError,
-    normalize_capital_expenditures,
-    normalize_diluted_shares,
-    normalize_net_income,
-    normalize_operating_cash_flow,
-)
-from owner_lens.revenue import AnnualRevenueSeries, normalize_annual_revenue
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "OwnerEconomicsRow",
     "compute_owner_economics",
     "owner_economics_from_facts",
+    "owner_economics_from_history",
 ]
 
 
@@ -43,12 +40,12 @@ class OwnerEconomicsRow:
 
     fiscal_year: int
     # Reported facts (source provenance preserved).
-    revenue: AnnualObservation | None
-    operating_income: AnnualObservation | None
-    net_income: AnnualObservation | None
-    operating_cash_flow: AnnualObservation | None
-    capital_expenditures: AnnualObservation | None
-    diluted_shares: AnnualObservation | None
+    revenue: CanonicalFact | None
+    operating_income: CanonicalFact | None
+    net_income: CanonicalFact | None
+    operating_cash_flow: CanonicalFact | None
+    capital_expenditures: CanonicalFact | None
+    diluted_shares: CanonicalFact | None
     # Derived metrics (calculated, not reported).
     operating_margin: float | None
     net_margin: float | None
@@ -60,11 +57,11 @@ class OwnerEconomicsRow:
     diluted_share_growth: float | None
 
 
-def _by_year(observations: tuple[AnnualObservation, ...]) -> dict[int, AnnualObservation]:
+def _by_year(observations: tuple[CanonicalFact, ...]) -> dict[int, CanonicalFact]:
     return {obs.fiscal_year: obs for obs in observations}
 
 
-def _ratio(numerator: int | None, denominator: AnnualObservation | None) -> float | None:
+def _ratio(numerator: int | None, denominator: CanonicalFact | None) -> float | None:
     if numerator is None or denominator is None or denominator.value == 0:
         return None
     return numerator / denominator.value
@@ -78,12 +75,12 @@ def _growth(current: float | None, prior: float | None) -> float | None:
 
 def compute_owner_economics(
     *,
-    revenue: AnnualRevenueSeries,
-    operating_income: AnnualOperatingIncomeSeries,
-    net_income: AnnualSeries,
-    operating_cash_flow: AnnualSeries,
-    capital_expenditures: AnnualSeries,
-    diluted_shares: AnnualSeries,
+    revenue: CanonicalSeries,
+    operating_income: CanonicalSeries,
+    net_income: CanonicalSeries,
+    operating_cash_flow: CanonicalSeries,
+    capital_expenditures: CanonicalSeries,
+    diluted_shares: CanonicalSeries,
 ) -> tuple[OwnerEconomicsRow, ...]:
     """Align the six series by fiscal year and derive owner-economics metrics."""
     rev = _by_year(revenue.observations)
@@ -146,42 +143,34 @@ def compute_owner_economics(
     return tuple(rows)
 
 
+def owner_economics_from_history(
+    history: CanonicalFinancialHistory,
+) -> tuple[OwnerEconomicsRow, ...]:
+    """Derive owner economics from a provider-neutral canonical history.
+
+    Diluted weighted-average shares can be unsupported for some companies (for
+    example, Visa). When they are, the empty series is used so the per-share
+    fields degrade to ``None`` while every non-per-share metric is still derived;
+    no share count is ever fabricated or substituted.
+    """
+    diluted_shares = history.require("diluted_shares", allow_unsupported=True)
+    return compute_owner_economics(
+        revenue=history.require("revenue"),
+        operating_income=history.require("operating_income"),
+        net_income=history.require("net_income"),
+        operating_cash_flow=history.require("operating_cash_flow"),
+        capital_expenditures=history.require("capital_expenditures"),
+        diluted_shares=diluted_shares,
+    )
+
+
 def owner_economics_from_facts(
     raw_facts: dict[str, Any],
     *,
     ticker: str = "ADBE",
     max_years: int = 5,
 ) -> tuple[OwnerEconomicsRow, ...]:
-    """Normalize all six series from a payload, then derive owner economics.
-
-    Diluted weighted-average shares can be unsupported for some filers (for
-    example, Visa). When they are, an empty series is substituted so the
-    per-share fields degrade to ``None`` while every non-per-share metric is
-    still derived; no share count is ever fabricated or substituted.
-    """
-    try:
-        diluted_shares = normalize_diluted_shares(
-            raw_facts, ticker=ticker, max_years=max_years
-        )
-    except ConceptNotFoundError:
-        diluted_shares = AnnualSeries(
-            metric="diluted_shares",
-            ticker=ticker.strip().upper(),
-            concept="",
-            unit="shares",
-            observations=(),
-        )
-    return compute_owner_economics(
-        revenue=normalize_annual_revenue(raw_facts, ticker=ticker, max_years=max_years),
-        operating_income=normalize_annual_operating_income(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
-        net_income=normalize_net_income(raw_facts, ticker=ticker, max_years=max_years),
-        operating_cash_flow=normalize_operating_cash_flow(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
-        capital_expenditures=normalize_capital_expenditures(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
-        diluted_shares=diluted_shares,
+    """Compatibility wrapper: map raw SEC Company Facts, then derive owner economics."""
+    return owner_economics_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years)
     )

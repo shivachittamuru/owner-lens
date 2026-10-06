@@ -13,19 +13,12 @@ overrides, so its concept selection is unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Final
 
 from owner_lens._annual import TARGET_UNIT
+from owner_lens.canonical import MetricKind
 
 SHARES_UNIT: Final = "shares"
-
-
-class MetricKind(Enum):
-    """Whether a metric is selected through the duration or instant path."""
-
-    DURATION = "duration"
-    INSTANT = "instant"
 
 
 @dataclass(frozen=True)

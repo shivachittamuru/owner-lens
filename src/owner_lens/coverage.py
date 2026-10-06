@@ -1,12 +1,13 @@
 """Read-only golden-company coverage reporting for OwnerLens.
 
 This module supports OwnerLens Slice 3C. It does not add an analytical feature:
-it probes the existing normalizers and runs the existing Feature 1 and Feature 2
-entry points to record, per company, which inputs are available, structurally
-absent, or unsupported, and which analytical layers are available, partial,
-insufficient, or unavailable. It performs no network access of its own; the
-caller supplies raw Company Facts. Nothing here fabricates or substitutes a
-value.
+it reads each canonical input's status and runs the existing Feature 1 and
+Feature 2 entry points to record, per company, which inputs are available,
+structurally absent, or unsupported, and which analytical layers are available,
+partial, insufficient, or unavailable. Since Slice 5A it consumes only a
+provider-neutral ``CanonicalFinancialHistory``; ``company_coverage`` and
+``company_output`` remain as compatibility wrappers over raw SEC Company Facts.
+Nothing here fabricates or substitutes a value.
 """
 
 from __future__ import annotations
@@ -16,50 +17,33 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from owner_lens.balance_sheet import (
-    normalize_cash,
-    normalize_current_debt,
-    normalize_long_term_debt,
-    normalize_short_term_investments,
-    normalize_total_assets,
-    normalize_total_equity,
+from owner_lens.canonical import (
+    CanonicalFinancialHistory,
+    MetricStatus,
+    MetricUnsupportedError,
 )
 from owner_lens.capital_allocation import (
     CapitalAllocationClassification,
-    capital_allocation_from_facts,
+    capital_allocation_from_history,
 )
-from owner_lens.capital_efficiency import capital_efficiency_from_facts
+from owner_lens.capital_efficiency import capital_efficiency_from_history
 from owner_lens.compounding import (
     CompoundingClassification,
-    compounding_views_from_facts,
+    compounding_views_from_history,
 )
 from owner_lens.economic_summary import (
+    EconomicValueSummary,
     OverallEconomicValueClassification,
     economic_value_summary_from_facts,
+    economic_value_summary_from_history,
     format_economic_value_summary,
 )
 from owner_lens.economic_value import (
     EconomicValueClassification,
-    economic_value_from_facts,
+    economic_value_from_history,
 )
-from owner_lens.operating_income import (
-    OperatingIncomeConceptNotFoundError,
-    normalize_annual_operating_income,
-)
-from owner_lens.owner_economics import owner_economics_from_facts
-from owner_lens.reported import (
-    ConceptNotFoundError,
-    normalize_capital_expenditures,
-    normalize_diluted_shares,
-    normalize_dividends_paid,
-    normalize_income_tax_expense,
-    normalize_net_income,
-    normalize_operating_cash_flow,
-    normalize_pretax_income,
-    normalize_repurchases,
-    normalize_stock_based_compensation,
-)
-from owner_lens.revenue import RevenueConceptNotFoundError, normalize_annual_revenue
+from owner_lens.owner_economics import owner_economics_from_history
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "CompanyCoverage",
@@ -67,16 +51,14 @@ __all__ = [
     "LayerResult",
     "MetricCoverage",
     "company_coverage",
+    "company_coverage_from_history",
     "company_output",
+    "company_output_from_history",
     "format_coverage_report",
 ]
 
-# Concept-not-found is how a normalizer signals an unsupported input.
-_CONCEPT_ERRORS = (
-    ConceptNotFoundError,
-    RevenueConceptNotFoundError,
-    OperatingIncomeConceptNotFoundError,
-)
+# A required input that is unsupported surfaces as this provider-neutral error.
+_CONCEPT_ERRORS = (MetricUnsupportedError,)
 _DILUTED_SHARES_REASON = "weighted-average diluted shares unsupported"
 
 
@@ -115,28 +97,11 @@ class CompanyCoverage:
     layers: dict[str, LayerResult]
 
 
-_Normalizer = Callable[..., Any]
-
-# Canonical input metrics probed for coverage, in a stable order.
-_INPUTS: tuple[tuple[str, _Normalizer], ...] = (
-    ("revenue", normalize_annual_revenue),
-    ("operating_income", normalize_annual_operating_income),
-    ("net_income", normalize_net_income),
-    ("operating_cash_flow", normalize_operating_cash_flow),
-    ("capital_expenditures", normalize_capital_expenditures),
-    ("diluted_shares", normalize_diluted_shares),
-    ("income_tax_expense", normalize_income_tax_expense),
-    ("pretax_income", normalize_pretax_income),
-    ("repurchases", normalize_repurchases),
-    ("stock_based_compensation", normalize_stock_based_compensation),
-    ("dividends_paid", normalize_dividends_paid),
-    ("cash", normalize_cash),
-    ("short_term_investments", normalize_short_term_investments),
-    ("current_debt", normalize_current_debt),
-    ("long_term_debt", normalize_long_term_debt),
-    ("total_assets", normalize_total_assets),
-    ("total_equity", normalize_total_equity),
-)
+_STATUS_COVERAGE = {
+    MetricStatus.AVAILABLE: MetricCoverage.AVAILABLE,
+    MetricStatus.STRUCTURALLY_ABSENT: MetricCoverage.STRUCTURALLY_ABSENT,
+    MetricStatus.UNSUPPORTED: MetricCoverage.UNSUPPORTED,
+}
 
 # Analytical layers reported in the cross-company grid, in pipeline order.
 LAYER_ORDER: tuple[str, ...] = (
@@ -149,19 +114,21 @@ LAYER_ORDER: tuple[str, ...] = (
 )
 
 
-def _probe_input(
-    normalizer: _Normalizer,
-    raw_facts: dict[str, Any],
-    ticker: str,
-    max_years: int,
-) -> MetricCoverage:
-    try:
-        series = normalizer(raw_facts, ticker=ticker, max_years=max_years)
-    except _CONCEPT_ERRORS:
-        return MetricCoverage.UNSUPPORTED
-    if not series.observations:
-        return MetricCoverage.STRUCTURALLY_ABSENT
-    return MetricCoverage.AVAILABLE
+def _input_coverage(history: CanonicalFinancialHistory) -> dict[str, MetricCoverage]:
+    inputs: dict[str, MetricCoverage] = {}
+    for metric, status in history.statuses().items():
+        if status is MetricStatus.INVALID:
+            history.require(metric)  # re-raises the stored malformed/ambiguous error
+        inputs[metric] = _STATUS_COVERAGE[status]
+    return inputs
+
+
+def company_coverage_from_history(history: CanonicalFinancialHistory) -> CompanyCoverage:
+    """Derive the per-input and per-layer coverage for one company's canonical history."""
+    inputs = _input_coverage(history)
+    shares_unsupported = inputs["diluted_shares"] is MetricCoverage.UNSUPPORTED
+    layers = _layer_coverage(history, shares_unsupported)
+    return CompanyCoverage(ticker=history.ticker, inputs=inputs, layers=layers)
 
 
 def company_coverage(
@@ -170,20 +137,14 @@ def company_coverage(
     ticker: str = "ADBE",
     max_years: int = 5,
 ) -> CompanyCoverage:
-    """Derive the per-input and per-layer coverage for one company."""
-    inputs = {
-        name: _probe_input(normalizer, raw_facts, ticker, max_years)
-        for name, normalizer in _INPUTS
-    }
-    shares_unsupported = inputs["diluted_shares"] is MetricCoverage.UNSUPPORTED
-    layers = _layer_coverage(raw_facts, ticker, max_years, shares_unsupported)
-    return CompanyCoverage(ticker=ticker.strip().upper(), inputs=inputs, layers=layers)
+    """Compatibility wrapper: map raw SEC Company Facts, then derive coverage."""
+    return company_coverage_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years)
+    )
 
 
 def _layer_coverage(
-    raw_facts: dict[str, Any],
-    ticker: str,
-    max_years: int,
+    history: CanonicalFinancialHistory,
     shares_unsupported: bool,
 ) -> dict[str, LayerResult]:
     share_reason = _DILUTED_SHARES_REASON if shares_unsupported else None
@@ -191,7 +152,7 @@ def _layer_coverage(
     layers: dict[str, LayerResult] = {}
 
     try:
-        owner_economics_from_facts(raw_facts, ticker=ticker, max_years=max_years)
+        owner_economics_from_history(history)
     except _CONCEPT_ERRORS as exc:
         layers["owner_economics"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     if "owner_economics" not in layers:
@@ -199,15 +160,13 @@ def _layer_coverage(
         layers["owner_economics"] = LayerResult(state, share_reason, share_input)
 
     try:
-        capital_efficiency_from_facts(raw_facts, ticker=ticker, max_years=max_years)
+        capital_efficiency_from_history(history)
         layers["capital_efficiency"] = LayerResult(LayerCoverage.AVAILABLE)
     except _CONCEPT_ERRORS as exc:
         layers["capital_efficiency"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
 
     try:
-        snapshots = economic_value_from_facts(
-            raw_facts, ticker=ticker, max_years=max_years
-        )
+        snapshots = economic_value_from_history(history)
     except _CONCEPT_ERRORS as exc:
         layers["economic_value"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
@@ -222,9 +181,7 @@ def _layer_coverage(
             layers["economic_value"] = LayerResult(LayerCoverage.AVAILABLE)
 
     try:
-        recent, long_term = compounding_views_from_facts(
-            raw_facts, ticker=ticker, max_years=max_years
-        )
+        recent, long_term = compounding_views_from_history(history)
     except _CONCEPT_ERRORS as exc:
         layers["compounding"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
@@ -239,9 +196,7 @@ def _layer_coverage(
             layers["compounding"] = LayerResult(LayerCoverage.AVAILABLE)
 
     try:
-        allocation = capital_allocation_from_facts(
-            raw_facts, ticker=ticker, max_years=max_years
-        )
+        allocation = capital_allocation_from_history(history)
     except _CONCEPT_ERRORS as exc:
         layers["capital_allocation"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
@@ -258,9 +213,7 @@ def _layer_coverage(
             layers["capital_allocation"] = LayerResult(LayerCoverage.AVAILABLE)
 
     try:
-        summary = economic_value_summary_from_facts(
-            raw_facts, ticker=ticker, max_years=max_years
-        )
+        summary = economic_value_summary_from_history(history)
     except _CONCEPT_ERRORS as exc:
         layers["economic_summary"] = LayerResult(LayerCoverage.UNAVAILABLE, str(exc))
     else:
@@ -315,17 +268,38 @@ def company_output(
     ticker: str = "ADBE",
     max_years: int = 5,
 ) -> str:
-    """Render the most complete honest per-company result.
+    """Render the most complete honest per-company result from raw SEC Company Facts.
+
+    Compatibility wrapper; the summary echoes the caller's ``ticker`` exactly.
+    """
+    return _render_output(
+        coverage,
+        lambda: economic_value_summary_from_facts(
+            raw_facts, ticker=ticker, max_years=max_years
+        ),
+    )
+
+
+def company_output_from_history(
+    coverage: CompanyCoverage,
+    history: CanonicalFinancialHistory,
+) -> str:
+    """Render the most complete honest per-company result from a canonical history."""
+    return _render_output(coverage, lambda: economic_value_summary_from_history(history))
+
+
+def _render_output(
+    coverage: CompanyCoverage,
+    summarize: Callable[[], EconomicValueSummary],
+) -> str:
+    """Render a full summary, or for a partial company the honest coverage picture.
 
     A full-coverage company shows its compact economic-value summary; a partial
     company shows available evidence, unavailable layers, and the exact missing
     or unsupported inputs, with no fabricated classification.
     """
     if _is_full(coverage):
-        summary = economic_value_summary_from_facts(
-            raw_facts, ticker=ticker, max_years=max_years
-        )
-        return format_economic_value_summary(summary)
+        return format_economic_value_summary(summarize())
 
     available = [n for n, r in coverage.layers.items() if r.state is LayerCoverage.AVAILABLE]
     limited = [

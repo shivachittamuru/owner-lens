@@ -7,6 +7,10 @@ debt, effective tax rate, NOPAT, invested capital, and the average-balance
 returns ROA, ROE, and ROIC. Derived metrics are calculated deterministically and
 kept in a distinct row type. A derived value is produced only when its inputs
 exist, any required prior-year baseline exists, and its denominator is non-zero.
+
+Since Slice 5A the module consumes only a provider-neutral
+``CanonicalFinancialHistory``; ``capital_efficiency_from_facts`` remains as a
+thin compatibility wrapper that maps raw SEC Company Facts through the SEC adapter.
 """
 
 from __future__ import annotations
@@ -14,29 +18,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from owner_lens._annual import AnnualObservation
-from owner_lens.balance_sheet import (
-    normalize_cash,
-    normalize_current_debt,
-    normalize_long_term_debt,
-    normalize_short_term_investments,
-    normalize_total_assets,
-    normalize_total_equity,
+from owner_lens.canonical import (
+    CanonicalFact,
+    CanonicalFinancialHistory,
+    CanonicalSeries,
 )
-from owner_lens.operating_income import (
-    AnnualOperatingIncomeSeries,
-    normalize_annual_operating_income,
-)
-from owner_lens.reported import (
-    AnnualSeries,
-    normalize_income_tax_expense,
-    normalize_net_income,
-    normalize_pretax_income,
-)
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "CapitalEfficiencyRow",
     "capital_efficiency_from_facts",
+    "capital_efficiency_from_history",
     "compute_capital_efficiency",
 ]
 
@@ -47,12 +39,12 @@ class CapitalEfficiencyRow:
 
     fiscal_year: int
     # Reported facts (source provenance preserved).
-    cash: AnnualObservation | None
-    short_term_investments: AnnualObservation | None
-    current_debt: AnnualObservation | None
-    long_term_debt: AnnualObservation | None
-    total_assets: AnnualObservation | None
-    total_equity: AnnualObservation | None
+    cash: CanonicalFact | None
+    short_term_investments: CanonicalFact | None
+    current_debt: CanonicalFact | None
+    long_term_debt: CanonicalFact | None
+    total_assets: CanonicalFact | None
+    total_equity: CanonicalFact | None
     # Derived metrics (calculated, not reported).
     cash_plus_sti: int | None
     total_debt: int | None
@@ -65,11 +57,11 @@ class CapitalEfficiencyRow:
     roic: float | None
 
 
-def _by_year(observations: tuple[AnnualObservation, ...]) -> dict[int, AnnualObservation]:
+def _by_year(observations: tuple[CanonicalFact, ...]) -> dict[int, CanonicalFact]:
     return {obs.fiscal_year: obs for obs in observations}
 
 
-def _value(obs: AnnualObservation | None) -> int | None:
+def _value(obs: CanonicalFact | None) -> int | None:
     return obs.value if obs is not None else None
 
 
@@ -87,16 +79,16 @@ def _divide(numerator: int | None, denominator: float | None) -> float | None:
 
 def compute_capital_efficiency(
     *,
-    operating_income: AnnualOperatingIncomeSeries,
-    net_income: AnnualSeries,
-    income_tax_expense: AnnualSeries,
-    pretax_income: AnnualSeries,
-    cash: AnnualSeries,
-    short_term_investments: AnnualSeries,
-    current_debt: AnnualSeries,
-    long_term_debt: AnnualSeries,
-    total_assets: AnnualSeries,
-    total_equity: AnnualSeries,
+    operating_income: CanonicalSeries,
+    net_income: CanonicalSeries,
+    income_tax_expense: CanonicalSeries,
+    pretax_income: CanonicalSeries,
+    cash: CanonicalSeries,
+    short_term_investments: CanonicalSeries,
+    current_debt: CanonicalSeries,
+    long_term_debt: CanonicalSeries,
+    total_assets: CanonicalSeries,
+    total_equity: CanonicalSeries,
     display_years: int = 5,
 ) -> tuple[CapitalEfficiencyRow, ...]:
     """Align all series by fiscal year and derive capital-efficiency metrics."""
@@ -183,44 +175,37 @@ def compute_capital_efficiency(
     return tuple(rows)
 
 
+def capital_efficiency_from_history(
+    history: CanonicalFinancialHistory,
+) -> tuple[CapitalEfficiencyRow, ...]:
+    """Derive capital efficiency from a provider-neutral canonical history.
+
+    Instant (balance-sheet) series carry one extra baseline fiscal-year-end so
+    the earliest displayed year has a prior balance for average denominators;
+    ``history.max_years`` bounds the displayed years.
+    """
+    return compute_capital_efficiency(
+        operating_income=history.require("operating_income"),
+        net_income=history.require("net_income"),
+        income_tax_expense=history.require("income_tax_expense"),
+        pretax_income=history.require("pretax_income"),
+        cash=history.require("cash"),
+        short_term_investments=history.require("short_term_investments"),
+        current_debt=history.require("current_debt"),
+        long_term_debt=history.require("long_term_debt"),
+        total_assets=history.require("total_assets"),
+        total_equity=history.require("total_equity"),
+        display_years=history.max_years,
+    )
+
+
 def capital_efficiency_from_facts(
     raw_facts: dict[str, Any],
     *,
     ticker: str = "ADBE",
     max_years: int = 5,
 ) -> tuple[CapitalEfficiencyRow, ...]:
-    """Normalize all series from a payload, then derive capital efficiency.
-
-    Balance-sheet series are fetched with one extra baseline year so the earliest
-    displayed year has a prior fiscal-year-end for average denominators.
-    """
-    baseline_years = max_years + 1
-    return compute_capital_efficiency(
-        operating_income=normalize_annual_operating_income(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
-        net_income=normalize_net_income(raw_facts, ticker=ticker, max_years=max_years),
-        income_tax_expense=normalize_income_tax_expense(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
-        pretax_income=normalize_pretax_income(
-            raw_facts, ticker=ticker, max_years=max_years
-        ),
-        cash=normalize_cash(raw_facts, ticker=ticker, max_years=baseline_years),
-        short_term_investments=normalize_short_term_investments(
-            raw_facts, ticker=ticker, max_years=baseline_years
-        ),
-        current_debt=normalize_current_debt(
-            raw_facts, ticker=ticker, max_years=baseline_years
-        ),
-        long_term_debt=normalize_long_term_debt(
-            raw_facts, ticker=ticker, max_years=baseline_years
-        ),
-        total_assets=normalize_total_assets(
-            raw_facts, ticker=ticker, max_years=baseline_years
-        ),
-        total_equity=normalize_total_equity(
-            raw_facts, ticker=ticker, max_years=baseline_years
-        ),
-        display_years=max_years,
+    """Compatibility wrapper: map raw SEC Company Facts, then derive capital efficiency."""
+    return capital_efficiency_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years)
     )

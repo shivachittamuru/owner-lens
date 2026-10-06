@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from enum import Enum
 
-from owner_lens._annual import AnnualObservation
+from owner_lens.canonical import CanonicalFact
 from owner_lens.capital_allocation import CapitalAllocationRow
 from owner_lens.capital_efficiency import CapitalEfficiencyRow
 from owner_lens.compounding import EconomicCompoundingView
@@ -85,7 +85,7 @@ def company_record(identity: CompanyIdentity) -> CompanyRecord:
 
 
 def _fact_record(
-    cik: str, metric: str, obs: AnnualObservation, kind: str
+    cik: str, metric: str, obs: CanonicalFact, kind: str
 ) -> ReportedFactRecord:
     return ReportedFactRecord(
         cik=cik,
@@ -95,8 +95,12 @@ def _fact_record(
         fact_kind=kind,
         fiscal_year=obs.fiscal_year,
         period_end=obs.period_end.isoformat(),
-        period_start=obs.period_start.isoformat() if kind == "duration" else None,
-        concept=obs.concept,
+        period_start=(
+            obs.period_start.isoformat()
+            if kind == "duration" and obs.period_start is not None
+            else None
+        ),
+        concept=obs.provider_field,
         form=obs.form,
         filed=obs.filed.isoformat(),
         accession=obs.accession,

@@ -21,6 +21,7 @@ from owner_lens._annual import (
     select_annual_series,
     us_gaap_concepts,
 )
+from owner_lens.canonical import MetricInvalidError, MetricUnsupportedError
 from owner_lens.metrics import OPERATING_INCOME, resolve_concepts
 
 OPERATING_INCOME_CONCEPT_PREFERENCE: Final = OPERATING_INCOME.default_concepts
@@ -44,11 +45,13 @@ class OperatingIncomeNormalizationError(Exception):
     """Base class for operating-income-specific normalization failures."""
 
 
-class OperatingIncomeConceptNotFoundError(OperatingIncomeNormalizationError):
+class OperatingIncomeConceptNotFoundError(
+    OperatingIncomeNormalizationError, MetricUnsupportedError
+):
     """Raised when no preference-order concept has a qualifying observation."""
 
 
-class AmbiguousOperatingIncomeError(OperatingIncomeNormalizationError):
+class AmbiguousOperatingIncomeError(OperatingIncomeNormalizationError, MetricInvalidError):
     """Raised when a fiscal year has conflicting distinct full-year values."""
 
 

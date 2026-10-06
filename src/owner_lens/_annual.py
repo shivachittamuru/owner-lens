@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Final
 
+from owner_lens.canonical import MetricInvalidError, MetricUnsupportedError
+
 DEFAULT_TICKER: Final = "ADBE"
 TARGET_UNIT: Final = "USD"
 ANNUAL_FISCAL_PERIOD: Final = "FY"
@@ -28,15 +30,15 @@ class AnnualNormalizationError(Exception):
     """Base class for shared annual-normalization failures."""
 
 
-class MalformedFactsError(AnnualNormalizationError):
+class MalformedFactsError(AnnualNormalizationError, MetricInvalidError):
     """Raised when the payload lacks a usable us-gaap fact structure."""
 
 
-class ConceptNotFoundError(AnnualNormalizationError):
+class ConceptNotFoundError(AnnualNormalizationError, MetricUnsupportedError):
     """Raised when no preference-order concept has a qualifying observation."""
 
 
-class AmbiguousValueError(AnnualNormalizationError):
+class AmbiguousValueError(AnnualNormalizationError, MetricInvalidError):
     """Raised when a fiscal year has conflicting distinct full-year values."""
 
 

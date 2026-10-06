@@ -25,18 +25,21 @@ from enum import Enum
 from typing import Any
 
 from owner_lens._trajectory import NetCashTrajectory, net_cash_trajectory
+from owner_lens.canonical import (
+    CanonicalFinancialHistory,
+    CanonicalSeries,
+    MetricStatus,
+)
 from owner_lens.capital_efficiency import (
     CapitalEfficiencyRow,
-    capital_efficiency_from_facts,
+    capital_efficiency_from_history,
 )
-from owner_lens.economic_value import EconomicValueSnapshot, economic_value_from_facts
-from owner_lens.owner_economics import OwnerEconomicsRow, owner_economics_from_facts
-from owner_lens.reported import (
-    AnnualSeries,
-    normalize_dividends_paid,
-    normalize_repurchases,
-    normalize_stock_based_compensation,
+from owner_lens.economic_value import (
+    EconomicValueSnapshot,
+    build_economic_value_snapshots,
 )
+from owner_lens.owner_economics import OwnerEconomicsRow, owner_economics_from_history
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS",
@@ -47,6 +50,7 @@ __all__ = [
     "CapitalAllocationThresholds",
     "build_capital_allocation_rows",
     "capital_allocation_from_facts",
+    "capital_allocation_from_history",
     "capital_allocation_summary",
     "classify_buyback_effectiveness",
     "format_capital_allocation_view",
@@ -308,7 +312,7 @@ def _classify(
     return classification, tuple(drivers)
 
 
-def _by_year_value(series: AnnualSeries) -> dict[int, int]:
+def _by_year_value(series: CanonicalSeries) -> dict[int, int]:
     return {obs.fiscal_year: obs.value for obs in series.observations}
 
 
@@ -316,9 +320,9 @@ def build_capital_allocation_rows(
     owner_economics: Sequence[OwnerEconomicsRow],
     capital_efficiency: Sequence[CapitalEfficiencyRow],
     snapshots: Sequence[EconomicValueSnapshot],
-    repurchases: AnnualSeries,
-    stock_based_compensation: AnnualSeries,
-    dividends_paid: AnnualSeries,
+    repurchases: CanonicalSeries,
+    stock_based_compensation: CanonicalSeries,
+    dividends_paid: CanonicalSeries,
     *,
     thresholds: CapitalAllocationThresholds = DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS,
 ) -> tuple[CapitalAllocationRow, ...]:
@@ -329,7 +333,7 @@ def build_capital_allocation_rows(
     repo_by = _by_year_value(repurchases)
     sbc_by = _by_year_value(stock_based_compensation)
     div_by = _by_year_value(dividends_paid)
-    no_dividend_program = dividends_paid.concept == "" and not dividends_paid.observations
+    no_dividend_program = dividends_paid.status is MetricStatus.STRUCTURALLY_ABSENT
 
     years = sorted(set(owner) | set(capital) | set(repo_by) | set(sbc_by), reverse=True)
     rows: list[CapitalAllocationRow] = []
@@ -413,6 +417,26 @@ def _attr(row: Any, name: str) -> Any:
     return getattr(row, name) if row is not None else None
 
 
+def capital_allocation_from_history(
+    history: CanonicalFinancialHistory,
+    *,
+    thresholds: CapitalAllocationThresholds = DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS,
+) -> tuple[CapitalAllocationRow, ...]:
+    """Derive the reused inputs from a canonical history, then build classified rows.
+
+    A structurally absent dividend metric is interpreted as no dividend program.
+    """
+    owner = owner_economics_from_history(history)
+    capital = capital_efficiency_from_history(history)
+    snapshots = build_economic_value_snapshots(owner, capital)
+    repurchases = history.require("repurchases")
+    sbc = history.require("stock_based_compensation")
+    dividends = history.require("dividends_paid")
+    return build_capital_allocation_rows(
+        owner, capital, snapshots, repurchases, sbc, dividends, thresholds=thresholds
+    )
+
+
 def capital_allocation_from_facts(
     raw_facts: dict[str, Any],
     *,
@@ -420,19 +444,10 @@ def capital_allocation_from_facts(
     max_years: int = 5,
     thresholds: CapitalAllocationThresholds = DEFAULT_CAPITAL_ALLOCATION_THRESHOLDS,
 ) -> tuple[CapitalAllocationRow, ...]:
-    """Normalize the reported and reused inputs from a payload, then build rows.
-
-    All SEC retrieval and normalization happen inside the reported and Feature 1
-    and Feature 2A entry points; this interpretation layer performs no network access.
-    """
-    owner = owner_economics_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    capital = capital_efficiency_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    snapshots = economic_value_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    repurchases = normalize_repurchases(raw_facts, ticker=ticker, max_years=max_years)
-    sbc = normalize_stock_based_compensation(raw_facts, ticker=ticker, max_years=max_years)
-    dividends = normalize_dividends_paid(raw_facts, ticker=ticker, max_years=max_years)
-    return build_capital_allocation_rows(
-        owner, capital, snapshots, repurchases, sbc, dividends, thresholds=thresholds
+    """Compatibility wrapper: map raw SEC Company Facts, then build rows."""
+    return capital_allocation_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years),
+        thresholds=thresholds,
     )
 
 

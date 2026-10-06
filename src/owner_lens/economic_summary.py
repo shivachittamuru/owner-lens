@@ -22,22 +22,24 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from owner_lens.canonical import CanonicalFinancialHistory
 from owner_lens.capital_allocation import (
     BuybackEffectiveness,
     CapitalAllocationClassification,
     CapitalAllocationRow,
-    capital_allocation_from_facts,
+    capital_allocation_from_history,
 )
 from owner_lens.compounding import (
     CompoundingClassification,
     EconomicCompoundingView,
-    compounding_views_from_facts,
+    compounding_views_from_history,
 )
 from owner_lens.economic_value import (
     EconomicValueClassification,
     EconomicValueSnapshot,
-    economic_value_from_facts,
+    economic_value_from_history,
 )
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS",
@@ -46,6 +48,7 @@ __all__ = [
     "OverallEconomicValueClassification",
     "SummaryDriver",
     "economic_value_summary_from_facts",
+    "economic_value_summary_from_history",
     "format_economic_value_summary",
     "synthesize_economic_value_summary",
 ]
@@ -438,25 +441,14 @@ def synthesize_economic_value_summary(
     )
 
 
-def economic_value_summary_from_facts(
-    raw_facts: dict[str, Any],
-    *,
-    ticker: str = "ADBE",
-    max_years: int = 5,
-    thresholds: EconomicSummaryThresholds = DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS,
+def _summarize(
+    ticker: str,
+    history: CanonicalFinancialHistory,
+    thresholds: EconomicSummaryThresholds,
 ) -> EconomicValueSummary:
-    """Build every component from a payload, then synthesize the summary.
-
-    All retrieval and computation happen inside the Feature 1 and Feature 2 entry
-    points; this synthesis layer performs no network access.
-    """
-    snapshots = economic_value_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    recent_view, long_term_view = compounding_views_from_facts(
-        raw_facts, ticker=ticker, max_years=max_years
-    )
-    capital_rows = capital_allocation_from_facts(
-        raw_facts, ticker=ticker, max_years=max_years
-    )
+    snapshots = economic_value_from_history(history)
+    recent_view, long_term_view = compounding_views_from_history(history)
+    capital_rows = capital_allocation_from_history(history)
     return synthesize_economic_value_summary(
         ticker,
         snapshots,
@@ -465,6 +457,30 @@ def economic_value_summary_from_facts(
         capital_rows,
         thresholds=thresholds,
     )
+
+
+def economic_value_summary_from_history(
+    history: CanonicalFinancialHistory,
+    *,
+    thresholds: EconomicSummaryThresholds = DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS,
+) -> EconomicValueSummary:
+    """Build every component from a canonical history, then synthesize the summary."""
+    return _summarize(history.ticker, history, thresholds)
+
+
+def economic_value_summary_from_facts(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = "ADBE",
+    max_years: int = 5,
+    thresholds: EconomicSummaryThresholds = DEFAULT_ECONOMIC_SUMMARY_THRESHOLDS,
+) -> EconomicValueSummary:
+    """Compatibility wrapper: map raw SEC Company Facts, then synthesize the summary.
+
+    The caller's ``ticker`` is echoed into the summary exactly as supplied.
+    """
+    history = canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years)
+    return _summarize(ticker, history, thresholds)
 
 
 def _fmt_pct(value: float | None) -> str:

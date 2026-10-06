@@ -24,22 +24,22 @@ from datetime import UTC, datetime
 from enum import Enum
 
 from owner_lens._annual import AnnualNormalizationError
-from owner_lens.capital_allocation import capital_allocation_from_facts
-from owner_lens.capital_efficiency import capital_efficiency_from_facts
+from owner_lens.capital_allocation import capital_allocation_from_history
+from owner_lens.capital_efficiency import capital_efficiency_from_history
 from owner_lens.compounding import (
     EconomicCompoundingView,
-    compounding_views_from_facts,
+    compounding_views_from_history,
 )
 from owner_lens.coverage import (
     CompanyCoverage,
     LayerCoverage,
     MetricCoverage,
-    company_coverage,
+    company_coverage_from_history,
 )
-from owner_lens.economic_summary import economic_value_summary_from_facts
-from owner_lens.economic_value import economic_value_from_facts
+from owner_lens.economic_summary import economic_value_summary_from_history
+from owner_lens.economic_value import economic_value_from_history
 from owner_lens.operating_income import OperatingIncomeConceptNotFoundError
-from owner_lens.owner_economics import owner_economics_from_facts
+from owner_lens.owner_economics import owner_economics_from_history
 from owner_lens.persistence.adapters import (
     analysis_result_records,
     company_record,
@@ -63,6 +63,7 @@ from owner_lens.sec import (
     SecClient,
     SecError,
 )
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "FailureClass",
@@ -259,48 +260,38 @@ def ingest_company(
     store.save_company(company)
     store.save_source_snapshot(snapshot, raw_payload=payload)
 
-    # 8, 10-11. Run supported layers (unsupported inputs degrade, never crash).
+    # 8, 10-11. Map the SEC payload once into the provider-neutral canonical
+    # history, then run supported layers (unsupported inputs degrade, never crash).
+    history = canonical_history_from_sec(
+        raw_facts, ticker=resolved_ticker, max_years=max_years
+    )
     try:
-        owner_rows = owner_economics_from_facts(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        owner_rows = owner_economics_from_history(history)
     except _CONCEPT_ERRORS:
         owner_rows = ()
     try:
-        capital_rows = capital_efficiency_from_facts(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        capital_rows = capital_efficiency_from_history(history)
     except _CONCEPT_ERRORS:
         capital_rows = ()
     try:
-        snapshots = economic_value_from_facts(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        snapshots = economic_value_from_history(history)
     except _CONCEPT_ERRORS:
         snapshots = ()
     compounding: Sequence[EconomicCompoundingView]
     try:
-        compounding = compounding_views_from_facts(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        compounding = compounding_views_from_history(history)
     except _CONCEPT_ERRORS:
         compounding = ()
     try:
-        capital_alloc = capital_allocation_from_facts(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        capital_alloc = capital_allocation_from_history(history)
     except _CONCEPT_ERRORS:
         capital_alloc = ()
     try:
-        summary = economic_value_summary_from_facts(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        summary = economic_value_summary_from_history(history)
     except _CONCEPT_ERRORS:
         summary = None
     try:
-        coverage = company_coverage(
-            raw_facts, ticker=resolved_ticker, max_years=max_years
-        )
+        coverage = company_coverage_from_history(history)
     except _CONCEPT_ERRORS:
         coverage = None
 

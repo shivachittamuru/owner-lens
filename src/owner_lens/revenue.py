@@ -21,6 +21,7 @@ from owner_lens._annual import (
     select_annual_series,
     us_gaap_concepts,
 )
+from owner_lens.canonical import MetricInvalidError, MetricUnsupportedError
 from owner_lens.metrics import REVENUE, resolve_concepts
 
 REVENUE_CONCEPT_PREFERENCE: Final = REVENUE.default_concepts
@@ -44,11 +45,11 @@ class RevenueNormalizationError(Exception):
     """Base class for revenue-specific normalization failures."""
 
 
-class RevenueConceptNotFoundError(RevenueNormalizationError):
+class RevenueConceptNotFoundError(RevenueNormalizationError, MetricUnsupportedError):
     """Raised when no preference-order concept has a qualifying observation."""
 
 
-class AmbiguousRevenueError(RevenueNormalizationError):
+class AmbiguousRevenueError(RevenueNormalizationError, MetricInvalidError):
     """Raised when a fiscal year has conflicting distinct full-year values."""
 
 

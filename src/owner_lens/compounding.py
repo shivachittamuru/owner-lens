@@ -28,16 +28,18 @@ from enum import Enum
 from typing import Any
 
 from owner_lens._trajectory import net_cash_trajectory
+from owner_lens.canonical import CanonicalFinancialHistory
 from owner_lens.capital_efficiency import (
     CapitalEfficiencyRow,
-    capital_efficiency_from_facts,
+    capital_efficiency_from_history,
 )
 from owner_lens.economic_value import (
     EconomicValueClassification,
     EconomicValueSnapshot,
-    economic_value_from_facts,
+    build_economic_value_snapshots,
 )
-from owner_lens.owner_economics import OwnerEconomicsRow, owner_economics_from_facts
+from owner_lens.owner_economics import OwnerEconomicsRow, owner_economics_from_history
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = [
     "DEFAULT_COMPOUNDING_THRESHOLDS",
@@ -49,7 +51,9 @@ __all__ = [
     "cagr",
     "classify_compounding",
     "compounding_view_from_facts",
+    "compounding_view_from_history",
     "compounding_views_from_facts",
+    "compounding_views_from_history",
     "format_compounding_view",
 ]
 
@@ -543,33 +547,38 @@ def _insufficient_view(
     )
 
 
-def compounding_view_from_facts(
-    raw_facts: dict[str, Any],
+def _feature_inputs(
+    history: CanonicalFinancialHistory,
+) -> tuple[
+    tuple[OwnerEconomicsRow, ...],
+    tuple[CapitalEfficiencyRow, ...],
+    tuple[EconomicValueSnapshot, ...],
+]:
+    owner = owner_economics_from_history(history)
+    capital = capital_efficiency_from_history(history)
+    return owner, capital, build_economic_value_snapshots(owner, capital)
+
+
+def compounding_view_from_history(
+    history: CanonicalFinancialHistory,
     *,
-    ticker: str = "ADBE",
     period_years: int,
-    max_years: int = 5,
     thresholds: CompoundingThresholds = DEFAULT_COMPOUNDING_THRESHOLDS,
 ) -> EconomicCompoundingView:
-    """Normalize Feature 1 and Feature 2A outputs from a payload, then build a view.
+    """Derive Feature 1 and Feature 2A outputs from a canonical history, then build a view.
 
     ``period_years`` is the number of fiscal-year intervals (years of
-    compounding). All SEC retrieval and normalization happen inside the Feature 1
-    and Feature 2A entry points; this compounding layer performs no network access.
+    compounding).
     """
-    owner = owner_economics_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    capital = capital_efficiency_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    snapshots = economic_value_from_facts(raw_facts, ticker=ticker, max_years=max_years)
+    owner, capital, snapshots = _feature_inputs(history)
     return build_compounding_view(
         owner, capital, snapshots, period_years=period_years, thresholds=thresholds
     )
 
 
-def compounding_views_from_facts(
-    raw_facts: dict[str, Any],
+def compounding_views_from_history(
+    history: CanonicalFinancialHistory,
     *,
-    ticker: str = "ADBE",
-    max_years: int = 5,
     thresholds: CompoundingThresholds = DEFAULT_COMPOUNDING_THRESHOLDS,
 ) -> tuple[EconomicCompoundingView, EconomicCompoundingView]:
     """Return the recent 3-year CAGR view and the longest available view.
@@ -579,9 +588,7 @@ def compounding_views_from_facts(
     span the history supports, capped at a 5-year CAGR; with five observations
     that is a 4-year CAGR, and it becomes a 5-year CAGR once a sixth year exists.
     """
-    owner = owner_economics_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    capital = capital_efficiency_from_facts(raw_facts, ticker=ticker, max_years=max_years)
-    snapshots = economic_value_from_facts(raw_facts, ticker=ticker, max_years=max_years)
+    owner, capital, snapshots = _feature_inputs(history)
     owner_by = {row.fiscal_year: row for row in owner}
     capital_by = {row.fiscal_year: row for row in capital}
     available_intervals = max(len(_common_fiscal_years(owner_by, capital_by)) - 1, 0)
@@ -596,6 +603,36 @@ def compounding_views_from_facts(
         thresholds=thresholds,
     )
     return recent, long_term
+
+
+def compounding_view_from_facts(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = "ADBE",
+    period_years: int,
+    max_years: int = 5,
+    thresholds: CompoundingThresholds = DEFAULT_COMPOUNDING_THRESHOLDS,
+) -> EconomicCompoundingView:
+    """Compatibility wrapper: map raw SEC Company Facts, then build a view."""
+    return compounding_view_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years),
+        period_years=period_years,
+        thresholds=thresholds,
+    )
+
+
+def compounding_views_from_facts(
+    raw_facts: dict[str, Any],
+    *,
+    ticker: str = "ADBE",
+    max_years: int = 5,
+    thresholds: CompoundingThresholds = DEFAULT_COMPOUNDING_THRESHOLDS,
+) -> tuple[EconomicCompoundingView, EconomicCompoundingView]:
+    """Compatibility wrapper: map raw SEC Company Facts, then build both views."""
+    return compounding_views_from_history(
+        canonical_history_from_sec(raw_facts, ticker=ticker, max_years=max_years),
+        thresholds=thresholds,
+    )
 
 
 def _fmt_pct(value: float | None) -> str:
