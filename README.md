@@ -26,7 +26,8 @@ above the boundary and survive below it only as provenance on each canonical fac
 and FMP-backed histories fact by fact; its current evidence keeps SEC as the primary provider.
 
 A coverage survey (`uv run python scripts/survey_universe.py`) runs the SEC-first pipeline across a
-24-company universe and diagnoses every blocker; see
+24-company universe and diagnoses every blocker. SEC concept selection is recency-aware: a concept the
+company no longer reports is never treated as a current metric. See
 [Feature 6: Universe Coverage](docs/feature_docs/feature_06_universe_coverage.md). See
 [Feature 5: Provider Boundary](docs/feature_docs/feature_05_canonical_provider_boundary.md) for the
 model, the boundary rule, and how it is enforced.

@@ -5,10 +5,21 @@ duplicated this logic, so it is extracted here: full fiscal-year filtering,
 fiscal-year derivation from the period end date, comparative deduplication with
 earliest-filed provenance, and preference-ordered concept selection. Each metric
 module supplies its own concept preference list and typed error classes.
+
+Recency-aware selection (Slice 6B): a concept is eligible only if it covers the
+company's latest fiscal year. The reference is the newest full-year ``FY``
+duration period end in any 10-K-family filing in the payload (see
+``latest_annual_period_end``); a concept is current when its newest qualifying
+observation ends within ``RECENCY_TOLERANCE_DAYS`` of that reference. The first
+current concept in preference order wins; stale concepts are skipped, and if no
+concept is current the metric's ``concept_error`` is raised instead of returning
+stale history. Per-company overrides replace the preference tuple before this
+rule runs, so they stay authoritative.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Final
@@ -24,6 +35,9 @@ _MIN_FULL_YEAR_DAYS: Final = 350
 _MAX_FULL_YEAR_DAYS: Final = 380
 _REQUIRED_FACT_FIELDS: Final = ("start", "end", "val", "fp", "form", "filed", "accn")
 _INSTANT_REQUIRED_FACT_FIELDS: Final = ("end", "val", "fp", "form", "filed", "accn")
+# A concept is current only if its newest observation ends within this many
+# days of the company's latest fiscal-year end (absorbs 52/53-week drift).
+RECENCY_TOLERANCE_DAYS: Final = 31
 
 
 class AnnualNormalizationError(Exception):
@@ -84,6 +98,130 @@ def us_gaap_concepts(raw_facts: dict[str, Any]) -> dict[str, Any]:
     return us_gaap
 
 
+def latest_annual_period_end(us_gaap: dict[str, Any]) -> date | None:
+    """Return the company's latest fiscal-year end evidenced by its 10-K filings.
+
+    The reference is the newest period end of any full-year (350-380 day) ``FY``
+    duration fact filed on a 10-K-family form, across the whole us-gaap
+    taxonomy. It is derived only from the company's own reported periods, never
+    from today's date. Returns ``None`` when the payload has no such fact (for
+    example a registrant with only 10-Q filings), in which case no recency
+    filtering is applied.
+    """
+    cached = _REFERENCE_CACHE.get(id(us_gaap))
+    if cached is not None and cached[0] is us_gaap:
+        return cached[1]
+    latest: date | None = None
+    for entry in us_gaap.values():
+        units = entry.get("units") if isinstance(entry, dict) else None
+        if not isinstance(units, dict):
+            continue
+        for facts in units.values():
+            if not isinstance(facts, list):
+                continue
+            for fact in facts:
+                end = _full_year_10k_end(fact)
+                if end is not None and (latest is None or end > latest):
+                    latest = end
+    _REFERENCE_CACHE.clear()
+    _REFERENCE_CACHE[id(us_gaap)] = (us_gaap, latest)
+    return latest
+
+
+# Single-entry memo: the SEC adapter selects all metrics from one payload in a
+# row, so the reference scan (~90 ms on a 6 MB payload) runs once per payload
+# rather than once per metric. Parsed Company Facts payloads are treated as
+# immutable; the stored object reference guards against id() reuse.
+_REFERENCE_CACHE: dict[int, tuple[dict[str, Any], date | None]] = {}
+
+
+def _full_year_10k_end(fact: Any) -> date | None:
+    if not isinstance(fact, dict) or fact.get("fp") != ANNUAL_FISCAL_PERIOD:
+        return None
+    form = fact.get("form")
+    if not isinstance(form, str) or not form.startswith("10-K"):
+        return None
+    start, end = fact.get("start"), fact.get("end")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        period_start, period_end = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        return None
+    if not _MIN_FULL_YEAR_DAYS <= (period_end - period_start).days <= _MAX_FULL_YEAR_DAYS:
+        return None
+    return period_end
+
+
+def is_current(
+    observations: list[AnnualObservation], reference_end: date | None
+) -> bool:
+    """Return True when a concept covers the company's latest fiscal year.
+
+    A concept is current when its newest qualifying observation ends within
+    ``RECENCY_TOLERANCE_DAYS`` of the company reference fiscal-year end. The
+    tolerance absorbs 52/53-week calendar drift but is far shorter than one
+    fiscal year, so a concept whose last value is a prior fiscal year is stale.
+    Older-year gaps are not penalized: only the newest year must be covered.
+    """
+    if reference_end is None or not observations:
+        return bool(observations)
+    newest = max(observation.period_end for observation in observations)
+    return (reference_end - newest).days <= RECENCY_TOLERANCE_DAYS
+
+
+def _select_current(
+    us_gaap: dict[str, Any],
+    concept_preference: tuple[str, ...],
+    qualify: Callable[[str, dict[str, Any], str], list[AnnualObservation]],
+    unit: str,
+) -> tuple[str, list[AnnualObservation]] | list[str]:
+    """Return the first current concept, or the stale-concept descriptions."""
+    reference_end = latest_annual_period_end(us_gaap)
+    stale: list[str] = []
+    for concept in concept_preference:
+        entry = us_gaap.get(concept)
+        if not isinstance(entry, dict):
+            continue
+        observations = qualify(concept, entry, unit)
+        if not observations:
+            continue
+        if is_current(observations, reference_end):
+            return concept, observations
+        newest = max(observation.period_end for observation in observations)
+        stale.append(f"{concept} (last period end {newest.isoformat()})")
+    if stale and reference_end is not None:
+        stale.append(f"company latest fiscal-year end {reference_end.isoformat()}")
+    return stale
+
+
+def _stale_suffix(stale: list[str]) -> str:
+    if not stale:
+        return ""
+    return " Stale (no value for the latest fiscal year): " + "; ".join(stale) + "."
+
+
+def has_annual_history(
+    us_gaap: dict[str, Any],
+    concept_preference: tuple[str, ...],
+    *,
+    instant: bool,
+    unit: str = TARGET_UNIT,
+) -> bool:
+    """Return True when any preferred concept has qualifying annual history.
+
+    Tolerant-of-absence metrics use this to tell a concept the company never
+    reported (structurally absent) from one it reported only in stale years
+    (unsupported: the item may have been retagged, so absence cannot be assumed).
+    """
+    qualify = _qualifying_instant_observations if instant else _qualifying_observations
+    return any(
+        isinstance(us_gaap.get(concept), dict)
+        and bool(qualify(concept, us_gaap[concept], unit))
+        for concept in concept_preference
+    )
+
+
 def select_annual_series(
     us_gaap: dict[str, Any],
     concept_preference: tuple[str, ...],
@@ -93,20 +231,24 @@ def select_annual_series(
     ambiguity_error: type[Exception],
     unit: str = TARGET_UNIT,
 ) -> tuple[str, tuple[AnnualObservation, ...]]:
-    """Select one concept and resolve its canonical duration annual series."""
-    for concept in concept_preference:
-        entry = us_gaap.get(concept)
-        if not isinstance(entry, dict):
-            continue
-        observations = _qualifying_observations(concept, entry, unit)
-        if not observations:
-            continue
+    """Select the highest-priority current concept and resolve its duration series.
+
+    Concepts are tried in preference order; a concept with qualifying history
+    that does not cover the company's latest fiscal year is skipped as stale
+    (see ``is_current``). If no concept is current, ``concept_error`` is raised
+    rather than returning stale history.
+    """
+    selected = _select_current(
+        us_gaap, concept_preference, _qualifying_observations, unit
+    )
+    if isinstance(selected, tuple):
+        concept, observations = selected
         return concept, _resolve_series(
             concept, observations, max_years, ambiguity_error
         )
     raise concept_error(
         "No supported US-GAAP concept with a full fiscal-year observation was "
-        f"found. Tried: {', '.join(concept_preference)}."
+        f"found. Tried: {', '.join(concept_preference)}.{_stale_suffix(selected)}"
     )
 
 
@@ -119,25 +261,25 @@ def select_instant_series(
     ambiguity_error: type[Exception],
     unit: str = TARGET_UNIT,
 ) -> tuple[str, tuple[AnnualObservation, ...]]:
-    """Select one concept and resolve its canonical fiscal-year-end instant series.
+    """Select the highest-priority current concept and resolve its instant series.
 
     Balance-sheet facts are instant (no start date), so they are selected by
     fiscal-period-end semantics rather than a duration window. This keeps the
-    instant path explicitly distinct from the duration path above.
+    instant path explicitly distinct from the duration path above. The same
+    recency rule applies: a concept whose newest year-end balance precedes the
+    company's latest fiscal year is stale and is skipped.
     """
-    for concept in concept_preference:
-        entry = us_gaap.get(concept)
-        if not isinstance(entry, dict):
-            continue
-        observations = _qualifying_instant_observations(concept, entry, unit)
-        if not observations:
-            continue
+    selected = _select_current(
+        us_gaap, concept_preference, _qualifying_instant_observations, unit
+    )
+    if isinstance(selected, tuple):
+        concept, observations = selected
         return concept, _resolve_series(
             concept, observations, max_years, ambiguity_error
         )
     raise concept_error(
         "No supported US-GAAP concept with a fiscal-year-end instant observation "
-        f"was found. Tried: {', '.join(concept_preference)}."
+        f"was found. Tried: {', '.join(concept_preference)}.{_stale_suffix(selected)}"
     )
 
 

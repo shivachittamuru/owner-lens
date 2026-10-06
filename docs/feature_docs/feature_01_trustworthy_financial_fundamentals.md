@@ -122,6 +122,8 @@ Adobe resolved to `Revenues`.
 
 OwnerLens selects one concept for the canonical series rather than mixing multiple concepts across years.
 
+Since Slice 6B, selection is also **recency-aware**. A concept is eligible only if it covers the company's latest fiscal year, so a concept the company stopped reporting is skipped in favor of the next current concept, or the metric becomes unsupported. See [Feature 6](feature_06_universe_coverage.md#slice-6b--recency-aware-sec-concept-selection).
+
 ### Full-year detection
 
 Annual duration facts are selected using:

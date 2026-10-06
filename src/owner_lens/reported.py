@@ -21,6 +21,7 @@ from owner_lens._annual import (
     ConceptNotFoundError,
     MalformedFactsError,
     canonicalize_ticker,
+    has_annual_history,
     select_annual_series,
     us_gaap_concepts,
 )
@@ -217,6 +218,8 @@ def normalize_dividends_paid(
     A company with no dividend concept (for example, Adobe) returns an empty
     series (the fact is structurally absent) rather than raising, preserving the
     distinction between a company with no dividend program and unavailable data.
+    A dividend concept reported only in stale years is not treated as absent:
+    the stale-only ``ConceptNotFoundError`` propagates (unsupported).
     """
     normalized_ticker = canonicalize_ticker(ticker)
     try:
@@ -224,6 +227,13 @@ def normalize_dividends_paid(
             raw_facts, DIVIDENDS_PAID, ticker=ticker, max_years=max_years
         )
     except ConceptNotFoundError:
+        if has_annual_history(
+            us_gaap_concepts(raw_facts),
+            resolve_concepts(DIVIDENDS_PAID, normalized_ticker),
+            instant=False,
+            unit=DIVIDENDS_PAID.unit,
+        ):
+            raise
         return AnnualSeries(
             metric=DIVIDENDS_PAID.name,
             ticker=normalized_ticker,

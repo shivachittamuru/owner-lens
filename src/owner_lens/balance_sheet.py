@@ -18,6 +18,7 @@ from owner_lens._annual import (
     ConceptNotFoundError,
     MalformedFactsError,
     canonicalize_ticker,
+    has_annual_history,
     select_instant_series,
     us_gaap_concepts,
 )
@@ -101,7 +102,9 @@ def normalize_short_term_investments(
     A company that reports no short-term-investments concept (for example, Visa,
     whose investment securities are deliberately not treated as corporate excess
     cash) returns an empty series, so cash-plus-short-term-investments equals
-    cash and an absent concept stays distinct from a reported zero.
+    cash and an absent concept stays distinct from a reported zero. A concept
+    reported only in stale years is not treated as absent: the stale-only
+    ``ConceptNotFoundError`` propagates (unsupported).
     """
     normalized_ticker = canonicalize_ticker(ticker)
     try:
@@ -109,6 +112,13 @@ def normalize_short_term_investments(
             raw_facts, SHORT_TERM_INVESTMENTS, ticker=ticker, max_years=max_years
         )
     except ConceptNotFoundError:
+        if has_annual_history(
+            us_gaap_concepts(raw_facts),
+            resolve_concepts(SHORT_TERM_INVESTMENTS, normalized_ticker),
+            instant=True,
+            unit=SHORT_TERM_INVESTMENTS.unit,
+        ):
+            raise
         return AnnualSeries(
             metric=SHORT_TERM_INVESTMENTS.name,
             ticker=normalized_ticker,

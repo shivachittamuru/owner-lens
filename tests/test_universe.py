@@ -140,26 +140,28 @@ def test_missing_concept_without_candidates() -> None:
     assert (finding.diagnosis, finding.candidates) == (D.MISSING_CONCEPT, ())
 
 
-def test_silently_stale_available_metric_is_surfaced_and_prevents_full() -> None:
+def test_stale_only_concept_is_unsupported_not_silently_available() -> None:
+    # Slice 6B: a concept whose newest value precedes the company's latest fiscal
+    # year can no longer masquerade as AVAILABLE (6A recorded this as silent staleness).
     facts = _set(adbe_facts(), "ShortTermInvestments", [_instant(y, 7 * _M) for y in (2010, 2011, 2012)])
     survey = survey_company(facts, ticker="ADBE")
     finding = survey.metrics["short_term_investments"]
-    assert finding.status is MetricStatus.AVAILABLE
-    assert (finding.diagnosis, finding.value_level) == (D.STALE_CONCEPT, True)
-    assert "last reported FY2012" in (finding.reason or "")
-    assert survey.silently_stale() == ("short_term_investments",)
-    assert all(p.state is LayerState.AVAILABLE for p in survey.layers.values())
-    assert survey.overall is Overall.PARTIAL  # all layers run, but on stale data
+    assert (finding.status, finding.diagnosis) == (MetricStatus.UNSUPPORTED, D.STALE_CONCEPT)
+    assert "ShortTermInvestments last reported 2012" in (finding.reason or "")
+    assert survey.silently_stale() == ()
+    assert survey.layers["capital_efficiency"].state is LayerState.UNAVAILABLE
+    assert survey.overall is Overall.PARTIAL
 
 
-def test_ambiguity_inside_a_stale_concept_is_diagnosed_as_stale() -> None:
+def test_ambiguity_inside_a_stale_concept_no_longer_blocks_as_invalid() -> None:
+    # The stale concept is skipped before its years are resolved, so its old
+    # restatement conflict is irrelevant; the metric is unsupported, not invalid.
     entries = [_instant(y, 7 * _M) for y in (2010, 2011, 2012)]
     entries.append(_instant(2012, 7 * _M + 40_000, filed="2014-01-15"))
     survey = survey_company(_set(adbe_facts(), "ShortTermInvestments", entries), ticker="ADBE")
     finding = survey.metrics["short_term_investments"]
-    assert (finding.status, finding.diagnosis) == (MetricStatus.INVALID, D.STALE_CONCEPT)
-    assert finding.restatement is RestatementKind.PRECISION
-    assert survey.layers["capital_efficiency"].state is LayerState.BLOCKED
+    assert (finding.status, finding.diagnosis) == (MetricStatus.UNSUPPORTED, D.STALE_CONCEPT)
+    assert survey.layers["capital_efficiency"].state is LayerState.UNAVAILABLE
 
 
 def test_precision_restatement_in_baseline_year_blocks_capital_layers() -> None:

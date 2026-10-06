@@ -533,13 +533,6 @@ def _diagnose(
             return values
         return {end: v for end, v in values.items() if end >= recent_cutoff}
 
-    def stale_concepts() -> list[str]:
-        """Preferred concepts that have annual history but nothing recent."""
-        return [
-            c for c in tried
-            if _fy_values(us_gaap, c, definition.unit, spec_kind) and not recent(c)
-        ]
-
     def current_candidates() -> tuple[str, ...]:
         return tuple(c for c in CANDIDATE_CATALOG.get(metric, ()) if c not in tried and recent(c))
 
@@ -576,17 +569,8 @@ def _diagnose(
             )
             kind = _restatement_kind(series.reason)
             label = f"; {kind.value.lower().replace('_', ' ')} restatement" if kind else ""
-            stale = stale_concepts()
-            if stale:
-                return replace(
-                    make(diagnosis=DiagnosisCategory.STALE_CONCEPT, candidates=current_candidates(),
-                         reason=(
-                             f"{series.reason} The conflict is in {', '.join(stale)}, which has no "
-                             f"recent annual value; current candidates: "
-                             f"{', '.join(current_candidates()) or 'none'}{label}"
-                         )),
-                    restatement=kind,
-                )
+            # Since Slice 6B the selector skips stale concepts before resolving
+            # years, so a conflict is always in the current selected concept.
             return replace(
                 make(diagnosis=DiagnosisCategory.AMBIGUOUS_DUPLICATE, candidates=(),
                      reason=f"{series.reason} [{where}{label}]"),
@@ -641,7 +625,8 @@ def _diagnose(
             )
         return make(diagnosis=category, candidates=candidates, reason=reason)
 
-    # AVAILABLE: first check whether the selected concept is stale (silent staleness).
+    # AVAILABLE: guard against silent staleness. Since Slice 6B the selector
+    # rejects stale concepts, so a hit here would indicate a selection regression.
     if recent_cutoff is not None and series.observations:
         newest = max(f.period_end for f in series.observations)
         if newest < recent_cutoff:
