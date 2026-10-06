@@ -21,7 +21,9 @@ FMP statements    ─→ owner_lens.fmp_adapter ─┘        ↓
 
 SEC is the default and the regression/audit provider. FMP is an optional second provider that needs
 `OWNER_LENS_FMP_API_KEY`. Provider-specific concepts, such as SEC XBRL tags or FMP field names, stay
-above the boundary and survive below it only as provenance on each canonical fact. See
+above the boundary and survive below it only as provenance on each canonical fact. A reconciliation layer
+(`owner_lens.reconciliation`, run with `uv run python scripts/reconcile_providers.py`) compares SEC-backed
+and FMP-backed histories fact by fact; its current evidence keeps SEC as the primary provider. See
 [Feature 5: Provider Boundary](docs/feature_docs/feature_05_canonical_provider_boundary.md) for the
 model, the boundary rule, and how it is enforced.
 

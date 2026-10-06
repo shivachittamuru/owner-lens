@@ -123,3 +123,21 @@ def test_history_entry_points_accept_only_canonical_history(name: str) -> None:
         assert all(
             p.name in {"history", "coverage", "thresholds", "period_years"} for p in params
         ), fn.__name__
+
+
+def test_reconciliation_is_provider_neutral() -> None:
+    """Reconciliation compares canonical histories; it must not import provider code."""
+    tree = ast.parse((SRC / "reconciliation.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(
+            "owner_lens"
+        ):
+            assert node.module in ALLOWED_INTERNAL, f"reconciliation imports {node.module}"
+        elif isinstance(node, ast.Import):
+            assert not any(a.name.startswith("owner_lens") for a in node.names)
+    literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert not literals & _sec_concepts()

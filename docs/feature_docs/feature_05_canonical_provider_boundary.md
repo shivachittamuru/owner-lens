@@ -356,3 +356,148 @@ It walks ADBE from the raw FMP response → canonical facts with provenance → 
 - provider fallback or selection logic,
 - persistence or ingestion of FMP-backed facts,
 - batch ingestion, scoring, screening, valuation, probabilistic underwriting, or Azure.
+
+---
+
+# Slice 5C — Dual-Source Reconciliation
+
+## Goal
+
+Compare SEC-backed and FMP-backed `CanonicalFinancialHistory` for the same companies and years, explain every difference, and decide with evidence whether FMP is trustworthy enough to become the primary operational provider.
+
+```text
+SEC Company Facts (live) ─→ sec_adapter ─┐
+                                         ├─→ reconcile_histories ─→ fact rows + derived rows + verdict
+FMP (local cache only)   ─→ fmp_adapter ─┘
+```
+
+Slice 5C compares and gathers evidence only. SEC normalization, FMP mapping, Feature 1 and 2 economics, the persistence schema, and ingestion defaults are unchanged, and no provider switch happens.
+
+## Reconciliation layer
+
+`src/owner_lens/reconciliation.py` is provider-neutral: it imports only the canonical model and the downstream `*_from_history` functions, which `tests/test_canonical_boundary.py` enforces. `reconcile_histories(sec, fmp, *, explanations)` compares facts by `(ticker, metric, fiscal_year)` and returns a `ReconciliationReport` with fact rows, derived-output rows, a summary, and a verdict. `format_reconciliation_report` renders:
+
+```text
+Metric | FY | SEC | FMP | Difference | Status | Category | Reason   (+ provenance for material rows)
+```
+
+### Statuses
+
+| Status                | Meaning                                                                                     |
+|-----------------------|---------------------------------------------------------------------------------------------|
+| `MATCH`               | Both values present and exactly equal                                                       |
+| `WITHIN_TOLERANCE`    | Difference within rounding tolerance only (at most $0.5M, or 0.5M shares)                   |
+| `REVIEW`              | Difference exceeds rounding tolerance and no explanation is documented                      |
+| `EXPLAINED`           | Difference exceeds tolerance and a documented `KnownDiscrepancy` explains it; still visible |
+| `SEC_ONLY`/`FMP_ONLY` | Only one provider has a value (window timing, unsupported, or an in-window gap)             |
+| `SEMANTIC_DIFFERENCE` | One side is structurally absent by policy while the other reports a value                   |
+| `UNCOMPARABLE`        | Invalid provider data, or period ends more than 7 days apart                                |
+
+### Comparison rules
+
+* Tolerance covers **rounding only**. Filings report in millions, so differences of at most $500,000 or 500,000 shares are `WITHIN_TOLERANCE` with category `ROUNDING`. No relative band exists, and any larger difference stays `REVIEW` until explained.
+* Both facts must share the canonical fiscal year, and their period ends must be within 7 days of each other (52/53-week calendars).
+* A year outside the other provider's available span is `PERIOD_TIMING` and immaterial; a missing year inside the span is a material `SOURCE_DISCREPANCY`.
+* `UNSUPPORTED` against `AVAILABLE` is a material one-sided row and never a substitution. `STRUCTURALLY_ABSENT` against `AVAILABLE` is a `SEMANTIC_DIFFERENCE`. `INVALID` on either side is `UNCOMPARABLE`.
+
+### Discrepancy categories
+
+`ROUNDING`, `PERIOD_TIMING`, `PROVIDER_NORMALIZATION`, `SEC_CONCEPT_SELECTION`, `SOURCE_DISCREPANCY`, `POLICY_DIFFERENCE`, `UNSUPPORTED`, and `INVALID`.
+
+### The audit trail: `KNOWN_DISCREPANCIES`
+
+`src/owner_lens/known_discrepancies.py` holds every investigated difference as data: ticker, metric, fiscal year, category, explanation, evidence (concepts, field names, filings, accessions), and `fmp_trusted`, which records whether FMP's value is acceptable as an OwnerLens fact. Explanations apply only to rows that still differ. An explanation that no longer matches any difference is reported as **stale** and blocks eligibility, so the audit trail cannot silently mask a future change.
+
+### Derived-output comparison
+
+OwnerLens recomputes FCF, FCF per share, operating and FCF margins, net cash, invested capital, ROIC, the annual economic-value classification, and the overall summary classification from each history. FMP's own `freeCashFlow` and ratios are never compared as truth. Every derived difference is traced to the fact rows among its inputs, including prior years for ROIC and the annual classification:
+
+* A difference caused only by rounding inputs is `WITHIN_TOLERANCE`.
+* A difference caused by accounted-for rows is `EXPLAINED`.
+* Any other difference is `REVIEW`.
+* A layer that one provider cannot compute is `UNCOMPARABLE` and reported as *unassessed*, never assumed equal.
+
+## Acceptance criteria: can FMP become primary?
+
+| Verdict                                | Definition                                                                                              |
+|----------------------------------------|---------------------------------------------------------------------------------------------------------|
+| `ELIGIBLE`                             | No material differences: only matches, rounding, and window timing                                      |
+| `ELIGIBLE_WITH_EXPLAINED_DIFFERENCES`  | Material differences exist; each is understood, documented, and leaves every core fact trustworthy      |
+| `NOT_ELIGIBLE`                         | At least one material unresolved difference, a stale explanation, or a core fact FMP cannot be trusted for |
+
+Core metrics: revenue, operating income, net income, pretax income, income tax expense, operating cash flow, capital expenditures, cash, total assets, total equity, current debt, and long-term debt. The standard requires:
+
+* core canonical facts reconcile or are explained,
+* every material difference is categorized with evidence,
+* there are no silent substitutions,
+* owner-economics outputs agree or trace to explained facts,
+* unsupported differences stay explicit.
+
+## Results (live SEC 2026-10-06, cached FMP free tier)
+
+| Ticker | Compared | Match | Rounding | Review | Explained | SEC only | FMP only | Semantic | Verdict |
+|--------|---------:|------:|---------:|-------:|----------:|---------:|---------:|---------:|---------|
+| ADBE   | 80 | 76 | 3 | 0 | 2 | 6  | 0  | 0 | `NOT_ELIGIBLE` |
+| V      | 75 | 73 | 0 | 0 | 2 | 5  | 5  | 5 | `NOT_ELIGIBLE` |
+| COST   | 68 | 67 | 0 | 0 | 1 | 23 | 17 | 0 | `NOT_ELIGIBLE` |
+| MSFT   | 80 | 71 | 0 | 0 | 9 | 5  | 5  | 0 | `ELIGIBLE_WITH_EXPLAINED_DIFFERENCES` |
+
+Every compared fact either matches, rounds, or is explained. No `REVIEW` rows and no stale explanations remain.
+
+### Explained cases
+
+| Company | Difference | Category | FMP trusted? |
+|---------|------------|----------|--------------|
+| ADBE FY2024 capex | SEC 183M (both 10-Ks) vs FMP 232M. FMP reclassified investing flows (+51M in other investing). This is the **entire** FCF gap: SEC 7,873M vs FMP 7,824M. Operating cash flow matches. | Provider normalization | No (core) |
+| ADBE FY2024 SBC | SEC 1,833M vs FMP 1,881M; no filed line item matches FMP | Provider normalization | No |
+| ADBE diluted shares FY2022–FY2024 | 0.1–0.3M differences | Rounding | n/a |
+| V diluted shares | SEC unsupported (multi-class, no undimensioned concept); FMP as-converted 1,966M, with diluted equal to basic in FY2022–FY2023 | Unsupported | No |
+| V short-term investments | SEC structurally absent by OwnerLens policy; FMP 1,833M. Changes Visa net cash and ROIC. | Policy difference | Yes |
+| V FY2025 cash | SEC 17,164M filed vs FMP 20,154M (neither the filed nor the restricted-inclusive total) | Provider normalization | No (core) |
+| V FY2025 repurchases | SEC 18,316M filed vs FMP 13,389M (~4.9B moved to other financing) | Provider normalization | No |
+| COST FY2025 current debt | SEC 75M vs FMP 361M = 75M + 286M current leases, in this year only | Provider normalization | No (core) |
+| COST FY2026 | FMP only: period ended 2026-08-30, FMP filing date 2026-09-24, no FY2026 10-K at the SEC yet | Period timing | Pre-10-K data |
+| MSFT long-term debt | SEC `LongTermDebt` includes the current portion (43,151M = 40,152M + 2,999M); FMP matches the noncurrent canonical meaning | SEC concept selection | Yes |
+| MSFT current debt | SEC unsupported (no `DebtCurrent`); FMP equals filed `LongTermDebtCurrent` | Unsupported | Yes |
+| MSFT short-term investments | FMP 6–12M below the filed amount every year | Provider normalization | No (non-core) |
+
+### OwnerLens outputs
+
+* **ADBE:** FCF and FCF per share differ only in FY2024, traced to capex. ROIC and every classification match.
+* **V:** FCF matches. ROIC differs every year, traced to the short-term-investments policy and FMP's FY2025 cash. SEC cannot classify Visa's per-share economics (unsupported diluted shares) and FMP can, so the classifications differ for a documented reason.
+* **COST:** FCF and FCF per share match in every compared year. FY2025 ROIC differs slightly (lease-inclusive short-term debt). The overall classification differs (`IMPROVING` vs `STRONGLY_IMPROVING`) because FMP's latest year is the pre-10-K FY2026.
+* **MSFT:** owner economics match exactly. SEC capital efficiency cannot be computed (no `DebtCurrent`), so ROIC and the classifications are unassessed.
+
+## Recommendation
+
+**Keep SEC as the primary and audit provider. FMP is not yet eligible.** In three of four companies FMP deviates from a filed core fact, and those provider normalizations would silently change FCF, net cash, or ROIC. Where FMP and the filings agree, which is almost everywhere, OwnerLens economics are identical, and for Microsoft FMP is more complete than the current SEC path.
+
+Follow-ups surfaced by the evidence, none implemented in 5C:
+
+* **SEC concept selection for MSFT:** add the `LongTermDebtCurrent`/`LongTermDebtNoncurrent` override already used for Visa and Costco. This fixes MSFT's double-count risk and makes its SEC capital efficiency computable. The default `LongTermDebt` concept means different things across filers (noncurrent for ADBE, total for MSFT).
+* **Future eligibility:** once the core deviations are resolved or a fallback policy exists, re-run the reconciliation. The explanations then become stale and force review.
+
+## Running it
+
+```powershell
+uv run python scripts/reconcile_providers.py                  # ADBE V COST MSFT, FMP cache only
+uv run python scripts/reconcile_providers.py ADBE --show-all
+```
+
+The script retrieves SEC live, stores the raw payload by content hash under the local raw-snapshot root, and records the CIK and hash. It reads FMP only from `data/raw/fmp/`; a cache miss fails clearly unless `--allow-fmp-fetch` is passed. Re-running makes no FMP API calls.
+
+## Educational Notebook
+
+Slice 5C added:
+
+- `14_dual_source_reconciliation.ipynb`
+
+It covers the cross-company summary, the ADBE FCF trace, the Visa and Costco cases with provenance, the derived-output comparison, and the eligibility verdicts. It refuses any FMP network access.
+
+## What Slice 5C Deliberately Did Not Build
+
+- a provider switch, selection, or fallback logic,
+- fixes to SEC concept selection or FMP mapping (recorded as follow-ups instead),
+- persistence of reconciliation results or schema changes,
+- an FMP plan upgrade (CRM and NOW remain blocked on the free tier),
+- batch ingestion, scoring, screening, valuation, or Azure.
