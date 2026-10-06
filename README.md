@@ -2,8 +2,8 @@
 
 OwnerLens turns raw SEC filings into trustworthy, owner-oriented financial intelligence. It retrieves SEC
 Company Facts, normalizes them into canonical facts with full provenance, derives deterministic
-owner-economics and capital-efficiency metrics, and produces an Economic Value Lens — all as reproducible,
-testable Python.
+owner-economics and capital-efficiency metrics, produces an Economic Value Lens, and screens a company
+universe for research priority — all as reproducible, testable Python.
 
 See [docs/PRD.md](docs/PRD.md) for product context and [ROADMAP.md](ROADMAP.md) for the slice history.
 
@@ -16,7 +16,7 @@ SEC Company Facts ─→ owner_lens.sec_adapter ─┐
                                             ├─→ canonical facts (CanonicalFinancialHistory)
 FMP statements    ─→ owner_lens.fmp_adapter ─┘        ↓
                               OwnerLens deterministic logic (owner economics, capital
-                              efficiency, Economic Value Lens, coverage)
+                              efficiency, Economic Value Lens, coverage, screening)
 ```
 
 SEC is the default and the regression/audit provider. FMP is an optional second provider that needs
@@ -34,6 +34,30 @@ than being approximated. See
 [Feature 6: Universe Coverage](docs/feature_docs/feature_06_universe_coverage.md). See
 [Feature 5: Provider Boundary](docs/feature_docs/feature_05_canonical_provider_boundary.md) for the
 model, the boundary rule, and how it is enforced.
+
+## Opportunity screening
+
+Above the metrics sits the first investing-decision layer: a deterministic screen that narrows a
+universe to the companies worth expensive underwriting. It bands six interpretable dimensions
+(business quality, capital efficiency, per-share compounding, balance-sheet strength, capital
+allocation, economic momentum), applies survival gates, and assigns a research-priority bucket with
+structured reasons.
+
+```powershell
+uv run owner-lens screen                      # every persisted company, no network call
+uv run owner-lens screen ADBE MSFT --detail   # full per-company justification
+uv run python scripts/screen_universe.py      # the 24-company universe
+```
+
+Three properties are load bearing. Margin *levels* are never scored across companies, so a 3%-margin
+retailer is not penalized for its business model. ROIC level and ROIC trend are separated, so a
+company whose invested capital grew as its cash pile shrank is not mistaken for a broken one. A
+dimension OwnerLens cannot see is `NOT_EVALUABLE` — excluded from the score and capped by a coverage
+ceiling — so missing negative evidence never becomes an advantage.
+
+A bucket communicates **research priority, not investment advice**. The layer contains no price,
+multiple, intrinsic value, expected return, or LLM call. See
+[Feature 7: Opportunity Screening](docs/feature_docs/feature_07_opportunity_screening.md).
 
 ## Requirements
 

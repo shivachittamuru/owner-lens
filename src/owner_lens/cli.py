@@ -3,20 +3,34 @@
 The console entry point ``owner-lens`` delegates to :func:`main`, which dispatches
 argparse subcommands. ``ingest`` is the primary workflow (retrieve + persist one
 company); ``show`` reads the latest persisted summary/coverage from storage with
-no network call; ``inspect`` preserves the pre-4B raw-facts view. This module owns
-argument parsing, settings loading, dependency composition, result formatting, and
-exit codes; the ingestion orchestration itself lives in :mod:`owner_lens.ingestion`.
+no network call; ``screen`` runs the Feature 7 opportunity screen over already
+persisted companies, also with no network call; ``inspect`` preserves the pre-4B
+raw-facts view. This module owns argument parsing, settings loading, dependency
+composition, result formatting, and exit codes; the ingestion orchestration
+itself lives in :mod:`owner_lens.ingestion`.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
-from owner_lens.config import build_local_store, load_settings
+from owner_lens.canonical import CanonicalFinancialHistory
+from owner_lens.config import OwnerLensSettings, build_local_store, load_settings
 from owner_lens.coverage import LAYER_ORDER
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
+from owner_lens.persistence import FilesystemRawSnapshotStore, OwnerLensStore
+from owner_lens.persistence.errors import StorageReadError
+from owner_lens.screening import (
+    format_screening_detail,
+    format_screening_table,
+    screen_company_from_history,
+    screen_universe,
+)
 from owner_lens.sec import SecClient, SecError
+from owner_lens.sec_adapter import canonical_history_from_sec
 
 __all__ = ["format_result", "main"]
 
@@ -44,6 +58,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     show = sub.add_parser("show", help="Show the latest persisted summary/coverage.")
     show.add_argument("ticker", help="SEC-resolvable ticker symbol.")
+
+    screen = sub.add_parser(
+        "screen",
+        help="Screen persisted companies for research priority (no network call).",
+    )
+    screen.add_argument(
+        "tickers",
+        nargs="*",
+        help="Tickers to screen (default: every persisted company).",
+    )
+    screen.add_argument(
+        "--detail",
+        action="store_true",
+        help="Print the full per-company justification instead of the grid.",
+    )
+    screen.add_argument(
+        "--max-years", type=int, default=5, help="Fiscal years of history (>= 1)."
+    )
 
     inspect = sub.add_parser("inspect", help="Print a raw Company Facts overview.")
     inspect.add_argument("ticker", help="SEC-resolvable ticker symbol.")
@@ -163,6 +195,13 @@ def _cmd_show(args: argparse.Namespace) -> int:
             if summary
             else "Latest summary: (none)"
         )
+        history = _persisted_history(store, settings, company.cik, ticker, max_years=5)
+        if history is not None:
+            result = screen_company_from_history(history)
+            lines.append(
+                f"Screening:      {result.bucket.value}"
+                f" ({result.setup_type.value}, coverage {result.coverage_class.value})"
+            )
         if coverage:
             lines.append("")
             lines.append("Coverage:")
@@ -172,6 +211,85 @@ def _cmd_show(args: argparse.Namespace) -> int:
                     f"  {record.subject_kind}/{record.subject}: {record.state}{reason}"
                 )
         print("\n".join(lines))
+    finally:
+        store.close()
+    return 0
+
+
+def _persisted_history(
+    store: OwnerLensStore,
+    settings: OwnerLensSettings,
+    cik: str,
+    ticker: str,
+    *,
+    max_years: int,
+) -> CanonicalFinancialHistory | None:
+    """Rebuild a canonical history from the stored raw snapshot, or None if absent.
+
+    Reads only persisted data: no SEC call is made, so screening a company that
+    has never been ingested fails explicitly rather than fetching silently.
+    """
+    snapshot = store.get_latest_source_snapshot(cik)
+    if snapshot is None:
+        return None
+    raw_store = FilesystemRawSnapshotStore(Path(settings.raw_data_path))
+    try:
+        payload = raw_store.get(snapshot.content_hash)
+    except StorageReadError:
+        return None
+    return canonical_history_from_sec(
+        json.loads(payload), ticker=ticker, max_years=max_years
+    )
+
+
+def _cmd_screen(args: argparse.Namespace) -> int:
+    if args.max_years < 1:
+        print("--max-years must be >= 1", file=sys.stderr)
+        return 2
+    settings = load_settings()
+    store = build_local_store(settings)
+    store.initialize()
+    try:
+        companies = store.list_companies()
+        wanted = {t.strip().upper() for t in args.tickers}
+        if wanted:
+            selected = [c for c in companies if c.ticker in wanted]
+            missing = sorted(wanted - {c.ticker for c in selected})
+            if missing:
+                print(
+                    f"Not ingested: {', '.join(missing)}. Run 'owner-lens ingest' first.",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            selected = list(companies)
+        if not selected:
+            print("No companies have been ingested.", file=sys.stderr)
+            return 1
+
+        histories: list[CanonicalFinancialHistory] = []
+        unavailable: list[str] = []
+        for company in sorted(selected, key=lambda c: c.ticker):
+            history = _persisted_history(
+                store, settings, company.cik, company.ticker, max_years=args.max_years
+            )
+            if history is None:
+                unavailable.append(company.ticker)
+                continue
+            histories.append(history)
+        if not histories:
+            print("No stored raw snapshots are available to screen.", file=sys.stderr)
+            return 1
+
+        screening = screen_universe(histories)
+        print(
+            format_screening_detail(screening)
+            if args.detail
+            else format_screening_table(screening)
+        )
+        if unavailable:
+            print()
+            print(f"No stored snapshot: {', '.join(unavailable)}")
     finally:
         store.close()
     return 0
@@ -215,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest(args)
     if args.command == "show":
         return _cmd_show(args)
+    if args.command == "screen":
+        return _cmd_screen(args)
     if args.command == "inspect":
         return _cmd_inspect(args)
     parser.error(f"unknown command: {args.command}")

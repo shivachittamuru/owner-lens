@@ -159,3 +159,90 @@ def test_cli_and_script_share_one_ingest_implementation() -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.ingest_company is ingestion.ingest_company
+
+
+def test_show_reports_the_screening_verdict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch(monkeypatch, tmp_path)
+    cli.main(["ingest", "ADBE"])
+    capsys.readouterr()
+
+    assert cli.main(["show", "ADBE"]) == 0
+    out = capsys.readouterr().out
+    assert "Screening:" in out
+    assert "coverage FULL" in out
+
+
+def test_screen_ranks_every_persisted_company_without_a_network_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch(monkeypatch, tmp_path)
+    cli.main(["ingest", "ADBE"])
+    cli.main(["ingest", "COST"])
+    capsys.readouterr()
+    # Any SEC call from here on is a defect: screening reads persisted data only.
+    monkeypatch.setattr(
+        cli, "SecClient", lambda _ua: pytest.fail("screen must not call SEC")
+    )
+
+    assert cli.main(["screen"]) == 0
+    out = capsys.readouterr().out
+    assert "ADBE" in out
+    assert "COST" in out
+    assert "Distribution:" in out
+
+
+def test_screen_accepts_a_subset_of_tickers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch(monkeypatch, tmp_path)
+    cli.main(["ingest", "ADBE"])
+    cli.main(["ingest", "COST"])
+    capsys.readouterr()
+
+    assert cli.main(["screen", "adbe"]) == 0
+    out = capsys.readouterr().out
+    assert "ADBE" in out
+    assert "COST" not in out
+
+
+def test_screen_detail_prints_the_full_justification(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch(monkeypatch, tmp_path)
+    cli.main(["ingest", "ADBE"])
+    capsys.readouterr()
+
+    assert cli.main(["screen", "ADBE", "--detail"]) == 0
+    out = capsys.readouterr().out
+    assert "Opportunity Screening" in out
+    assert "Why it ranks where it does:" in out
+
+
+def test_screen_refuses_a_company_that_was_never_ingested(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch(monkeypatch, tmp_path)
+    cli.main(["ingest", "ADBE"])
+    capsys.readouterr()
+
+    assert cli.main(["screen", "ZZZZ"]) == 1
+    assert "Not ingested: ZZZZ" in capsys.readouterr().err
+
+
+def test_screen_on_an_empty_store_exits_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch(monkeypatch, tmp_path)
+
+    assert cli.main(["screen"]) == 1
+    assert "No companies have been ingested." in capsys.readouterr().err
+
+
+def test_screen_rejects_a_non_positive_history_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch(monkeypatch, tmp_path)
+
+    assert cli.main(["screen", "--max-years", "0"]) == 2

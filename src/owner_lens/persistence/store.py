@@ -159,6 +159,8 @@ class OwnerLensStore(Protocol):
         self, cik: str, content_hash: str
     ) -> SourceSnapshotRecord | None: ...
 
+    def get_latest_source_snapshot(self, cik: str) -> SourceSnapshotRecord | None: ...
+
     def snapshot_matches_versions(
         self,
         cik: str,
@@ -728,6 +730,41 @@ class SqliteStore:
 
     def source_snapshot_exists(self, cik: str, content_hash: str) -> bool:
         return self.get_source_snapshot(cik, content_hash) is not None
+
+    def get_latest_source_snapshot(self, cik: str) -> SourceSnapshotRecord | None:
+        """The most recently fetched snapshot for a company, or None if there is none.
+
+        Ordered by ``fetched_at`` and then by insertion order, so a re-fetch that
+        produced an identical payload on the same timestamp still resolves to one
+        deterministic record.
+        """
+        company_id = self._company_id(cik)
+        if company_id is None:
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT source_provider, source_type, fetched_at, source_uri, "
+                "content_hash, raw_object_ref, processing_status "
+                "FROM source_snapshots WHERE company_id = ? "
+                "ORDER BY fetched_at DESC, id DESC LIMIT 1",
+                (company_id,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read the latest source snapshot for {cik}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return SourceSnapshotRecord(
+            cik=cik,
+            source_provider=row["source_provider"],
+            source_type=row["source_type"],
+            fetched_at=row["fetched_at"],
+            source_uri=row["source_uri"],
+            content_hash=row["content_hash"],
+            raw_object_ref=row["raw_object_ref"],
+            processing_status=row["processing_status"],
+        )
 
     def snapshot_matches_versions(
         self,
