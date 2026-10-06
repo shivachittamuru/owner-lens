@@ -123,20 +123,31 @@ SHORT_TERM_INVESTMENTS: Final = CanonicalMetricDefinition(
 )
 # V and COST report the current portion of debt under LongTermDebtCurrent; Adobe
 # uses DebtCurrent. LongTermDebtNoncurrent excludes the current portion, so
-# pairing it with LongTermDebtCurrent avoids double counting.
+# pairing it with LongTermDebtCurrent avoids double counting. MSFT reports no
+# DebtCurrent, and its LongTermDebt includes the current portion (FY2025: 43,151M
+# = LongTermDebtNoncurrent 40,152M + LongTermDebtCurrent 2,999M), so it uses the
+# same pair (verified in Slice 5C reconciliation).
 CURRENT_DEBT: Final = CanonicalMetricDefinition(
     "current_debt",
     MetricKind.INSTANT,
     TARGET_UNIT,
     ("DebtCurrent",),
-    overrides={"V": ("LongTermDebtCurrent",), "COST": ("LongTermDebtCurrent",)},
+    overrides={
+        "V": ("LongTermDebtCurrent",),
+        "COST": ("LongTermDebtCurrent",),
+        "MSFT": ("LongTermDebtCurrent",),
+    },
 )
 LONG_TERM_DEBT: Final = CanonicalMetricDefinition(
     "long_term_debt",
     MetricKind.INSTANT,
     TARGET_UNIT,
     ("LongTermDebt",),
-    overrides={"V": ("LongTermDebtNoncurrent",), "COST": ("LongTermDebtNoncurrent",)},
+    overrides={
+        "V": ("LongTermDebtNoncurrent",),
+        "COST": ("LongTermDebtNoncurrent",),
+        "MSFT": ("LongTermDebtNoncurrent",),
+    },
 )
 TOTAL_ASSETS: Final = CanonicalMetricDefinition(
     "total_assets", MetricKind.INSTANT, TARGET_UNIT, ("Assets",)

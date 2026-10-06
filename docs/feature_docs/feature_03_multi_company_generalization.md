@@ -234,6 +234,8 @@ A simple global fallback ordering would be unsafe because some alternate tags ar
 
 Therefore Feature 3B established **replacement overrides**, not merely appended fallbacks.
 
+Slice 5C reconciliation later showed Microsoft needs the same pair: it reports no `DebtCurrent`, and its `LongTermDebt` *includes* the current portion (FY2025: 43,151M = 40,152M noncurrent + 2,999M current). MSFT now uses the `LongTermDebtCurrent`/`LongTermDebtNoncurrent` replacement override, so total debt is no longer double counted. See Feature 5, Slice 5C follow-up.
+
 This is a key architectural decision.
 
 ---

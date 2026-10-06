@@ -312,3 +312,24 @@ def test_known_discrepancies_are_well_formed() -> None:
         assert known.explanation and known.evidence
         assert known.category not in (C.NONE, C.ROUNDING)
         assert known.ticker in {"ADBE", "V", "COST", "MSFT"}
+
+
+def test_unsupported_explanation_cannot_absorb_a_value_difference() -> None:
+    """An explanation whose premise no longer holds goes stale; it never masks a new gap."""
+    unsupported = _explain("capital_expenditures", None, trusted=True, category=C.UNSUPPORTED)
+    report = _reconcile(_CAPEX_GAP, explanations=(unsupported,))
+    row = _fact(report, "capital_expenditures", 2024)
+    assert row.status is S.REVIEW
+    assert row.explanation is None
+    assert report.unused_explanations == (unsupported,)
+    assert report.verdict().eligibility is Eligibility.NOT_ELIGIBLE
+
+
+def test_policy_explanation_applies_only_to_semantic_differences() -> None:
+    policy = _explain("dividends_paid", None, trusted=True, category=C.POLICY_DIFFERENCE)
+    semantic = _reconcile(
+        with_field("cash-flow-statement", "commonDividendsPaid", {2025: -500 * _M}),
+        explanations=(policy,),
+    )
+    assert _fact(semantic, "dividends_paid", 2025).explanation == policy
+    assert semantic.unused_explanations == ()

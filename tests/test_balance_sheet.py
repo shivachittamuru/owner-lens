@@ -259,3 +259,58 @@ def test_costco_short_term_investments_present() -> None:
 
     assert series.concept == "ShortTermInvestments"
     assert series.observations[0].value == 1123000000
+
+
+# MSFT FY2023-FY2025 debt as filed (millions): LongTermDebt is the TOTAL including
+# the current portion, so pairing it with LongTermDebtCurrent would double count.
+_MSFT_DEBT = {
+    "LongTermDebtCurrent": {2023: 5247, 2024: 2249, 2025: 2999},
+    "LongTermDebtNoncurrent": {2023: 41990, 2024: 42688, 2025: 40152},
+    "LongTermDebt": {2023: 47237, 2024: 44937, 2025: 43151},
+}
+
+
+def _msft_like_facts() -> dict[str, Any]:
+    """ADBE fixture with Microsoft's debt tagging: no DebtCurrent, total LongTermDebt."""
+    facts = adbe_facts()
+    us_gaap = facts["facts"]["us-gaap"]
+    del us_gaap["DebtCurrent"]
+    for concept, values in _MSFT_DEBT.items():
+        us_gaap[concept] = {
+            "units": {
+                "USD": [
+                    _instant(year, val * 1_000_000, filed=f"{year + 1}-07-30", accn=f"{concept}-{year}")
+                    for year, val in values.items()
+                ]
+            }
+        }
+    return facts
+
+
+def test_msft_debt_uses_current_noncurrent_split_without_double_count() -> None:
+    from owner_lens.capital_efficiency import capital_efficiency_from_facts
+
+    facts = _msft_like_facts()
+    cur = normalize_current_debt(facts, ticker="MSFT")
+    lt = normalize_long_term_debt(facts, ticker="MSFT")
+    assert cur.concept == "LongTermDebtCurrent"
+    assert lt.concept == "LongTermDebtNoncurrent"
+
+    rows = {row.fiscal_year: row for row in capital_efficiency_from_facts(facts, ticker="MSFT")}
+    for year in (2025, 2024, 2023):
+        current = _MSFT_DEBT["LongTermDebtCurrent"][year] * 1_000_000
+        noncurrent = _MSFT_DEBT["LongTermDebtNoncurrent"][year] * 1_000_000
+        double_counted = current + _MSFT_DEBT["LongTermDebt"][year] * 1_000_000
+        assert rows[year].total_debt == current + noncurrent
+        assert rows[year].total_debt == _MSFT_DEBT["LongTermDebt"][year] * 1_000_000
+        assert rows[year].total_debt != double_counted
+    assert rows[2025].roic is not None
+
+
+def test_msft_override_does_not_affect_other_filers_with_the_same_tagging() -> None:
+    # The override is keyed by ticker: another filer with identical tagging keeps
+    # the default concepts (and fails loudly without DebtCurrent), unchanged.
+    facts = _msft_like_facts()
+    assert normalize_long_term_debt(facts, ticker="CRM").concept == "LongTermDebt"
+    with pytest.raises(ConceptNotFoundError):
+        normalize_current_debt(facts, ticker="CRM")

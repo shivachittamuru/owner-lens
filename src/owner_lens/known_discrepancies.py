@@ -183,36 +183,27 @@ KNOWN_DISCREPANCIES: Final[tuple[KnownDiscrepancy, ...]] = (
         )
     ),
     # --- MSFT -----------------------------------------------------------------
-    KnownDiscrepancy(
-        ticker="MSFT",
-        metric="long_term_debt",
-        fiscal_year=None,
-        category=_C.SEC_CONCEPT_SELECTION,
-        explanation=(
-            "The SEC default concept LongTermDebt includes Microsoft's current portion, "
-            "while canonical long-term debt is the noncurrent amount. FMP longTermDebt "
-            "matches the filed noncurrent value; the SEC path is the one that is wrong "
-            "for MSFT."
-        ),
-        evidence=(
-            "FY2025: SEC LongTermDebt = 43,151M = LongTermDebtNoncurrent 40,152M + "
-            "LongTermDebtCurrent 2,999M (10-K filed 2025-07-30); FMP longTermDebt = "
-            "40,152M. Not exercised today because SEC current_debt is UNSUPPORTED for MSFT. "
-            "Follow-up: add the LongTermDebtCurrent/LongTermDebtNoncurrent override used "
-            "for V and COST."
-        ),
-        fmp_trusted=True,
-    ),
+    # The former long_term_debt (SEC concept selection) and current_debt
+    # (unsupported) entries were retired once MSFT gained the
+    # LongTermDebtCurrent/LongTermDebtNoncurrent override; both went stale, as intended.
     KnownDiscrepancy(
         ticker="MSFT",
         metric="current_debt",
-        fiscal_year=None,
-        category=_C.UNSUPPORTED,
+        fiscal_year=2024,
+        category=_C.SEC_CONCEPT_SELECTION,
         explanation=(
-            "Microsoft reports no DebtCurrent concept, so the SEC path is UNSUPPORTED. "
-            "FMP shortTermDebt equals the filed current portion of long-term debt."
+            "At FY2024 year-end Microsoft held 6,693M of commercial paper in addition to "
+            "2,249M of current long-term debt. The SEC path selects one concept "
+            "(LongTermDebtCurrent) and so omits the commercial paper; FMP shortTermDebt "
+            "(8,942M) is the complete current debt. Other years carry no commercial paper "
+            "and match."
         ),
-        evidence="FY2025: FMP shortTermDebt = 2,999M = SEC LongTermDebtCurrent 2,999M.",
+        evidence=(
+            "FY2024 (10-K filed 2024-07-30): SEC LongTermDebtCurrent = 2,249M and "
+            "CommercialPaper = 6,693M; FMP shortTermDebt = 8,942M = 2,249M + 6,693M. "
+            "CommercialPaper is 0 at FY2023 and FY2025 year-ends. The canonical registry "
+            "selects a single concept per metric and cannot sum concepts; follow-up."
+        ),
         fmp_trusted=True,
     ),
     KnownDiscrepancy(

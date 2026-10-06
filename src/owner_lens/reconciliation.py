@@ -458,6 +458,14 @@ def _compare_metric(
     return rows
 
 
+def _compatible(known: KnownDiscrepancy, row: _Row) -> bool:
+    if known.category is DiscrepancyCategory.UNSUPPORTED:
+        return row.category is DiscrepancyCategory.UNSUPPORTED
+    if known.category is DiscrepancyCategory.POLICY_DIFFERENCE:
+        return row.status is ReconciliationStatus.SEMANTIC_DIFFERENCE
+    return True
+
+
 def _apply_explanations(
     rows: list[_Row], explanations: Sequence[KnownDiscrepancy]
 ) -> tuple[list[_Row], tuple[KnownDiscrepancy, ...]]:
@@ -469,12 +477,16 @@ def _apply_explanations(
             continue
         # Year-wildcard explanations apply to material rows only, so they never
         # relabel routine window-timing rows; a year-specific entry may annotate any row.
+        # An explanation must also fit the row's kind: an UNSUPPORTED or POLICY
+        # explanation never absorbs a value difference, so an explanation whose
+        # premise no longer holds goes stale instead of masking a new discrepancy.
         match = next(
             (
                 (index, known)
                 for index, known in enumerate(explanations)
                 if known.matches(row.ticker, row.metric, row.fiscal_year)
                 and (row.material or known.fiscal_year is not None)
+                and _compatible(known, row)
             ),
             None,
         )
