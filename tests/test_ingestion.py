@@ -277,3 +277,25 @@ def test_changed_content_creates_new_snapshot(tmp_path: Path) -> None:
     ).fetchone()[0]
     assert snapshot_count == 2
     store.close()
+
+
+def test_ambiguous_revenue_restatement_degrades_instead_of_crashing(tmp_path: Path) -> None:
+    # Slice 6A (PFE): revenue ambiguity errors are not AnnualNormalizationError
+    # subclasses; ingestion must still degrade explicitly, never raise.
+    def adbe_with_ambiguous_revenue() -> dict[str, Any]:
+        facts = adbe_facts()
+        entries = facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"]
+        conflict = dict(entries[0])
+        conflict["val"] += 1_000_000
+        conflict["filed"] = "2030-01-01"
+        entries.append(conflict)
+        return facts
+
+    store = _store(tmp_path)
+    facts_map: dict[str, Callable[[], dict[str, Any]]] = {"ADBE": adbe_with_ambiguous_revenue}
+    result = ingest_company("ADBE", sec_client=FakeSecClient(facts=facts_map), store=store)
+
+    assert result.failure is None
+    assert result.status is not IngestionStatus.COMPLETE
+    assert result.source_snapshot is not None
+    store.close()

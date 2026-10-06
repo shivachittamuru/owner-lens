@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from enum import Enum
 
 from owner_lens._annual import AnnualNormalizationError
+from owner_lens.canonical import CanonicalDataError
 from owner_lens.capital_allocation import capital_allocation_from_history
 from owner_lens.capital_efficiency import capital_efficiency_from_history
 from owner_lens.compounding import (
@@ -79,11 +80,16 @@ _SOURCE_PROVIDER = "sec"
 _SOURCE_TYPE = "company_facts"
 
 # A required input that raises one of these is unsupported, not a hard failure.
+# CanonicalDataError covers every provider-neutral unsupported or invalid input,
+# including revenue- and operating-income-specific ambiguity errors that are not
+# AnnualNormalizationError subclasses (found in Slice 6A: an ambiguous revenue
+# restatement previously crashed ingestion instead of degrading).
 _CONCEPT_ERRORS = (
     AnnualNormalizationError,
     ConceptNotFoundError,
     RevenueConceptNotFoundError,
     OperatingIncomeConceptNotFoundError,
+    CanonicalDataError,
 )
 
 
