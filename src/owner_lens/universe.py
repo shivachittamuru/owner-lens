@@ -30,10 +30,16 @@ from enum import Enum
 from typing import Any, Final
 
 import owner_lens.metrics as _metric_registry
-from owner_lens._annual import AmbiguousValueError, MalformedFactsError
+from owner_lens._annual import (
+    SPLIT_ELIGIBLE_UNIT,
+    AmbiguousValueError,
+    MalformedFactsError,
+    classify_conflict_values,
+)
 from owner_lens.canonical import (
     CANONICAL_METRICS,
     CanonicalFinancialHistory,
+    ConflictResolutionKind,
     MetricInvalidError,
     MetricKind,
     MetricStatus,
@@ -195,6 +201,8 @@ class MetricFinding:
     value_level: bool = False
     note: str | None = None
     restatement: RestatementKind | None = None
+    # Slice 6C: conflicts the normalizer resolved, e.g. "FY2024 STOCK_SPLIT x10".
+    resolved_conflicts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -322,19 +330,24 @@ class RestatementKind(Enum):
     VALUE_CHANGE = "VALUE_CHANGE"
 
 
-def _restatement_kind(reason: str | None) -> RestatementKind | None:
-    """Classify conflicting values: split-adjusted, re-rounded, or a genuine revision."""
+def _restatement_kind(reason: str | None, *, shares: bool = True) -> RestatementKind | None:
+    """Classify conflicting values with the normalizer's exact rule (Slice 6C).
+
+    Since 6C the normalizer resolves precision re-roundings and evidenced splits,
+    so an unresolved conflict is normally a genuine ``VALUE_CHANGE``; a
+    ``PRECISION`` or ``STOCK_SPLIT`` label here means the values fit the pattern
+    but the filing-order evidence did not.
+    """
     match = _AMBIGUOUS_VALUES.search(reason or "")
     if not match:
         return None
-    values = sorted(abs(int(v)) for v in match.group(1).split(",") if v.strip())
-    if len(values) < 2 or values[0] == 0:
+    values = {int(v) for v in match.group(1).split(",") if v.strip()}
+    if len(values) < 2:
         return None
-    low, high = values[0], values[-1]
-    ratio = high / low
-    if ratio >= 1.9 and abs(ratio - round(ratio)) / ratio < 0.01:
+    kind = classify_conflict_values(values, shares=shares)
+    if kind is ConflictResolutionKind.STOCK_SPLIT:
         return RestatementKind.STOCK_SPLIT
-    if (high - low) / high < 0.01:
+    if kind is ConflictResolutionKind.PRECISION:
         return RestatementKind.PRECISION
     return RestatementKind.VALUE_CHANGE
 
@@ -540,6 +553,13 @@ def _diagnose(
     latest_year = max(years) if years else None
     used = series.observations[0].provider_field if series.observations else None
 
+    resolved = tuple(
+        f"FY{f.fiscal_year} {f.resolution.kind.value}"
+        + (f" x{f.resolution.split_factor}" if f.resolution.split_factor != 1 else "")
+        for f in series.observations
+        if f.resolution is not None
+    )
+
     def make(
         diagnosis: DiagnosisCategory,
         candidates: tuple[str, ...],
@@ -548,7 +568,7 @@ def _diagnose(
     ) -> MetricFinding:
         return MetricFinding(
             metric, series.status, diagnosis, used, tried, candidates, latest_year,
-            reason, value_level,
+            reason, value_level, resolved_conflicts=resolved,
         )
 
     if series.status is MetricStatus.STRUCTURALLY_ABSENT:
@@ -567,7 +587,7 @@ def _diagnose(
                 if year is not None and oldest is not None and year <= oldest
                 else "inside the analysis window"
             )
-            kind = _restatement_kind(series.reason)
+            kind = _restatement_kind(series.reason, shares=definition.unit == SPLIT_ELIGIBLE_UNIT)
             label = f"; {kind.value.lower().replace('_', ' ')} restatement" if kind else ""
             # Since Slice 6B the selector skips stale concepts before resolving
             # years, so a conflict is always in the current selected concept.
@@ -920,6 +940,15 @@ class UniverseReport:
                 grouped.setdefault(kind, []).append(f"{ticker}:{finding.metric}")
         return {k: tuple(v) for k, v in sorted(grouped.items())}
 
+    def resolved_conflicts(self) -> tuple[tuple[str, str, str], ...]:
+        """Conflicts the normalizer resolved: (ticker, metric, "FY<year> <kind>[ x<n>]")."""
+        return tuple(
+            (c.ticker, finding.metric, entry)
+            for c in self.surveyed
+            for finding in c.metrics.values()
+            for entry in finding.resolved_conflicts
+        )
+
     def unblocked_by(
         self, resolves: Callable[[str, MetricFinding], bool]
     ) -> tuple[str, ...]:
@@ -965,6 +994,7 @@ class UniverseReport:
             "silently_stale": {c.ticker: list(c.silently_stale()) for c in self.surveyed
                                if c.silently_stale()},
             "restatements": {k: list(v) for k, v in self.restatements().items()},
+            "resolved_conflicts": [list(r) for r in self.resolved_conflicts()],
             "recurring_candidates": [
                 [m, c, list(t), r] for m, c, t, r in self.recurring_candidates()
             ],
@@ -1071,6 +1101,9 @@ def format_pattern_view(report: UniverseReport) -> str:
         f"  {kind:<14} {len(items):>2}  {', '.join(items)}"
         for kind, items in report.restatements().items()
     )
+    resolved = report.resolved_conflicts()
+    lines.append(f"Conflicts resolved by the normalizer (precision / stock split): {len(resolved)}")
+    lines.extend(f"  {t:<6} {m:<22} {entry}" for t, m, entry in resolved)
     lines.append("Composite-metric candidates:")
     lines.extend(
         f"  {t:<6} {m:<16} {'value-level' if v else 'unsupported'}: {r}"

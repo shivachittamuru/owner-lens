@@ -164,33 +164,49 @@ def test_ambiguity_inside_a_stale_concept_no_longer_blocks_as_invalid() -> None:
     assert survey.layers["capital_efficiency"].state is LayerState.UNAVAILABLE
 
 
-def test_precision_restatement_in_baseline_year_blocks_capital_layers() -> None:
+def test_precision_restatement_in_baseline_year_is_resolved() -> None:
+    # Slice 6C: a value re-rounded to thousands is the same economic value.
     facts = adbe_facts()
     assets = facts["facts"]["us-gaap"]["Assets"]["units"]["USD"]
     oldest = min(assets, key=lambda e: e["end"])
     assets.append({**oldest, "val": oldest["val"] + 57_000, "filed": "2030-01-15", "accn": "restated"})
     survey = survey_company(facts, ticker="ADBE")
     finding = survey.metrics["total_assets"]
+    assert (finding.status, finding.diagnosis) == (MetricStatus.AVAILABLE, D.NONE)
+    assert finding.resolved_conflicts == (f"FY{oldest['end'][:4]} PRECISION",)
+    assert survey.overall is Overall.FULL
+
+
+def test_genuine_revision_in_baseline_year_still_blocks_capital_layers() -> None:
+    facts = adbe_facts()
+    assets = facts["facts"]["us-gaap"]["Assets"]["units"]["USD"]
+    oldest = min(assets, key=lambda e: e["end"])
+    assets.append({**oldest, "val": oldest["val"] + 57_000_000, "filed": "2030-01-15", "accn": "restated"})
+    survey = survey_company(facts, ticker="ADBE")
+    finding = survey.metrics["total_assets"]
     assert (finding.status, finding.diagnosis) == (MetricStatus.INVALID, D.AMBIGUOUS_DUPLICATE)
-    assert finding.restatement is RestatementKind.PRECISION
+    assert finding.restatement is RestatementKind.VALUE_CHANGE
     assert survey.layers["owner_economics"].state is LayerState.AVAILABLE
     assert survey.layers["capital_efficiency"].state is LayerState.BLOCKED
     assert survey.layers["capital_efficiency"].blocking_metric == "total_assets"
     assert survey.overall is Overall.PARTIAL
 
 
-def test_stock_split_restatement_of_diluted_shares_fails_owner_economics() -> None:
+def test_stock_split_restatement_of_diluted_shares_is_resolved() -> None:
     facts = adbe_facts()
     shares = facts["facts"]["us-gaap"]["WeightedAverageNumberOfDilutedSharesOutstanding"]["units"]["shares"]
     latest = max(shares, key=lambda e: e["end"])
     shares.append({**latest, "val": latest["val"] * 10, "filed": "2030-01-15", "accn": "split"})
     survey = survey_company(facts, ticker="ADBE")
     finding = survey.metrics["diluted_shares"]
-    assert finding.restatement is RestatementKind.STOCK_SPLIT
-    assert survey.layers["owner_economics"].state is LayerState.BLOCKED
-    assert survey.primary_blocker == "diluted_shares"
-    assert survey.primary_category is D.AMBIGUOUS_DUPLICATE
-    assert survey.overall is Overall.FAILED
+    assert finding.status is MetricStatus.AVAILABLE
+    assert finding.resolved_conflicts == ("FY2025 STOCK_SPLIT", "FY2024 STOCK_SPLIT x10", "FY2023 STOCK_SPLIT x10")
+    assert survey.layers["owner_economics"].state is LayerState.AVAILABLE
+    assert survey.overall is Overall.FULL
+    report = UniverseReport((survey,))
+    assert report.resolved_conflicts()[0] == ("ADBE", "diluted_shares", "FY2025 STOCK_SPLIT")
+    assert "Conflicts resolved by the normalizer (precision / stock split): 3" in format_pattern_view(report)
+    assert json.loads(report.to_json())["resolved_conflicts"][1] == ["ADBE", "diluted_shares", "FY2024 STOCK_SPLIT x10"]
 
 
 @pytest.mark.parametrize(
@@ -198,6 +214,7 @@ def test_stock_split_restatement_of_diluted_shares_fails_owner_economics() -> No
     [
         ("values: [515000000, 10296000000].", RestatementKind.STOCK_SPLIT),
         ("values: [230000000, 230141000].", RestatementKind.PRECISION),
+        ("values: [2677000000, 2690000000].", RestatementKind.VALUE_CHANGE),  # CRM: <1% but genuine
         ("values: [73636000000, 81288000000].", RestatementKind.VALUE_CHANGE),
         ("no values here", None),
     ],

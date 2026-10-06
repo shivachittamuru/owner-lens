@@ -120,6 +120,7 @@ def _to_fact(metric: str, kind: MetricKind, obs: AnnualObservation) -> Canonical
         form=obs.form,
         filed=obs.filed,
         accession=obs.accession,
+        resolution=obs.resolution,
     )
 
 

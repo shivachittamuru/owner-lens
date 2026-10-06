@@ -15,16 +15,46 @@ current concept in preference order wins; stale concepts are skipped, and if no
 concept is current the metric's ``concept_error`` is raised instead of returning
 stale history. Per-company overrides replace the preference tuple before this
 rule runs, so they stay authoritative.
+
+Conflict resolution (Slice 6C): when one fiscal year has several distinct
+reported values for the selected concept, the year is resolved only if the
+conflict is mechanical:
+
+* Precision re-rounding: exactly one value has the fewest trailing zeros (the
+  most precise), and every other value equals it rounded half-away-from-zero
+  to 10^3..10^6, within the precision its own trailing zeros express. The most
+  precise value is kept, from its earliest filing.
+* Stock split (share units only): a conflict whose values form a pre-split and
+  a post-split group with an integer ratio 2..``MAX_SPLIT_RATIO``, where the
+  pre-split value is the post-split value divided by the ratio (exactly or
+  re-rounded as above) and every pre-split report was filed before every
+  post-split report. Each such conflict evidences a split between those filing
+  dates; observations filed on or before the split's last pre-split report are
+  scaled by its ratio (cumulatively across splits) to the latest basis, and an
+  observation filed between the two reports has an unknown basis and fails.
+
+Anything else, including genuine revisions, reverse or fractional splits, and
+contradictory split evidence, raises the metric's ambiguity error unchanged.
+Every resolved value carries a ``ConflictResolution`` recording the as-filed
+value, the split factor applied, and every superseded value.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
+from fractions import Fraction
 from typing import Any, Final
 
-from owner_lens.canonical import MetricInvalidError, MetricUnsupportedError
+from owner_lens.canonical import (
+    ConflictResolution,
+    ConflictResolutionKind,
+    MetricInvalidError,
+    MetricUnsupportedError,
+    SupersededValue,
+)
 
 DEFAULT_TICKER: Final = "ADBE"
 TARGET_UNIT: Final = "USD"
@@ -38,6 +68,12 @@ _INSTANT_REQUIRED_FACT_FIELDS: Final = ("end", "val", "fp", "form", "filed", "ac
 # A concept is current only if its newest observation ends within this many
 # days of the company's latest fiscal-year end (absorbs 52/53-week drift).
 RECENCY_TOLERANCE_DAYS: Final = 31
+# Slice 6C: conflicting values are reconciled only by re-rounding to thousands
+# through millions (never a percentage band), and stock splits are recognized
+# only for share counts with an integer forward ratio in this range.
+PRECISION_ROUNDING_DIGITS: Final = (3, 4, 5, 6)
+SPLIT_ELIGIBLE_UNIT: Final = "shares"
+MAX_SPLIT_RATIO: Final = 100
 
 
 class AnnualNormalizationError(Exception):
@@ -70,6 +106,7 @@ class AnnualObservation:
     filed: date
     accession: str
     value: int
+    resolution: ConflictResolution | None = None
 
 
 def canonicalize_ticker(ticker: str) -> str:
@@ -293,8 +330,13 @@ def _resolve_series(
     for observation in observations:
         by_year.setdefault(observation.fiscal_year, []).append(observation)
     years = sorted(by_year, reverse=True)[:max_years]
+    events = (
+        _split_events(by_year)
+        if observations and observations[0].unit == SPLIT_ELIGIBLE_UNIT
+        else ()
+    )
     return tuple(
-        _resolve_year(concept, year, by_year[year], ambiguity_error)
+        _resolve_year(concept, year, by_year[year], ambiguity_error, events)
         for year in years
     )
 
@@ -445,12 +487,236 @@ def _resolve_year(
     fiscal_year: int,
     observations: list[AnnualObservation],
     ambiguity_error: type[Exception],
+    events: tuple[_SplitEvent, ...] = (),
 ) -> AnnualObservation:
+    """Resolve one fiscal year's observations to a single canonical value.
+
+    Identical values collapse to the earliest original filing, exactly as
+    before. Distinct values are resolved only when they are provably the same
+    economic value (see the module docstring); anything else raises
+    ``ambiguity_error``.
+    """
     distinct_values = {observation.value for observation in observations}
-    if len(distinct_values) > 1:
-        raise ambiguity_error(
+
+    def conflict() -> Exception:
+        return ambiguity_error(
             f"Fiscal year {fiscal_year} has conflicting {concept} values: "
             f"{sorted(distinct_values)}."
         )
+
+    factored: list[tuple[AnnualObservation, int]] = []
+    for observation in observations:
+        factor = _split_factor(observation, events)
+        if factor is None:
+            raise ambiguity_error(
+                f"Fiscal year {fiscal_year} {concept} was filed "
+                f"{observation.filed.isoformat()}, between a stock split's last "
+                "pre-split and first post-split reports, so its share basis is "
+                "uncertain."
+            )
+        factored.append((observation, factor))
+
+    basis = min(factor for _, factor in factored)
+    on_basis = [observation for observation, factor in factored if factor == basis]
+    value = _agreed_value({observation.value for observation in on_basis})
+    if value is None:
+        raise conflict()
+    for observation, factor in factored:
+        if factor != basis and not _same_value(
+            observation.value, Fraction(value * basis, factor)
+        ):
+            raise conflict()
+
     # Identical comparative repeats collapse to the earliest original filing.
-    return min(observations, key=lambda o: (o.filed, o.accession))
+    chosen = min(
+        (observation for observation in on_basis if observation.value == value),
+        key=lambda o: (o.filed, o.accession),
+    )
+    if len(distinct_values) == 1 and basis == 1:
+        return chosen
+    kind = (
+        ConflictResolutionKind.STOCK_SPLIT
+        if basis != 1 or any(factor != basis for _, factor in factored)
+        else ConflictResolutionKind.PRECISION
+    )
+    superseded = tuple(
+        SupersededValue(
+            value=observation.value,
+            form=observation.form,
+            filed=observation.filed,
+            accession=observation.accession,
+            split_factor=factor,
+        )
+        for observation, factor in sorted(
+            factored, key=lambda pair: (pair[0].filed, pair[0].accession)
+        )
+        if (observation.value, factor) != (value, basis)
+    )
+    return replace(
+        chosen,
+        value=value * basis,
+        resolution=ConflictResolution(
+            kind=kind, reported_value=value, split_factor=basis, superseded=superseded
+        ),
+    )
+
+
+# --- Conflict classification (Slice 6C) --------------------------------------
+
+
+@dataclass(frozen=True)
+class _SplitEvent:
+    """A forward stock split evidenced by restated comparatives in the payload."""
+
+    ratio: int
+    last_pre_filed: date
+    first_post_filed: date
+
+
+def _trailing_zeros(value: int) -> int:
+    if value == 0:
+        return 0
+    remaining, zeros = abs(value), 0
+    while remaining % 10 == 0:
+        remaining //= 10
+        zeros += 1
+    return zeros
+
+
+def _round_to(value: Fraction, digits: int) -> int:
+    """Round half away from zero to a multiple of ``10 ** digits``."""
+    step = 10**digits
+    quotient = value / step
+    magnitude = math.floor(abs(quotient) + Fraction(1, 2))
+    return (magnitude if quotient >= 0 else -magnitude) * step
+
+
+def _same_value(coarse: int, exact: Fraction) -> bool:
+    """True when ``coarse`` equals ``exact`` or is ``exact`` re-rounded.
+
+    Re-rounding is accepted only to thousands through millions, and only to a
+    precision the coarse value's own trailing zeros can express, so the largest
+    difference ever absorbed is half a million units.
+    """
+    if coarse == exact:
+        return True
+    if coarse == 0:
+        return False
+    zeros = _trailing_zeros(coarse)
+    return any(
+        _round_to(exact, digits) == coarse
+        for digits in PRECISION_ROUNDING_DIGITS
+        if digits <= zeros
+    )
+
+
+def _agreed_value(values: set[int]) -> int | None:
+    """Return the one most precise value every other value re-rounds, else None."""
+    if len(values) == 1:
+        return next(iter(values))
+    if 0 in values:
+        return None
+    fewest = min(_trailing_zeros(value) for value in values)
+    precise = [value for value in values if _trailing_zeros(value) == fewest]
+    if len(precise) != 1:
+        return None
+    candidate = precise[0]
+    if all(_same_value(value, Fraction(candidate)) for value in values):
+        return candidate
+    return None
+
+
+def _split_ratio(values: set[int]) -> int | None:
+    """The integer forward-split ratio that explains distinct values, if any."""
+    if len(values) < 2 or min(values) <= 0:
+        return None
+    high = max(values)
+    ratio = round(Fraction(high, min(values)))
+    if not 2 <= ratio <= MAX_SPLIT_RATIO:
+        return None
+    pre = {value for value in values if round(Fraction(high, value)) == ratio}
+    post = {value for value in values if round(Fraction(high, value)) == 1}
+    if len(pre) + len(post) != len(values):
+        return None
+    pre_value, post_value = _agreed_value(pre), _agreed_value(post)
+    if pre_value is None or post_value is None:
+        return None
+    if not _same_value(pre_value, Fraction(post_value, ratio)):
+        return None
+    return ratio
+
+
+def classify_conflict_values(
+    values: set[int], *, shares: bool
+) -> ConflictResolutionKind | None:
+    """Classify distinct same-year values by value alone; None means genuine.
+
+    This is the value test the normalizer applies; resolution additionally
+    requires the filing-order evidence for splits.
+    """
+    if len(values) < 2:
+        return None
+    if _agreed_value(values) is not None:
+        return ConflictResolutionKind.PRECISION
+    if shares and _split_ratio(values) is not None:
+        return ConflictResolutionKind.STOCK_SPLIT
+    return None
+
+
+def _split_evidence(observations: list[AnnualObservation]) -> _SplitEvent | None:
+    """Return the forward split that explains one year's conflict, if any."""
+    values = {observation.value for observation in observations}
+    ratio = _split_ratio(values)
+    if ratio is None:
+        return None
+    high = max(values)
+    pre = [o for o in observations if round(Fraction(high, o.value)) == ratio]
+    post = [o for o in observations if round(Fraction(high, o.value)) == 1]
+    last_pre = max(o.filed for o in pre)
+    first_post = min(o.filed for o in post)
+    if last_pre >= first_post:
+        return None
+    return _SplitEvent(ratio, last_pre, first_post)
+
+
+def _split_events(
+    by_year: dict[int, list[AnnualObservation]],
+) -> tuple[_SplitEvent, ...]:
+    """Collect split events from every year's restatement evidence.
+
+    Evidence from different years for the same split is merged into the
+    narrowest filing interval. If evidence contradicts itself (overlapping
+    intervals with different ratios, or an empty merged interval), no split is
+    recognized at all, so every conflict stays a loud failure.
+    """
+    found = sorted(
+        (e for e in map(_split_evidence, by_year.values()) if e is not None),
+        key=lambda e: (e.last_pre_filed, e.first_post_filed),
+    )
+    merged: list[_SplitEvent] = []
+    for event in found:
+        if merged and event.last_pre_filed < merged[-1].first_post_filed:
+            previous = merged[-1]
+            if previous.ratio != event.ratio:
+                return ()
+            last_pre = max(previous.last_pre_filed, event.last_pre_filed)
+            first_post = min(previous.first_post_filed, event.first_post_filed)
+            if last_pre >= first_post:
+                return ()
+            merged[-1] = _SplitEvent(event.ratio, last_pre, first_post)
+        else:
+            merged.append(event)
+    return tuple(merged)
+
+
+def _split_factor(
+    observation: AnnualObservation, events: tuple[_SplitEvent, ...]
+) -> int | None:
+    """Cumulative split factor to the latest basis; None if the basis is unknown."""
+    factor = 1
+    for event in events:
+        if observation.filed <= event.last_pre_filed:
+            factor *= event.ratio
+        elif observation.filed < event.first_post_filed:
+            return None
+    return factor

@@ -28,10 +28,13 @@ __all__ = [
     "CanonicalFinancialHistory",
     "CanonicalMetricSpec",
     "CanonicalSeries",
+    "ConflictResolution",
+    "ConflictResolutionKind",
     "MetricInvalidError",
     "MetricKind",
     "MetricStatus",
     "MetricUnsupportedError",
+    "SupersededValue",
     "metric_spec",
 ]
 
@@ -108,6 +111,45 @@ def metric_spec(name: str) -> CanonicalMetricSpec:
         raise KeyError(f"Unknown canonical metric: {name!r}.") from None
 
 
+class ConflictResolutionKind(Enum):
+    """How a same-year conflict between reported values was resolved."""
+
+    PRECISION = "PRECISION"
+    STOCK_SPLIT = "STOCK_SPLIT"
+
+
+@dataclass(frozen=True)
+class SupersededValue:
+    """A conflicting reported value that a resolution set aside (kept for audit)."""
+
+    value: int
+    form: str | None
+    filed: date | None
+    accession: str | None
+    split_factor: int = 1
+
+
+@dataclass(frozen=True)
+class ConflictResolution:
+    """Why a canonical value was chosen among conflicting reports for one year.
+
+    ``reported_value`` is the value exactly as filed in the fact's own source
+    filing. ``split_factor`` is the cumulative stock-split factor applied to it,
+    so the canonical value equals ``reported_value * split_factor``; a factor of
+    1 means the canonical value was reported verbatim. ``superseded`` lists every
+    other distinct reported value for the year, so nothing is discarded silently.
+    """
+
+    kind: ConflictResolutionKind
+    reported_value: int
+    split_factor: int
+    superseded: tuple[SupersededValue, ...]
+
+    def __post_init__(self) -> None:
+        if self.split_factor < 1:
+            raise ValueError("A split factor must be a positive integer.")
+
+
 @dataclass(frozen=True)
 class CanonicalFact:
     """One reported annual value for one canonical metric, with source provenance.
@@ -119,6 +161,11 @@ class CanonicalFact:
     Provenance fields a provider does not supply stay ``None`` rather than being
     fabricated: ``period_start`` (duration facts only), ``form``, ``filed``, and
     ``accession``. SEC supplies all of them.
+
+    ``resolution`` is set only when the provider reported conflicting values for
+    the year and a deterministic rule (re-rounding or stock-split restatement)
+    chose this one; it records the as-filed value, any split factor applied, and
+    the superseded values.
     """
 
     metric: str
@@ -133,6 +180,7 @@ class CanonicalFact:
     form: str | None
     filed: date | None
     accession: str | None
+    resolution: ConflictResolution | None = None
 
     def __post_init__(self) -> None:
         if self.metric not in _SPECS:

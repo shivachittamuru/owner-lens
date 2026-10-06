@@ -479,7 +479,7 @@ The 5C evidence showed the SEC default `LongTermDebt` concept is the **total** i
 | ROIC FY2026 / FY2025   | not computable                           | 35.9% / 40.0%                                |
 | Feature 2 layers       | capital efficiency onward `UNAVAILABLE`  | all six layers `AVAILABLE`; overall `STRONGLY_DETERIORATING` |
 
-ADBE, V, and COST outputs are unchanged (characterization baseline byte-identical). CRM and NOW SEC behavior is unchanged. Both still fail loudly on ambiguous FY2021 restatements (`LongTermDebt` for CRM, `NetIncomeLoss` for NOW). A regression test proves MSFT-style tagging yields `total debt = LongTermDebtCurrent + LongTermDebtNoncurrent`, never `+ LongTermDebt`, and that the override does not leak to other tickers.
+ADBE, V, and COST outputs are unchanged (characterization baseline byte-identical). CRM and NOW SEC behavior is unchanged. Both still fail loudly on ambiguous FY2021 restatements (`LongTermDebt` for CRM, `NetIncomeLoss` for NOW). *(Slice 6C later resolved NOW's case as an exact re-rounding to millions; CRM's is a genuine revision and still fails.)* A regression test proves MSFT-style tagging yields `total debt = LongTermDebtCurrent + LongTermDebtNoncurrent`, never `+ LongTermDebt`, and that the override does not leak to other tickers.
 
 Re-running reconciliation retired both former MSFT explanations: they went stale, which is how the audit trail is meant to behave. It also exposed a residual SEC gap, FY2024 commercial paper (see the table above). The single-concept registry cannot sum `LongTermDebtCurrent + CommercialPaper`, so that remains a documented follow-up rather than a broadened fix.
 

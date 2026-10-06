@@ -106,10 +106,27 @@ def _fact_record(
             if kind == "duration" and obs.period_start is not None
             else None
         ),
-        concept=obs.provider_field,
+        concept=_persisted_concept(obs),
         form=obs.form,
         filed=obs.filed.isoformat(),
         accession=obs.accession,
+    )
+
+
+def _persisted_concept(obs: CanonicalFact) -> str:
+    """The source concept, annotated when the stored value is split-adjusted.
+
+    A split-adjusted value was not filed verbatim in its source accession, so
+    the row states the adjustment and the as-filed value rather than implying
+    the filing reported it. Verbatim values (including precision-resolved ones)
+    keep the plain concept name.
+    """
+    resolution = obs.resolution
+    if resolution is None or resolution.split_factor == 1:
+        return obs.provider_field
+    return (
+        f"{obs.provider_field} [split-adjusted x{resolution.split_factor} "
+        f"from reported {resolution.reported_value}]"
     )
 
 

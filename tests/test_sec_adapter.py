@@ -129,7 +129,8 @@ def _ambiguous_repurchases() -> dict[str, Any]:
     facts = adbe_facts()
     entries = facts["facts"]["us-gaap"]["PaymentsForRepurchaseOfCommonStock"]["units"]["USD"]
     conflict = dict(max(entries, key=lambda e: e["end"]))
-    conflict["val"] += 1
+    # A genuine $5M revision at the same (millions) precision: not a re-rounding.
+    conflict["val"] += 5_000_000
     conflict["filed"] = "2026-03-01"
     entries.append(conflict)
     return facts
