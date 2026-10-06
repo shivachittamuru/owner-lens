@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from owner_lens import CompanyRecord
-from owner_lens.config import OwnerLensSettings, build_local_store, load_settings
+from owner_lens.config import (
+    OwnerLensSettings,
+    build_local_store,
+    load_settings,
+    require_fmp_api_key,
+)
+from owner_lens.fmp import FmpConfigurationError
 
 _VARS = (
     "OWNER_LENS_SEC_USER_AGENT",
@@ -84,3 +90,25 @@ def test_build_local_store_creates_raw_root(tmp_path: Path) -> None:
     )
     build_local_store(settings)
     assert (tmp_path / "raw" / "sec" / "company_facts").is_dir()
+
+
+def test_fmp_api_key_is_read_from_env_file_and_hidden_from_repr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OWNER_LENS_FMP_API_KEY", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("OWNER_LENS_FMP_API_KEY= file-key \n", encoding="utf-8")
+    settings = load_settings(env_file=str(env))
+    assert settings.fmp_api_key == "file-key"
+    assert require_fmp_api_key(settings) == "file-key"
+    assert "file-key" not in repr(settings)
+
+
+def test_missing_fmp_api_key_is_a_clear_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OWNER_LENS_FMP_API_KEY", raising=False)
+    settings = load_settings(env_file=None)
+    assert settings.fmp_api_key is None
+    with pytest.raises(FmpConfigurationError, match="OWNER_LENS_FMP_API_KEY is not set"):
+        require_fmp_api_key(settings)

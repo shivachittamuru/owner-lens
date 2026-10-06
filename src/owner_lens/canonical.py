@@ -110,7 +110,16 @@ def metric_spec(name: str) -> CanonicalMetricSpec:
 
 @dataclass(frozen=True)
 class CanonicalFact:
-    """One reported annual value for one canonical metric, with source provenance."""
+    """One reported annual value for one canonical metric, with source provenance.
+
+    Sign convention: cash outflows (``capital_expenditures``, ``repurchases``,
+    ``dividends_paid``) are positive magnitudes; adapters normalize providers that
+    report them as negative numbers.
+
+    Provenance fields a provider does not supply stay ``None`` rather than being
+    fabricated: ``period_start`` (duration facts only), ``form``, ``filed``, and
+    ``accession``. SEC supplies all of them.
+    """
 
     metric: str
     value: int
@@ -121,9 +130,9 @@ class CanonicalFact:
     period_start: date | None
     provider: str
     provider_field: str
-    form: str
-    filed: date
-    accession: str
+    form: str | None
+    filed: date | None
+    accession: str | None
 
     def __post_init__(self) -> None:
         if self.metric not in _SPECS:
@@ -134,9 +143,7 @@ class CanonicalFact:
                 f"{self.metric} requires unit {spec.unit!r}, got {self.unit!r}."
             )
         if spec.kind is MetricKind.DURATION:
-            if self.period_start is None:
-                raise ValueError(f"Duration metric {self.metric} requires a period start.")
-            if self.period_start >= self.period_end:
+            if self.period_start is not None and self.period_start >= self.period_end:
                 raise ValueError(
                     f"{self.metric} period start must precede period end."
                 )

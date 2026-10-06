@@ -20,6 +20,7 @@ from owner_lens.coverage import CompanyCoverage
 from owner_lens.economic_summary import EconomicValueSummary
 from owner_lens.economic_value import EconomicValueSnapshot
 from owner_lens.owner_economics import OwnerEconomicsRow
+from owner_lens.persistence.errors import MissingProvenanceError
 from owner_lens.persistence.records import (
     AnalysisDriverRecord,
     AnalysisResultRecord,
@@ -87,6 +88,11 @@ def company_record(identity: CompanyIdentity) -> CompanyRecord:
 def _fact_record(
     cik: str, metric: str, obs: CanonicalFact, kind: str
 ) -> ReportedFactRecord:
+    if obs.form is None or obs.filed is None or obs.accession is None:
+        raise MissingProvenanceError(
+            f"{metric} FY{obs.fiscal_year} from provider {obs.provider!r} lacks the "
+            "form, filing date, and accession required by the reported-fact schema."
+        )
     return ReportedFactRecord(
         cik=cik,
         canonical_metric=metric,

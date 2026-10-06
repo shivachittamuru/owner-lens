@@ -16,6 +16,7 @@ from owner_lens.persistence.adapters import (
     reported_fact_records,
 )
 from owner_lens.persistence.errors import (
+    MissingProvenanceError,
     PersistenceError,
     SchemaVersionError,
     StorageConnectionError,
@@ -51,6 +52,7 @@ __all__ = [
     "CoverageResultRecord",
     "DerivedMetricRecord",
     "FilesystemRawSnapshotStore",
+    "MissingProvenanceError",
     "OwnerLensStore",
     "PersistenceError",
     "RawSnapshotStore",

@@ -12,15 +12,16 @@ See [docs/PRD.md](docs/PRD.md) for product context and [ROADMAP.md](ROADMAP.md) 
 OwnerLens separates data providers from its deterministic financial logic with a canonical boundary:
 
 ```text
-providers (SEC today)
-   ↓  provider adapter (owner_lens.sec_adapter)
-canonical facts (owner_lens.canonical.CanonicalFinancialHistory)
-   ↓
-OwnerLens deterministic logic (owner economics, capital efficiency, Economic Value Lens, coverage)
+SEC Company Facts ─→ owner_lens.sec_adapter ─┐
+                                            ├─→ canonical facts (CanonicalFinancialHistory)
+FMP statements    ─→ owner_lens.fmp_adapter ─┘        ↓
+                              OwnerLens deterministic logic (owner economics, capital
+                              efficiency, Economic Value Lens, coverage)
 ```
 
-Provider-specific concepts, such as SEC XBRL tags, stay above the boundary and survive below it only as
-provenance on each canonical fact. See
+SEC is the default and the regression/audit provider. FMP is an optional second provider that needs
+`OWNER_LENS_FMP_API_KEY`. Provider-specific concepts, such as SEC XBRL tags or FMP field names, stay
+above the boundary and survive below it only as provenance on each canonical fact. See
 [Feature 5: Provider Boundary](docs/feature_docs/feature_05_canonical_provider_boundary.md) for the
 model, the boundary rule, and how it is enforced.
 

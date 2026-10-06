@@ -58,7 +58,6 @@ def test_vocabulary_is_the_seventeen_owner_lens_metrics() -> None:
     ("overrides", "message"),
     [
         ({"unit": "EUR"}, "requires unit"),
-        ({"period_start": None}, "requires a period start"),
         ({"period_start": date(2026, 1, 1)}, "must precede"),
         ({"provider": ""}, "requires a provider"),
         ({"provider_field": ""}, "requires a provider field"),
@@ -79,6 +78,14 @@ def test_instant_fact_has_no_period_start() -> None:
     assert _fact("cash").period_start is None
     with pytest.raises(ValueError, match="must not have a period start"):
         _fact("cash", period_start=date(2025, 1, 1))
+
+
+def test_unsupplied_provenance_stays_none_rather_than_fabricated() -> None:
+    # Providers that do not supply period start or filing identifiers (for
+    # example FMP) leave them unset; the fact remains valid.
+    fact = _fact(period_start=None, form=None, filed=None, accession=None)
+    assert fact.period_start is None
+    assert (fact.form, fact.filed, fact.accession) == (None, None, None)
 
 
 def test_fact_is_immutable() -> None:

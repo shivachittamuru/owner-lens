@@ -9,6 +9,7 @@ with, a financial-data failure.
 from __future__ import annotations
 
 __all__ = [
+    "MissingProvenanceError",
     "PersistenceError",
     "SchemaVersionError",
     "StorageConnectionError",
@@ -35,3 +36,12 @@ class StorageWriteError(PersistenceError):
 
 class StorageReadError(PersistenceError):
     """Raised when a persistence read or query fails."""
+
+
+class MissingProvenanceError(PersistenceError):
+    """Raised when a reported fact lacks the filing provenance the schema requires.
+
+    The reported-fact schema stores form, filing date, and accession as required
+    columns. Facts from providers that do not supply them (for example FMP) are
+    not persisted until the schema deliberately supports that provenance.
+    """
