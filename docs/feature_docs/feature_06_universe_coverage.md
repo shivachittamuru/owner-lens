@@ -4,6 +4,16 @@
 
 Features 1–5 validated OwnerLens's SEC-first canonical pipeline on four to six companies. Feature 6 asks whether the same pipeline holds up across a broader universe, and what to improve next if it does not.
 
+**Status: closed.** Slice 6A measured coverage; 6B, 6C, 6D, and 6E each removed one general class of normalization error. Full coverage went from 3 to 7 of 24 companies, and the per-company override registry shrank from five entries to one. The closeout recommendation at the end of this document is to **stop normalization and proceed upward**, with the accepted limitation that unsupported companies stay explicit rather than being silently approximated.
+
+| Slice | Change | `FULL` |
+|---|---|---:|
+| 6A | Coverage discovery (no behavior change) | 3 |
+| 6B | Recency-aware concept selection | 3 |
+| 6C | Restatement- and split-aware conflict resolution | 4 |
+| 6D | Current-debt normalization and composition | 5 |
+| 6E | Canonical alternative-concept policy | **7** |
+
 ---
 
 # Slice 6A — Coverage Discovery
@@ -562,3 +572,137 @@ The survey's composite-candidate registry is now empty (the pattern it measured 
 - a generic expression engine: the registry declares one optional additive composition, not arbitrary formulas,
 - structured composition columns in the persistence schema,
 - catalog-concept adoption, operating-income policy, or any change to FMP mapping or economic formulas.
+
+---
+
+# Slice 6E — Canonical Alternative-Concept Policy
+
+## Goal
+
+Decide, on evidence, whether the recurring SEC alternatives the 6A–6D survey surfaced are economically equivalent to the canonical metrics. Adopt only the genuinely equivalent ones, and record the rest so a later reader can see they were evaluated and rejected rather than overlooked.
+
+## The register
+
+`ALTERNATIVE_CONCEPT_POLICY` in `metrics.py` holds one `AlternativeConcept` per evaluated concept, each with a verdict, a rationale, and measured evidence from the 24-company snapshots. A test asserts that only `SAFE_EQUIVALENT` concepts appear in any preference list, so a concept cannot be adopted later without changing its recorded verdict.
+
+| Concept | Metric | Verdict | Why |
+|---|---|---|---|
+| `LongTermDebtNoncurrent` | long-term debt | **SAFE_EQUIVALENT** | It states the canonical metric exactly |
+| `ProfitLoss` | net income | SEMANTICALLY_DIFFERENT | Includes noncontrolling interests |
+| `NetIncomeLossAvailableToCommonStockholdersBasic` | net income | SEMANTICALLY_DIFFERENT | Net of preferred dividends |
+| `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest` | total equity | CONTEXT_DEPENDENT | Right for ROIC, wrong for ROE |
+| `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` | cash | SEMANTICALLY_DIFFERENT | Restricted cash is not owner cash |
+
+### Adopted: `LongTermDebtNoncurrent`
+
+The canonical `long_term_debt` metric is **noncurrent** debt: total debt is `current_debt` plus this series, so the two must not overlap. `LongTermDebtNoncurrent` says exactly that. `LongTermDebt` is ambiguous — some filers use it for the balance-sheet long-term line, others for the total including the current portion.
+
+**This was a live correctness bug.** Since Slice 6D composed current debt for far more companies, pairing it with a `LongTermDebt` total double counted:
+
+| Company | `LongTermDebt` | = Noncurrent | + Current |
+|---|---:|---:|---:|
+| MSFT FY2026 | 40,294M | 31,067M | 9,227M |
+| CRM FY2026 | 14,439M | 10,439M | 4,000M |
+| NVDA FY2026 | 8,468M | 7,469M | 999M |
+| INTU FY2026 | 7,669M | 6,420M | 1,249M |
+| NKE FY2026 | 7,942M | 5,942M | 2,000M |
+| KO FY2023 | 37,507M | 35,547M | 1,960M |
+
+NVIDIA — which 6C had promoted to `FULL` — was reporting total debt of **9,467M against a filed 8,468M**, a 999M double count flowing into invested capital and ROIC. Preferring the explicit concept fixes it, and NVDA's FY2026 total debt now equals the filed total exactly. CRM (14,439M) and INTU (7,669M) likewise reconcile to their filed totals to the dollar.
+
+Adopting it also **removed the last debt overrides**: V, COST, and MSFT no longer need a per-company long-term-debt entry. Only Visa's equity override remains in the whole registry.
+
+Filers that report no noncurrent concept (ADBE, HD, LOW) keep `LongTermDebt` unchanged, and 6B recency still governs the order, so a stale noncurrent concept falls back to a current total.
+
+### Rejected: `ProfitLoss` and `NetIncomeLossAvailableToCommonStockholdersBasic`
+
+`ProfitLoss` is consolidated profit **including** noncontrolling interests. OwnerLens net income is what the owners of the parent earn, and it drives FCF per share, margins, ROE, and the Feature 2 classifications. UNH FY2025 `ProfitLoss` is 12,807M against `NetIncomeLoss` 12,056M — **6.2% higher**; CVX, PG, and KO differ too, and DE's is *lower*. Substituting it would credit owners with income they do not own.
+
+`NetIncomeLossAvailableToCommonStockholdersBasic` is net income after preferred dividends: ORCL 16,984M vs 17,087M, PG 15,754M vs 16,046M. It matches only for filers with no preferred stock.
+
+**Consequence, accepted:** CAT's `NetIncomeLoss` is stale (last FY2010) and both alternatives are semantically different, so CAT stays `FAILED`. That is the correct answer, not a gap to paper over.
+
+### Context-dependent: equity including noncontrolling interests
+
+This is the one genuinely two-sided case. ROIC's numerator (NOPAT, from operating income) is **consolidated**, so equity including noncontrolling interests is the consistent denominator. ROE's numerator is **parent** net income, so parent equity is the consistent denominator. OwnerLens uses a single `total_equity` series for both, so no single choice is right for every filer.
+
+Noncontrolling interest as a share of equity: UNH 6.0%, KO 6.1%, CVX 3.0%, PG 0.4%. At those levels the choice visibly moves ROE. The concept is therefore **not adopted generally**. Visa keeps its documented override because it reports no other equity concept and carries no noncontrolling interest at all, so for Visa the two are identical.
+
+**Consequence, accepted:** PG, CAT, and UNH stay `PARTIAL`. Resolving them properly means either deriving parent equity (equity including NCI minus `MinorityInterest`) or holding two equity series — a change to the economics, not to normalization, and out of scope here.
+
+### Rejected: restricted-cash-inclusive cash
+
+Restricted cash is not available to owners, and OwnerLens cash feeds net cash and invested capital. The broader concept is **96% larger** for INTU (9,216M vs 4,705M — customer funds) and **46% larger** for Visa (24,987M vs 17,164M); AMZN and META differ by 3.3B each. Adopting it would overstate excess cash and understate invested capital. LULU, PG, and CVX therefore stay blocked on cash.
+
+## Survey: before versus after
+
+Same 24 companies, same stored SEC snapshots (no content-hash change):
+
+| | 6D (before) | 6E (after) |
+|---|---:|---:|
+| `FULL` | 5 | **7** (+CRM, +INTU) |
+| `PARTIAL` | 12 | 10 |
+| `FAILED` | 7 | 7 |
+| Companies with a blocking input | 18 | **16** |
+| Long-term debt blocking | 3 | **0** |
+
+**Newly unblocked:** CRM and INTU reach `FULL`. Their long-term debt had been `INVALID` because the genuine FY2021 restatement 6C refuses to resolve sits in the `LongTermDebt` total; the noncurrent concept they also file is cleanly reported, so reading the correct concept resolves it legitimately rather than by relaxing 6C. PG, CAT, UNH, and PFE gained long-term debt, though each remains blocked by another metric.
+
+**Silently corrected:** NVDA, AMZN, NKE, META, CRM, INTU, and KO switched to the noncurrent concept. NVDA and AMZN had been double counting; the rest were blocked or unchanged in value.
+
+**No unexpected regression.** ADBE, V, COST, and MSFT are unchanged, the characterization baseline is byte-identical, and the 5C reconciliation verdicts are unchanged (MSFT `ELIGIBLE_WITH_EXPLAINED_DIFFERENCES`, the rest `NOT_ELIGIBLE`). One cosmetic diagnosis shift: META's noncurrent series includes a stray FY2013 zero, so the survey flags `PERIOD_ISSUE` on an otherwise correct series; META is failed on capital expenditures regardless.
+
+## Remaining blockers
+
+| Metric | Companies | Nature |
+|---|---:|---|
+| operating income | 5 | NKE, PFE, CVX, XOM do not tag `OperatingIncomeLoss`; DE reports insurance-style concepts |
+| current debt | 4 | HD, KO, LOW need a debt/lease split; NOW cannot prove absence |
+| cash | 2 | PG, LULU report only the restricted-cash-inclusive concept |
+| revenue | 2 | PFE genuine restatement; XOM successor registrant |
+
+The rest are single-company: META capital expenditures (genuine restatement), AMZN repurchases (discontinued line), ORCL pretax income, CAT net income, UNH equity.
+
+# Feature 6 closeout
+
+## Recommendation: **A. Stop normalization and proceed upward**
+
+Four normalization slices (6B recency, 6C restatements, 6D composition, 6E alternatives) moved full coverage from 3 to 7 of 24 and, more importantly, removed three classes of silent error: stale concepts masquerading as current, mechanical restatements failing as if genuine, and debt double counting. The override registry **shrank** from five company entries to one across 6D and 6E.
+
+What remains does not justify another foundational slice:
+
+* **No remaining issue is both broad and a correctness risk.** Every blocker is explicit. Nothing is silently approximated: the survey's silent-staleness count is zero, no rejected concept can be selected, and the composition and absence rules refuse rather than guess.
+* **The largest remaining group, operating income (5 companies), is not a normalization problem.** It needs a derivation (revenue minus operating costs, or a segment roll-up) with real accounting judgment per industry — exactly the "large accounting-specific complexity" that disqualifies option B.
+* **The next-largest, current debt for HD, KO, and LOW, needs an economic decision** about separating capital leases from debt, not a mapping. It affects 3 companies.
+* **The rest are single-company quirks** or genuine source revisions that OwnerLens is right to refuse.
+
+A fifth slice would buy a handful of companies at the cost of accounting-specific machinery, against a codebase whose failures are already explicit and auditable.
+
+## Accepted limitation
+
+> Unsupported companies remain explicit and are excluded or manually reviewed rather than silently approximated.
+
+Concretely: a company that cannot produce a metric reports `UNSUPPORTED`, `INVALID`, or a proven `STRUCTURALLY_ABSENT`, with the reason and the concepts tried attached. Downstream layers degrade to `PARTIAL` or refuse to run rather than substituting a near-enough concept or a fabricated zero. Screening and valuation work must therefore treat the universe as **7 fully covered, 10 partially covered, and 7 excluded** of 24, and must not silently drop the distinction.
+
+## Final coverage state
+
+| | Count | Share |
+|---|---:|---:|
+| `FULL` | 7 (ADBE, COST, MSFT, CRM, NVDA, INTU, CMG) | 29% |
+| `PARTIAL` | 10 | 42% |
+| `FAILED` | 7 | 29% |
+
+Against the 6A baseline: `FULL` 3 to 7, silent staleness 14 metrics to 0, ambiguous conflicts 13 to 3, current-debt blockers 9 to 4, long-term-debt blockers 3 to 0, and company overrides 5 to 1.
+
+## Tests
+
+`tests/test_alternative_concepts.py` (22 tests) covers, for the adopted concept: preference, no override needed, the double-count fix measured end to end, fallback for filers without it, 6B recency, 6C conflict handling, and 6D composition unchanged. For every rejected or context-dependent concept there is a regression test proving it is **not** silently adopted, including when it is the only concept available. Register-level tests assert every entry carries a verdict and evidence, and that no non-adopted concept appears in any preference list.
+
+## What Slice 6E Deliberately Did Not Build
+
+- a generic semantic ontology or concept-similarity engine,
+- operating-income derivation,
+- debt/lease separation,
+- a policy for genuine restatements,
+- parent-equity derivation or a second equity series,
+- financial-company models.

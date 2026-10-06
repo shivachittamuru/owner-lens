@@ -60,10 +60,13 @@ def test_current_debt_needs_no_per_company_override() -> None:
     assert CURRENT_DEBT.composition.components[0] == "LongTermDebtCurrent"
 
 
-def test_long_term_debt_override_for_v_and_cost() -> None:
-    assert resolve_concepts(LONG_TERM_DEBT, "V") == ("LongTermDebtNoncurrent",)
-    assert resolve_concepts(LONG_TERM_DEBT, "COST") == ("LongTermDebtNoncurrent",)
-    assert resolve_concepts(LONG_TERM_DEBT, "ADBE") == ("LongTermDebt",)
+def test_long_term_debt_prefers_the_noncurrent_concept_without_overrides() -> None:
+    # Slice 6E: the canonical metric is noncurrent debt, so the explicit concept
+    # is preferred for every filer and no company override is needed.
+    assert LONG_TERM_DEBT.default_concepts == ("LongTermDebtNoncurrent", "LongTermDebt")
+    assert LONG_TERM_DEBT.overrides == {}
+    for ticker in ("V", "COST", "MSFT", "ADBE"):
+        assert resolve_concepts(LONG_TERM_DEBT, ticker) == LONG_TERM_DEBT.default_concepts
 
 
 def test_total_equity_override_only_for_visa() -> None:
@@ -75,8 +78,9 @@ def test_total_equity_override_only_for_visa() -> None:
 
 
 def test_resolution_canonicalizes_ticker_case_and_whitespace() -> None:
-    assert resolve_concepts(LONG_TERM_DEBT, "  v ") == ("LongTermDebtNoncurrent",)
-    assert resolve_concepts(LONG_TERM_DEBT, "cost") == ("LongTermDebtNoncurrent",)
+    expected = ("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",)
+    assert resolve_concepts(TOTAL_EQUITY, "  v ") == expected
+    assert resolve_concepts(TOTAL_EQUITY, "cost") == ("StockholdersEquity",)
 
 
 def test_resolution_is_deterministic() -> None:
@@ -98,9 +102,10 @@ def test_every_override_is_scoped_and_excludes_adobe() -> None:
             assert concepts, f"{definition.name} override for {ticker} is empty"
 
 
-def test_only_debt_and_equity_carry_overrides() -> None:
+def test_only_equity_still_carries_an_override() -> None:
+    # 6D removed the current-debt overrides and 6E the long-term-debt overrides.
     with_overrides = {d.name for d in ALL_DEFINITIONS if d.overrides}
-    assert with_overrides == {"long_term_debt", "total_equity"}
+    assert with_overrides == {"total_equity"}
 
 
 def test_only_current_debt_declares_a_composition() -> None:

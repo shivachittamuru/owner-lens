@@ -13,12 +13,147 @@ overrides, so its concept selection is unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Final
 
 from owner_lens._annual import TARGET_UNIT
 from owner_lens.canonical import MetricKind
 
 SHARES_UNIT: Final = "shares"
+
+
+class ConceptDecision(Enum):
+    """Verdict on a recurring SEC alternative concept (Slice 6E).
+
+    Only ``SAFE_EQUIVALENT`` concepts are adopted automatically. The rest are
+    recorded so a future reader sees they were evaluated and rejected on
+    evidence, not overlooked.
+    """
+
+    SAFE_EQUIVALENT = "SAFE_EQUIVALENT"
+    SEMANTICALLY_DIFFERENT = "SEMANTICALLY_DIFFERENT"
+    CONTEXT_DEPENDENT = "CONTEXT_DEPENDENT"
+    REJECT = "REJECT"
+
+
+@dataclass(frozen=True)
+class AlternativeConcept:
+    """One evaluated alternative SEC concept, its verdict, and the evidence."""
+
+    metric: str
+    concept: str
+    decision: ConceptDecision
+    rationale: str
+    evidence: str
+
+    @property
+    def adopted(self) -> bool:
+        return self.decision is ConceptDecision.SAFE_EQUIVALENT
+
+
+# Slice 6E evaluated the recurring alternatives the 6A-6D survey surfaced.
+# Measurements are from the 24-company survey snapshots of 2026-10-06.
+ALTERNATIVE_CONCEPT_POLICY: Final[tuple[AlternativeConcept, ...]] = (
+    AlternativeConcept(
+        metric="long_term_debt",
+        concept="LongTermDebtNoncurrent",
+        decision=ConceptDecision.SAFE_EQUIVALENT,
+        rationale=(
+            "The canonical metric is noncurrent debt, the partner of current_debt; "
+            "total debt is their sum. LongTermDebtNoncurrent states exactly that. "
+            "LongTermDebt is ambiguous: some filers use it for the noncurrent line "
+            "and others for the total including the current portion, which double "
+            "counts when added to current debt. Preferring the explicit concept is "
+            "both safer and more precise, and it replaces three company overrides."
+        ),
+        evidence=(
+            "LongTermDebt equals LongTermDebtNoncurrent + LongTermDebtCurrent for "
+            "MSFT (40,294 = 31,067 + 9,227), CRM (14,439 = 10,439 + 4,000), NVDA "
+            "(8,468 = 7,469 + 999), INTU (7,669 = 6,420 + 1,249), NKE (7,942 = "
+            "5,942 + 2,000), and KO (37,507 = 35,547 + 1,960). META reports both as "
+            "58,744 (no current portion). ADBE, HD, and LOW report no noncurrent "
+            "concept, so they keep LongTermDebt unchanged."
+        ),
+    ),
+    AlternativeConcept(
+        metric="net_income",
+        concept="ProfitLoss",
+        decision=ConceptDecision.SEMANTICALLY_DIFFERENT,
+        rationale=(
+            "ProfitLoss is consolidated profit including noncontrolling interests. "
+            "OwnerLens net income is the earnings attributable to the owners of the "
+            "parent, and it drives FCF per share, margins, ROE, and the Feature 2 "
+            "classifications. Substituting a consolidated figure would silently "
+            "credit owners with income they do not own."
+        ),
+        evidence=(
+            "UNH FY2025 ProfitLoss 12,807M vs NetIncomeLoss 12,056M (+6.2%); CVX "
+            "12,485M vs 12,299M; PG 16,144M vs 16,046M; DE 4,998M vs 5,027M "
+            "(lower). Identical only where there is no noncontrolling interest "
+            "(V, COST)."
+        ),
+    ),
+    AlternativeConcept(
+        metric="net_income",
+        concept="NetIncomeLossAvailableToCommonStockholdersBasic",
+        decision=ConceptDecision.SEMANTICALLY_DIFFERENT,
+        rationale=(
+            "This concept is net income after preferred dividends. It matches net "
+            "income only for filers with no preferred stock, so adopting it would "
+            "change the metric's definition for the filers that have some."
+        ),
+        evidence=(
+            "ORCL FY2026 16,984M vs NetIncomeLoss 17,087M; PG 15,754M vs 16,046M; "
+            "LOW 6,636M vs 6,654M. Equal for PFE."
+        ),
+    ),
+    AlternativeConcept(
+        metric="total_equity",
+        concept="StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        decision=ConceptDecision.CONTEXT_DEPENDENT,
+        rationale=(
+            "Equity including noncontrolling interests is the right denominator for "
+            "ROIC, whose NOPAT is consolidated, but the wrong one for ROE, whose "
+            "numerator is parent net income. OwnerLens uses one equity series for "
+            "both, so adopting this concept generally would understate ROE wherever "
+            "the noncontrolling interest is material. Visa keeps a documented "
+            "override because it reports no other equity concept and carries no "
+            "noncontrolling interest at all."
+        ),
+        evidence=(
+            "Noncontrolling interest as a share of equity: UNH 5,980M of 100,090M "
+            "(6.0%), KO 2,106M of 34,275M (6.1%), CVX 5,726M of 192,176M (3.0%), PG "
+            "230M of 54,311M (0.4%). V reports no MinorityInterest; COST reports "
+            "both concepts as identical."
+        ),
+    ),
+    AlternativeConcept(
+        metric="cash",
+        concept="CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        decision=ConceptDecision.SEMANTICALLY_DIFFERENT,
+        rationale=(
+            "Restricted cash is not available to owners. OwnerLens cash feeds net "
+            "cash and invested capital, so including customer funds and other "
+            "restricted balances would overstate excess cash and understate "
+            "invested capital, sometimes by a large factor."
+        ),
+        evidence=(
+            "INTU FY2026 9,216M vs CashAndCashEquivalentsAtCarryingValue 4,705M "
+            "(+96%, customer funds); V 24,987M vs 17,164M (+46%); AMZN 90,106M vs "
+            "86,810M; META 39,100M vs 35,873M. Identical where there is no "
+            "restricted cash (ADBE, COST, MSFT, CRM, NVDA, NKE)."
+        ),
+    ),
+)
+
+
+def adopted_alternatives(metric: str) -> tuple[str, ...]:
+    """Concepts adopted for a metric by the Slice 6E policy, in evaluation order."""
+    return tuple(
+        entry.concept
+        for entry in ALTERNATIVE_CONCEPT_POLICY
+        if entry.metric == metric and entry.adopted
+    )
 
 
 @dataclass(frozen=True)
@@ -192,20 +327,17 @@ CURRENT_DEBT: Final = CanonicalMetricDefinition(
     ("DebtCurrent",),
     composition=_CURRENT_DEBT_COMPOSITION,
 )
+# The canonical metric is noncurrent debt: total debt is current_debt plus this
+# series, so the two must not overlap. LongTermDebtNoncurrent says exactly that
+# and is preferred (Slice 6E). LongTermDebt is the fallback for filers that
+# report no noncurrent concept; for them it is the balance-sheet long-term line
+# (ADBE, HD, LOW). Where a filer uses LongTermDebt for the total including the
+# current portion, the preferred concept wins first, so nothing double counts.
 LONG_TERM_DEBT: Final = CanonicalMetricDefinition(
     "long_term_debt",
     MetricKind.INSTANT,
     TARGET_UNIT,
-    ("LongTermDebt",),
-    overrides={
-        # LongTermDebtNoncurrent excludes the current portion, so pairing it with
-        # the current-debt policy avoids double counting. MSFT's LongTermDebt
-        # includes the current portion (FY2025: 43,151M = 40,152M + 2,999M), so
-        # it uses the same pair (verified in Slice 5C reconciliation).
-        "V": ("LongTermDebtNoncurrent",),
-        "COST": ("LongTermDebtNoncurrent",),
-        "MSFT": ("LongTermDebtNoncurrent",),
-    },
+    ("LongTermDebtNoncurrent", "LongTermDebt"),
 )
 TOTAL_ASSETS: Final = CanonicalMetricDefinition(
     "total_assets", MetricKind.INSTANT, TARGET_UNIT, ("Assets",)
@@ -223,6 +355,7 @@ TOTAL_EQUITY: Final = CanonicalMetricDefinition(
 )
 
 __all__ = [
+    "ALTERNATIVE_CONCEPT_POLICY",
     "CAPITAL_EXPENDITURES",
     "CASH",
     "CURRENT_DEBT",
@@ -241,8 +374,11 @@ __all__ = [
     "STOCK_BASED_COMPENSATION",
     "TOTAL_ASSETS",
     "TOTAL_EQUITY",
+    "AlternativeConcept",
     "CanonicalMetricDefinition",
+    "ConceptDecision",
     "MetricComposition",
     "MetricKind",
+    "adopted_alternatives",
     "resolve_concepts",
 ]

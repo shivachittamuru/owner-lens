@@ -469,7 +469,7 @@ Every compared fact either matches, rounds, or is explained. No `REVIEW` rows an
 
 ## Follow-up: Microsoft SEC debt mapping (fixed)
 
-The 5C evidence showed the SEC default `LongTermDebt` concept is the **total** including the current portion for Microsoft, and that Microsoft reports no `DebtCurrent`. MSFT now uses the same `LongTermDebtCurrent`/`LongTermDebtNoncurrent` replacement override as Visa and Costco, added through the Feature 3 metric registry with no ticker logic in calculations. *(Slice 6D removed the current-debt half of all three overrides: current debt now resolves through a shared component policy, so V, COST, and MSFT need no per-company current-debt entry. The long-term-debt overrides remain.)*
+The 5C evidence showed the SEC default `LongTermDebt` concept is the **total** including the current portion for Microsoft, and that Microsoft reports no `DebtCurrent`. MSFT now uses the same `LongTermDebtCurrent`/`LongTermDebtNoncurrent` replacement override as Visa and Costco, added through the Feature 3 metric registry with no ticker logic in calculations. *(Slice 6D removed the current-debt half of all three overrides, and Slice 6E the long-term-debt half: both now resolve through shared policy, so V, COST, and MSFT carry no debt override at all.)*
 
 | MSFT (SEC path)        | Before                                   | After                                        |
 |------------------------|------------------------------------------|----------------------------------------------|
