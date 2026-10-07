@@ -2,8 +2,9 @@
 
 OwnerLens turns raw SEC filings into trustworthy, owner-oriented financial intelligence. It retrieves SEC
 Company Facts, normalizes them into canonical facts with full provenance, derives deterministic
-owner-economics and capital-efficiency metrics, produces an Economic Value Lens, and screens a company
-universe for research priority — all as reproducible, testable Python.
+owner-economics and capital-efficiency metrics, produces an Economic Value Lens, screens a company
+universe for research priority, and presents all of it in a local research workbench — all as
+reproducible, testable Python.
 
 See [docs/PRD.md](docs/PRD.md) for product context and [ROADMAP.md](ROADMAP.md) for the slice history.
 
@@ -77,6 +78,37 @@ Run the checks:
 uv run pytest -q
 uv run ruff check .
 uv run mypy src
+```
+
+## Using OwnerLens
+
+One command opens everything:
+
+```powershell
+uv run owner-lens workbench
+```
+
+The workbench is a local Streamlit interface over the persisted store, with five
+views: **Overview** (coverage, the opportunity funnel, the research queue),
+**Screener** (the filterable screening table), **Company** (owner economics,
+capital efficiency, capital allocation, Economic Value Lens, screening
+dimensions), **Compare** (2–5 companies side by side), and **Data Quality**
+(exactly which metrics are missing and why).
+
+It reads persisted data only — opening or navigating it never calls SEC or FMP.
+To add a company, or refresh one, use the CLI and then reload in the sidebar:
+
+```powershell
+uv run owner-lens ingest ADBE                        # fetch and persist
+uv run owner-lens workbench --db data/universe_6a.db # browse another store
+```
+
+See [Feature 7D: Workbench](docs/feature_docs/feature_07d_workbench.md). The
+other commands remain available for scripting:
+
+```powershell
+uv run owner-lens show ADBE         # persisted summary, coverage, screening
+uv run owner-lens screen --detail   # ranked screen with full justifications
 ```
 
 ## Local persistence

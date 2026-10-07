@@ -27,6 +27,15 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.4",
 ]
+# The local research workbench (Feature 7D). Kept out of the runtime
+# dependencies so importing owner_lens never pulls in a UI stack, and installed
+# by default so `uv sync` is enough to launch it.
+workbench = [
+    "streamlit>=1.41.0",
+]
+
+[tool.uv]
+default-groups = ["dev", "workbench"]
 
 [[tool.uv.index]]
 url = "https://packagefeedproxy.microsoft.io/pypi/simple"

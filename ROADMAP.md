@@ -31,3 +31,9 @@ v0.6 — Opportunity Screening
         survival gates + rule-table buckets
         coverage-aware ceilings
         structured screening reasons
+
+v0.7 — Research Workbench
+        one local Streamlit entry point
+        overview, screener, company, compare, data quality
+        persisted-data only, no network on open
+        obvious seams for valuation and portfolio layers

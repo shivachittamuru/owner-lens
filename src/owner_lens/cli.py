@@ -4,16 +4,18 @@ The console entry point ``owner-lens`` delegates to :func:`main`, which dispatch
 argparse subcommands. ``ingest`` is the primary workflow (retrieve + persist one
 company); ``show`` reads the latest persisted summary/coverage from storage with
 no network call; ``screen`` runs the Feature 7 opportunity screen over already
-persisted companies, also with no network call; ``inspect`` preserves the pre-4B
-raw-facts view. This module owns argument parsing, settings loading, dependency
-composition, result formatting, and exit codes; the ingestion orchestration
-itself lives in :mod:`owner_lens.ingestion`.
+persisted companies, also with no network call; ``workbench`` launches the
+Feature 7D local research UI over the same persisted data; ``inspect`` preserves
+the pre-4B raw-facts view. This module owns argument parsing, settings loading,
+dependency composition, result formatting, and exit codes; the ingestion
+orchestration itself lives in :mod:`owner_lens.ingestion`.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -79,6 +81,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     inspect = sub.add_parser("inspect", help="Print a raw Company Facts overview.")
     inspect.add_argument("ticker", help="SEC-resolvable ticker symbol.")
+
+    workbench = sub.add_parser(
+        "workbench", help="Launch the local research workbench in a browser."
+    )
+    workbench.add_argument(
+        "--db",
+        help="Persisted store to open (default: OWNER_LENS_DB_PATH).",
+    )
+    workbench.add_argument(
+        "--port", type=int, default=8501, help="Port to serve the workbench on."
+    )
+    workbench.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open a browser window automatically.",
+    )
 
     return parser
 
@@ -325,6 +343,59 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_workbench(args: argparse.Namespace) -> int:
+    """Launch the Streamlit workbench against the persisted store.
+
+    Streamlit owns its own process lifecycle, so this delegates to its CLI with
+    the app module resolved from the installed package rather than from a
+    hard-coded path. The store is passed through the environment, which is the
+    same configuration contract every other command uses.
+    """
+    try:
+        from streamlit.web import cli as streamlit_cli
+    except ImportError:
+        print(
+            "The workbench needs Streamlit, which is not installed. Run 'uv sync' "
+            "(it is in the 'workbench' dependency group) and try again.",
+            file=sys.stderr,
+        )
+        return 2
+
+    app_path = Path(__file__).resolve().parent / "workbench" / "app.py"
+    if not app_path.is_file():
+        print(f"Workbench application not found at {app_path}.", file=sys.stderr)
+        return 1
+
+    argv = [
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(args.port),
+        "--server.headless",
+        "true" if args.no_browser else "false",
+    ]
+    previous_argv, sys.argv = sys.argv, argv
+    previous_db = os.environ.get("OWNER_LENS_DB_PATH")
+    if args.db:
+        os.environ["OWNER_LENS_DB_PATH"] = args.db
+    try:
+        streamlit_cli.main(prog_name="streamlit")
+    except SystemExit as exit_signal:
+        code = exit_signal.code
+        return code if isinstance(code, int) else (0 if code is None else 1)
+    finally:
+        # Both the argument vector and the environment are process-wide, so an
+        # in-process caller must see them exactly as it left them.
+        sys.argv = previous_argv
+        if args.db:
+            if previous_db is None:
+                os.environ.pop("OWNER_LENS_DB_PATH", None)
+            else:
+                os.environ["OWNER_LENS_DB_PATH"] = previous_db
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch a subcommand; return an exit code."""
     parser = _build_parser()
@@ -337,5 +408,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_screen(args)
     if args.command == "inspect":
         return _cmd_inspect(args)
+    if args.command == "workbench":
+        return _cmd_workbench(args)
     parser.error(f"unknown command: {args.command}")
     return 2
