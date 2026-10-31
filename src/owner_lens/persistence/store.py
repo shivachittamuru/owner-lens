@@ -49,6 +49,70 @@ from owner_lens.persistence.records import (
 
 __all__ = ["OwnerLensStore", "SqliteStore"]
 
+_AGGREGATE_REFRESH_DATASETS = {
+    "annual_statements": (
+        "annual_income_statement",
+        "annual_balance_sheet_statement",
+        "annual_cash_flow_statement",
+    ),
+    "quarterly_statements": (
+        "quarterly_income_statement",
+        "quarterly_balance_sheet_statement",
+        "quarterly_cash_flow_statement",
+    ),
+    "analyst_estimates": (
+        "annual_analyst_estimates",
+        "quarterly_analyst_estimates",
+    ),
+}
+
+
+def _resolve_aggregate_refresh_states(
+    records: tuple[SecurityRefreshStateRecord, ...],
+) -> tuple[SecurityRefreshStateRecord, ...]:
+    by_key = {(record.security_id, record.dataset): record for record in records}
+    resolved: list[SecurityRefreshStateRecord] = []
+    for record in records:
+        children = _AGGREGATE_REFRESH_DATASETS.get(record.dataset)
+        if children is None:
+            resolved.append(record)
+            continue
+        child_records = [by_key.get((record.security_id, child)) for child in children]
+        statuses = [
+            child.status if child is not None else "PENDING"
+            for child in child_records
+        ]
+        if "FAILED" in statuses:
+            status = "FAILED"
+        elif "RUNNING" in statuses:
+            status = "RUNNING"
+        elif len(set(statuses)) == 1:
+            status = statuses[0]
+        else:
+            status = "PARTIAL"
+        attempts = [
+            child.last_attempt_at
+            for child in child_records
+            if child is not None and child.last_attempt_at is not None
+        ]
+        details = [
+            f"{name}: {child.status if child is not None else 'PENDING'}"
+            + (f" ({child.last_error})" if child is not None and child.last_error else "")
+            for name, child in zip(children, child_records, strict=True)
+            if child is None or child.status != "SUCCEEDED"
+        ]
+        resolved.append(
+            SecurityRefreshStateRecord(
+                security_id=record.security_id,
+                dataset=record.dataset,
+                status=status,
+                last_attempt_at=max(attempts) if attempts else None,
+                last_error="; ".join(details) if details else None,
+            )
+        )
+    return tuple(resolved)
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
@@ -1277,20 +1341,31 @@ class SqliteStore:
             rows = self._conn.execute(query, params).fetchall()
         except sqlite3.Error as exc:
             raise StorageReadError(f"Cannot list security refresh state: {exc}") from exc
-        return tuple(
-            SecurityRefreshStateRecord(
-                security_id=int(row["security_id"]),
-                dataset=row["dataset"],
-                status=row["status"],
-                last_attempt_at=row["last_attempt_at"],
-                last_error=row["last_error"],
+        return _resolve_aggregate_refresh_states(
+            tuple(
+                SecurityRefreshStateRecord(
+                    security_id=int(row["security_id"]),
+                    dataset=row["dataset"],
+                    status=row["status"],
+                    last_attempt_at=row["last_attempt_at"],
+                    last_error=row["last_error"],
+                )
+                for row in rows
             )
-            for row in rows
         )
 
     def get_security_refresh_state(
         self, security_id: int, dataset: str
     ) -> SecurityRefreshStateRecord | None:
+        if dataset in _AGGREGATE_REFRESH_DATASETS:
+            return next(
+                (
+                    state
+                    for state in self.list_security_refresh_state(security_id)
+                    if state.dataset == dataset
+                ),
+                None,
+            )
         try:
             row = self._conn.execute(
                 "SELECT security_id, dataset, status, last_attempt_at, last_error "
@@ -1625,7 +1700,8 @@ class SqliteStore:
         self, security_ids: Sequence[int] | None = None
     ) -> dict[str, dict[str, int]]:
         query = (
-            "SELECT dataset, status, COUNT(*) AS count FROM security_refresh_state"
+            "SELECT security_id, dataset, status, last_attempt_at, last_error "
+            "FROM security_refresh_state"
         )
         params: tuple[int, ...] = ()
         if security_ids is not None:
@@ -1634,12 +1710,23 @@ class SqliteStore:
             placeholders = ",".join("?" for _ in security_ids)
             query += f" WHERE security_id IN ({placeholders})"
             params = tuple(security_ids)
-        query += " GROUP BY dataset, status ORDER BY dataset, status"
+        query += " ORDER BY security_id, dataset"
         try:
             rows = self._conn.execute(query, params).fetchall()
         except sqlite3.Error as exc:
             raise StorageReadError(f"Cannot summarize evidence status: {exc}") from exc
         result: dict[str, dict[str, int]] = {}
-        for row in rows:
-            result.setdefault(row["dataset"], {})[row["status"]] = int(row["count"])
+        records = tuple(
+            SecurityRefreshStateRecord(
+                security_id=int(row["security_id"]),
+                dataset=row["dataset"],
+                status=row["status"],
+                last_attempt_at=row["last_attempt_at"],
+                last_error=row["last_error"],
+            )
+            for row in rows
+        )
+        for record in _resolve_aggregate_refresh_states(records):
+            states = result.setdefault(record.dataset, {})
+            states[record.status] = states.get(record.status, 0) + 1
         return result

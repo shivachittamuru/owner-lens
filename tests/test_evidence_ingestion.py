@@ -483,3 +483,111 @@ def test_refresh_rejects_nonmember_symbol_without_live_requests(tmp_path: Path) 
         refresh_sp500_evidence(client=client, store=store, tickers=("NOTMEMBER",))
     assert client.calls == []
     store.close()
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "children"),
+    [
+        (
+            "annual_statements",
+            (
+                "annual_income_statement",
+                "annual_balance_sheet_statement",
+                "annual_cash_flow_statement",
+            ),
+        ),
+        (
+            "quarterly_statements",
+            (
+                "quarterly_income_statement",
+                "quarterly_balance_sheet_statement",
+                "quarterly_cash_flow_statement",
+            ),
+        ),
+        (
+            "analyst_estimates",
+            ("annual_analyst_estimates", "quarterly_analyst_estimates"),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("first_status", "other_status", "expected"),
+    [
+        ("SUCCEEDED", "SUCCEEDED", "SUCCEEDED"),
+        ("UNSUPPORTED", "UNSUPPORTED", "UNSUPPORTED"),
+        ("PARTIAL", "PARTIAL", "PARTIAL"),
+        ("PENDING", "PENDING", "PENDING"),
+        ("FAILED", "SUCCEEDED", "FAILED"),
+        ("UNSUPPORTED", "SUCCEEDED", "PARTIAL"),
+        ("RUNNING", "SUCCEEDED", "RUNNING"),
+        ("PENDING", "SUCCEEDED", "PARTIAL"),
+        (None, "SUCCEEDED", "PARTIAL"),
+        (None, None, "PENDING"),
+        ("FAILED", "RUNNING", "FAILED"),
+    ],
+)
+def test_legacy_aggregate_refresh_state_is_derived_without_writes(
+    tmp_path: Path,
+    aggregate: str,
+    children: tuple[str, ...],
+    first_status: str | None,
+    other_status: str | None,
+    expected: str,
+) -> None:
+    store = _store(tmp_path)
+    attempted_at = "2026-10-31T00:00:00+00:00"
+    store.update_security_refresh_state(
+        1, aggregate, status="PENDING", updated_at="2026-01-01T00:00:00+00:00"
+    )
+    for index, child in enumerate(children):
+        status = first_status if index == 0 else other_status
+        if status is None:
+            store._conn.execute(
+                "DELETE FROM security_refresh_state WHERE security_id = 1 AND dataset = ?",
+                (child,),
+            )
+        else:
+            store.update_security_refresh_state(
+                1,
+                child,
+                status=status,
+                updated_at=attempted_at,
+                last_error="fixture failure" if status == "FAILED" else None,
+            )
+    store._conn.commit()
+    before = store._conn.total_changes
+
+    state = store.get_security_refresh_state(1, aggregate)
+    assert state is not None
+    assert state.status == expected
+    listed = next(
+        item for item in store.list_security_refresh_state() if item.dataset == aggregate
+    )
+    assert listed == state
+    assert store.list_evidence_status_counts()[aggregate] == {expected: 1}
+    assert store.list_evidence_status_counts([1])[aggregate] == {expected: 1}
+    assert store.list_evidence_status_counts([999]) == {}
+    assert store.list_evidence_status_counts([]) == {}
+    assert store._conn.total_changes == before
+    assert store._conn.execute(
+        "SELECT status FROM security_refresh_state WHERE security_id = 1 AND dataset = ?",
+        (aggregate,),
+    ).fetchone()[0] == "PENDING"
+    if first_status is None and other_status is None:
+        assert state.last_attempt_at is None
+    else:
+        assert state.last_attempt_at == attempted_at
+    if expected == "SUCCEEDED":
+        assert state.last_error is None
+    elif expected == "FAILED":
+        assert "fixture failure" in (state.last_error or "")
+
+    for child in children:
+        store.update_security_refresh_state(
+            1, child, status="SUCCEEDED", updated_at=attempted_at
+        )
+    completed = store.get_security_refresh_state(1, aggregate)
+    assert completed is not None
+    assert completed.status == "SUCCEEDED"
+    assert completed.last_error is None
+    store.close()

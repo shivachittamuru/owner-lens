@@ -96,3 +96,12 @@ The offline coverage command summarizes `PENDING`, `RUNNING`, `SUCCEEDED`,
 `PARTIAL`, `FAILED`, and `UNSUPPORTED` states by dataset. A failed annual
 statement refresh can retain a prior successfully persisted evidence snapshot;
 the failure state still records that the latest attempt did not complete.
+
+Legacy `annual_statements`, `quarterly_statements`, and `analyst_estimates`
+aggregate rows are resolved from their component states on read, without
+refetching evidence or changing stored refresh state. Any failed child makes
+the aggregate `FAILED`; otherwise an active child makes it `RUNNING`. All
+succeeded, unsupported, or pending children retain that respective status.
+Other combinations are `PARTIAL`, with missing children treated as pending.
+Individual state reads, state lists, and offline coverage counts use the same
+resolution rule.
