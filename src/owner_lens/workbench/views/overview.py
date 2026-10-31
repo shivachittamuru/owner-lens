@@ -32,7 +32,7 @@ def render(
     """Render the landing page from counts the data layer derived dynamically."""
     st.title("Overview")
     st.caption(
-        "Research priority derived from persisted filings. Nothing here is "
+        "Research priority derived from persisted annual accounting evidence. Nothing here is "
         "investment advice, and no price or valuation input is involved."
     )
 
@@ -47,7 +47,7 @@ def render(
         st.divider()
         st.subheader("Tracked but not screenable")
         st.caption(
-            "These companies are in the store without a readable raw snapshot, so "
+            "These companies are in the store without a usable persisted annual history, so "
             "nothing can be derived for them. They are listed rather than dropped."
         )
         st.dataframe(

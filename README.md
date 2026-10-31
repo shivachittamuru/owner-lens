@@ -1,4 +1,9 @@
-# OwnerLens
+---
+title: OwnerLens
+description: "Local owner-oriented financial evidence, economics, screening, and research."
+---
+
+## OwnerLens
 
 OwnerLens turns raw SEC filings into trustworthy, owner-oriented financial intelligence. It retrieves SEC
 Company Facts, normalizes them into canonical facts with full provenance, derives deterministic
@@ -47,6 +52,7 @@ structured reasons.
 ```powershell
 uv run owner-lens screen                      # every persisted company, no network call
 uv run owner-lens screen ADBE MSFT --detail   # full per-company justification
+uv run owner-lens screen --provider fmp       # current persisted S&P 500 annual histories
 uv run python scripts/screen_universe.py      # the 24-company universe
 ```
 
@@ -86,6 +92,7 @@ One command opens everything:
 
 ```powershell
 uv run owner-lens workbench
+uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
 The workbench is a local Streamlit interface over the persisted store, with five
@@ -110,6 +117,13 @@ other commands remain available for scripting:
 uv run owner-lens show ADBE         # persisted summary, coverage, screening
 uv run owner-lens screen --detail   # ranked screen with full justifications
 ```
+
+For the persisted S&P 500 universe, explicitly select FMP in the CLI or the
+workbench sidebar. SEC remains the default and authoritative filed-fact source.
+FMP annual histories remain isolated from SEC. Quarterly statements, EOD prices,
+and Market Expectations are separate Company-page evidence, not annual screening
+inputs. See [Feature 8A3](docs/feature_docs/feature_08a3_universe_workbench.md)
+for the offline workflow and coverage inspection.
 
 ## Local persistence
 

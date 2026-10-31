@@ -689,21 +689,39 @@ def test_the_workbench_command_restores_argv_and_the_environment(
     def fake_main(prog_name: str | None = None) -> None:
         captured["argv"] = list(_sys.argv)
         captured["db"] = os.environ.get("OWNER_LENS_DB_PATH")
+        captured["provider"] = os.environ.get("OWNER_LENS_WORKBENCH_PROVIDER")
 
     _install_fake_streamlit_cli(monkeypatch, fake_main)
     monkeypatch.delenv("OWNER_LENS_DB_PATH", raising=False)
+    monkeypatch.setenv("OWNER_LENS_WORKBENCH_PROVIDER", "sec")
     argv_before = list(_sys.argv)
 
     db = str(tmp_path / "other.db")
-    assert cli_main(["workbench", "--db", db, "--port", "8777", "--no-browser"]) == 0
+    assert (
+        cli_main(
+            [
+                "workbench",
+                "--db",
+                db,
+                "--provider",
+                "fmp",
+                "--port",
+                "8777",
+                "--no-browser",
+            ]
+        )
+        == 0
+    )
 
     assert captured["db"] == db
+    assert captured["provider"] == "fmp"
     assert "run" in captured["argv"]
     assert captured["argv"][2].endswith("app.py")
     assert "8777" in captured["argv"]
     assert "--server.headless" in captured["argv"]
     assert _sys.argv == argv_before
     assert "OWNER_LENS_DB_PATH" not in os.environ
+    assert os.environ["OWNER_LENS_WORKBENCH_PROVIDER"] == "sec"
 
 
 def test_the_workbench_command_restores_a_preexisting_store_setting(
@@ -719,9 +737,7 @@ def test_the_workbench_command_restores_a_preexisting_store_setting(
     assert os.environ["OWNER_LENS_DB_PATH"] == "original.db"
 
 
-def _install_fake_streamlit_cli(
-    monkeypatch: pytest.MonkeyPatch, main: Any
-) -> None:
+def _install_fake_streamlit_cli(monkeypatch: pytest.MonkeyPatch, main: Any) -> None:
     """Replace Streamlit's CLI so the command can be exercised without a server."""
     import sys as _sys
     import types
@@ -764,6 +780,8 @@ class _BlockStreamlit:
     def find_module(self, fullname: str, path: object = None) -> None:
         return None
 
-    def find_spec(self, fullname: str, path: object = None, target: object = None) -> None:
+    def find_spec(
+        self, fullname: str, path: object = None, target: object = None
+    ) -> None:
         if fullname.startswith("streamlit"):
             raise ImportError(f"{fullname} must not be imported by the data layer")

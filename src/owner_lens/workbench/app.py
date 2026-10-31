@@ -10,6 +10,8 @@ Launch it with ``uv run owner-lens workbench``.
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 from owner_lens.canonical import CanonicalDataError
@@ -46,6 +48,15 @@ PAGES = ("Overview", "Screener", "Company", "Compare", "Data Quality")
 def main() -> None:
     """Render the workbench."""
     st.set_page_config(page_title="OwnerLens Workbench", page_icon="🔎", layout="wide")
+    provider = st.sidebar.selectbox(
+        "Evidence provider",
+        options=("sec", "fmp"),
+        index=1 if os.environ.get("OWNER_LENS_WORKBENCH_PROVIDER") == "fmp" else 0,
+        format_func=lambda value: (
+            "SEC (default)" if value == "sec" else "FMP · S&P 500"
+        ),
+        key="provider",
+    )
 
     # The company list is read fresh every run rather than cached, so a
     # re-ingested company's new content hash takes effect immediately and
@@ -55,7 +66,7 @@ def main() -> None:
     try:
         with open_run_source() as source:
             db_path, raw_data_path = source.db_path, source.raw_data_path
-            companies = load_persisted_companies(source)
+            companies = load_persisted_companies(source, provider)
     except (PersistenceError, OSError) as exc:
         st.title("OwnerLens Workbench")
         st.error(
@@ -65,7 +76,7 @@ def main() -> None:
         )
         return
 
-    usable = tuple(c for c in companies if c.available)
+    usable = tuple(c for c in companies if c.available or provider == "fmp")
     prints = fingerprint(companies)
 
     page = _sidebar(db_path, raw_data_path, companies, usable)
@@ -73,13 +84,24 @@ def main() -> None:
     if not companies:
         st.title("OwnerLens Workbench")
         st.warning(
-            f"No company is persisted in `{db_path}`. Ingest one with "
-            "`uv run owner-lens ingest ADBE`, or point the workbench at another "
-            "store with `uv run owner-lens workbench --db data/universe_6a.db`."
+            f"No company is persisted for provider {provider.upper()} in `{db_path}`. Use "
+            "`uv run owner-lens refresh-sp500` for FMP or "
+            "`uv run owner-lens ingest ADBE` for SEC."
         )
         return
 
-    results = _guarded(lambda: cached_screening(prints))
+    st.caption(
+        f"Provider: {provider.upper()} · Annual screening only · "
+        f"As of: {max((c.fetched_at or '' for c in companies), default='') or 'unavailable'}"
+    )
+    if provider == "fmp":
+        st.caption(
+            f"Current persisted S&P 500: {len(companies)} securities · Membership observed "
+            f"{companies[0].universe_observed_at}"
+        )
+    results = _guarded(
+        lambda: cached_screening(prints, provider=provider, db_path=db_path)
+    )
     if results is None:
         return
 
@@ -88,11 +110,11 @@ def main() -> None:
     elif page == "Screener":
         screener.render(results)
     elif page == "Company":
-        _company_page(usable)
+        _company_page(usable, provider, db_path)
     elif page == "Compare":
-        _compare_page(usable)
+        _compare_page(usable, provider, db_path)
     else:
-        _data_quality_page(usable, prints, db_path)
+        _data_quality_page(usable, prints, db_path, provider)
 
 
 def _sidebar(
@@ -120,11 +142,13 @@ def _sidebar(
         st.caption(f"Store `{db_path}`")
         st.caption(f"Raw snapshots `{raw_data_path}`")
         st.caption(
-            f"{len(usable)} of {len(companies)} companies have a readable snapshot."
+            f"{sum(c.available for c in companies)} of {len(companies)} companies "
+            "have usable persisted annual evidence."
         )
         st.caption(
-            "The workbench reads persisted data only. Fetch fresh SEC data with "
-            "`uv run owner-lens ingest TICKER`, then reload below."
+            "The workbench reads persisted data only. Use "
+            "`uv run owner-lens ingest TICKER` for SEC or "
+            "`uv run owner-lens refresh-sp500` for FMP, then reload below."
         )
         if st.button("Reload persisted data", width="stretch"):
             clear_caches()
@@ -145,25 +169,34 @@ def _ticker_picker(
         return
     current = st.session_state.get(key)
     index = options.index(current) if current in options else 0
+    if current not in options:
+        st.session_state[key] = options[index]
     st.selectbox(label, options=options, index=index, key=key)
 
 
 def _multi_picker(companies: tuple[PersistedCompany, ...]) -> None:
     tickers = [c.ticker for c in companies]
+    selected = st.session_state.get("compare_tickers", tickers[: compare.MIN_COMPANIES])
+    st.session_state["compare_tickers"] = [
+        ticker for ticker in selected if ticker in tickers
+    ]
     st.multiselect(
         f"Companies ({compare.MIN_COMPANIES}–{compare.MAX_COMPANIES})",
         options=tickers,
-        default=st.session_state.get("compare_tickers", tickers[: compare.MIN_COMPANIES]),
         max_selections=compare.MAX_COMPANIES,
         key="compare_tickers",
     )
 
 
-def _find(companies: tuple[PersistedCompany, ...], ticker: str) -> PersistedCompany | None:
+def _find(
+    companies: tuple[PersistedCompany, ...], ticker: str
+) -> PersistedCompany | None:
     return next((c for c in companies if c.ticker == ticker), None)
 
 
-def _company_page(usable: tuple[PersistedCompany, ...]) -> None:
+def _company_page(
+    usable: tuple[PersistedCompany, ...], provider: str = "sec", db_path: str = ""
+) -> None:
     ticker = st.session_state.get("selected_ticker")
     selected = _find(usable, str(ticker)) if ticker else None
     if selected is None:
@@ -171,20 +204,35 @@ def _company_page(usable: tuple[PersistedCompany, ...]) -> None:
         st.info("Select a company in the sidebar.")
         return
     detail = _guarded(
-        lambda: cached_company_detail(selected.ticker, selected.content_hash or "")
+        lambda: cached_company_detail(
+            selected.ticker,
+            selected.content_hash or "",
+            provider=provider,
+            db_path=db_path,
+        )
     )
     if detail is not None:
         company.render(detail)
+    else:
+        st.title(f"Company: {selected.ticker}")
 
 
-def _compare_page(usable: tuple[PersistedCompany, ...]) -> None:
+def _compare_page(
+    usable: tuple[PersistedCompany, ...], provider: str = "sec", db_path: str = ""
+) -> None:
     selected = [
-        c for c in usable if c.ticker in set(st.session_state.get("compare_tickers", []))
+        c
+        for c in usable
+        if c.ticker in set(st.session_state.get("compare_tickers", []))
     ]
     if len(selected) < compare.MIN_COMPANIES:
         compare.render(None)
         return
-    table = _guarded(lambda: cached_comparison(fingerprint(tuple(selected))))
+    table = _guarded(
+        lambda: cached_comparison(
+            fingerprint(tuple(selected)), provider=provider, db_path=db_path
+        )
+    )
     compare.render(table)
 
 
@@ -192,12 +240,20 @@ def _data_quality_page(
     usable: tuple[PersistedCompany, ...],
     prints: tuple[tuple[str, str], ...],
     db_path: str,
+    provider: str = "sec",
 ) -> None:
-    standings = cached_coverage_standings(prints, db_path)
+    standings = cached_coverage_standings(prints, db_path, provider=provider)
     ticker = st.session_state.get("quality_ticker")
     selected = _find(usable, str(ticker)) if ticker else None
     report = (
-        _guarded(lambda: cached_data_quality(selected.ticker, selected.content_hash or ""))
+        _guarded(
+            lambda: cached_data_quality(
+                selected.ticker,
+                selected.content_hash or "",
+                provider=provider,
+                db_path=db_path,
+            )
+        )
         if selected is not None
         else None
     )

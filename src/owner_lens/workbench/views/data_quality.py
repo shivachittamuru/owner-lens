@@ -66,9 +66,19 @@ def _standings(standings: Sequence[CoverageStanding]) -> None:
             [
                 {
                     "Ticker": standing.company.ticker,
+                    "Provider": standing.company.provider.upper(),
+                    "As of": standing.company.fetched_at,
                     "Coverage": standing.overall,
-                    "Unusable metrics": ", ".join(standing.unusable_metrics) or "—",
+                    "Unusable metrics": ", ".join(standing.unusable_metrics)
+                    or (
+                        "See selected diagnosis"
+                        if standing.company.provider == "fmp"
+                        else "—"
+                    ),
                     "Primary blocker": standing.primary_blocker or "—",
+                    **{
+                        state.dataset: state.status for state in standing.dataset_states
+                    },
                 }
                 for standing in standings
             ],
@@ -95,6 +105,35 @@ def _company(report: DataQualityReport) -> None:
     )
     columns[3].metric("Structurally absent", len(report.structurally_absent))
     blocking = report.blocking
+    if company.provider == "fmp":
+        st.caption(
+            f"Provider FMP · annual canonical history {company.history_id} · as of {company.fetched_at}"
+        )
+        st.caption(
+            f"Annual canonical input hash: {company.history_input_hash or NOT_AVAILABLE}. "
+            "Fact-linked annual source snapshots below."
+        )
+        st.dataframe(frame(list(report.annual_provenance)), width="stretch")
+        if report.screening_reasons:
+            st.warning(
+                "Why screening is limited: " + "; ".join(report.screening_reasons)
+            )
+        st.markdown("**Per-dataset evidence status**")
+        st.dataframe(
+            frame(
+                [
+                    {
+                        "Dataset": state.dataset,
+                        "Status": state.status,
+                        "Last attempt": state.last_attempt_at,
+                        "Failure / coverage reason": state.last_error,
+                    }
+                    for state in report.dataset_states
+                ]
+            ),
+            width="stretch",
+        )
+        st.dataframe(frame(list(report.evidence_snapshots)), width="stretch")
     st.caption(
         "Blocking metrics: "
         + (", ".join(metric.metric for metric in blocking) if blocking else "none")
@@ -136,7 +175,10 @@ def _company(report: DataQualityReport) -> None:
 
     with st.expander("Technical provenance"):
         st.caption(
-            "Which SEC concept was selected for each metric, what else was tried, "
+            "FMP provider fields and annual metric coverage. Latest raw snapshots "
+            "and fact-linked annual sources are listed above."
+            if company.provider == "fmp"
+            else "Which SEC concept was selected for each metric, what else was tried, "
             "and any conflict the normalizer resolved. Raw XBRL payloads are not "
             "rendered here."
         )
@@ -150,7 +192,8 @@ def _company(report: DataQualityReport) -> None:
                         "Catalog candidates": ", ".join(metric.candidates) or "—",
                         "Diagnosis": metric.diagnosis,
                         "Latest FY": metric.latest_fiscal_year,
-                        "Resolved conflicts": ", ".join(metric.resolved_conflicts) or "—",
+                        "Resolved conflicts": ", ".join(metric.resolved_conflicts)
+                        or "—",
                     }
                     for metric in report.metrics
                 ],
@@ -162,8 +205,8 @@ def _company(report: DataQualityReport) -> None:
         st.caption(
             f"Snapshot {(company.content_hash or '')[:12] or NOT_AVAILABLE} · "
             f"processing {company.processing_status or NOT_AVAILABLE} · "
-            f"primary diagnosis {survey.primary_category.value}"
+            f"primary diagnosis {survey.primary_category.value if survey else report.overall}"
         )
-        stale = survey.silently_stale()
+        stale = survey.silently_stale() if survey else ()
         if stale:
             st.warning(f"Silently stale concepts detected: {', '.join(stale)}")

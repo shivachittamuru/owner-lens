@@ -26,13 +26,20 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Self
 
 from owner_lens.canonical import (
+    CANONICAL_METRICS,
     CanonicalDataError,
+    CanonicalFact,
     CanonicalFinancialHistory,
+    CanonicalSeries,
+    MetricInvalidError,
+    MetricKind,
     MetricStatus,
+    MetricUnsupportedError,
 )
 from owner_lens.capital_allocation import CapitalAllocationRow
 from owner_lens.capital_efficiency import CapitalEfficiencyRow
@@ -46,7 +53,12 @@ from owner_lens.coverage import (
 from owner_lens.economic_summary import EconomicValueSummary
 from owner_lens.economic_value import EconomicValueSnapshot
 from owner_lens.owner_economics import OwnerEconomicsRow
-from owner_lens.persistence import FilesystemRawSnapshotStore, OwnerLensStore
+from owner_lens.persistence import (
+    FilesystemRawSnapshotStore,
+    OwnerLensStore,
+    SecurityRefreshStateRecord,
+    SqliteStore,
+)
 from owner_lens.persistence.errors import PersistenceError
 from owner_lens.screening import (
     BUCKET_ORDER,
@@ -127,10 +139,17 @@ class PersistedCompany:
     content_hash: str | None
     fetched_at: str | None
     processing_status: str | None
+    provider: str = "sec"
+    security_id: int | None = None
+    history_id: int | None = None
+    universe_observed_at: str | None = None
+    history_input_hash: str | None = None
 
     @property
     def available(self) -> bool:
         """Whether a raw snapshot exists to rebuild this company's history from."""
+        if self.provider == "fmp":
+            return self.history_id is not None
         return self.content_hash is not None
 
 
@@ -188,13 +207,40 @@ def open_source(settings: OwnerLensSettings | None = None) -> WorkbenchSource:
 # --- Loading -------------------------------------------------------------------
 
 
-def load_persisted_companies(source: WorkbenchSource) -> tuple[PersistedCompany, ...]:
+def _fmp_store(source: WorkbenchSource) -> SqliteStore:
+    if not isinstance(source.store, SqliteStore):
+        raise WorkbenchError("FMP evidence requires the configured SQLite store.")
+    return source.store
+
+
+def load_persisted_companies(
+    source: WorkbenchSource, provider: str = "sec"
+) -> tuple[PersistedCompany, ...]:
     """Every company in the store, ticker-ordered, with its latest snapshot.
 
     A company whose raw payload is missing is still returned, with a
     ``content_hash`` of ``None``, so the workbench can say so explicitly rather
     than omitting it.
     """
+    if provider not in {"sec", "fmp"}:
+        raise WorkbenchError(f"Unsupported provider: {provider}.")
+    if provider == "fmp":
+        return tuple(
+            PersistedCompany(
+                ticker=row["symbol"],
+                company_name=row["name"],
+                cik=row["cik"] or "",
+                content_hash=row["evidence_hash"],
+                fetched_at=row["history_observed_at"],
+                processing_status="SUCCEEDED" if row["history_id"] else "FAILED",
+                provider="fmp",
+                security_id=int(row["security_id"]),
+                history_id=row["history_id"],
+                universe_observed_at=row["observed_at"],
+                history_input_hash=row["input_hash"],
+            )
+            for row in _fmp_store(source).list_fmp_universe_evidence()
+        )
     companies: list[PersistedCompany] = []
     for record in source.store.list_companies():
         snapshot = source.store.get_latest_source_snapshot(record.cik)
@@ -252,6 +298,58 @@ def load_canonical_history(
     max_years: int = DEFAULT_MAX_YEARS,
 ) -> CanonicalFinancialHistory:
     """Rebuild one company's canonical history from its persisted raw snapshot."""
+    if company.provider == "fmp":
+        record = (
+            _fmp_store(source).get_fmp_canonical_history(company.history_id)
+            if company.history_id is not None
+            else None
+        )
+        coverage = {item.metric: item for item in record.coverage} if record else {}
+        series: list[CanonicalSeries] = []
+        for spec in CANONICAL_METRICS:
+            item = coverage.get(spec.name)
+            status = MetricStatus(item.status) if item else MetricStatus.UNSUPPORTED
+            reason = (
+                item.reason if item else "No persisted FMP annual canonical history."
+            )
+            observations = tuple(
+                CanonicalFact(
+                    metric=fact.metric,
+                    value=fact.value,
+                    unit=fact.unit,
+                    fiscal_year=fact.fiscal_year,
+                    fiscal_period="FY",
+                    period_end=date.fromisoformat(fact.period_end),
+                    period_start=None,
+                    provider="fmp",
+                    provider_field=fact.provider_field,
+                    form=None,
+                    filed=None,
+                    accession=None,
+                )
+                for fact in (record.facts if record else ())
+                if fact.metric == spec.name
+            )
+            window = max_years + int(spec.kind is MetricKind.INSTANT)
+            observations = observations[:window]
+            error: CanonicalDataError | None = None
+            if status is MetricStatus.INVALID:
+                error = MetricInvalidError(reason or "Invalid FMP canonical metric.")
+            elif status is MetricStatus.UNSUPPORTED:
+                error = MetricUnsupportedError(
+                    reason or "Unsupported FMP canonical metric."
+                )
+            series.append(
+                CanonicalSeries(
+                    spec.name,
+                    spec.unit,
+                    status,
+                    observations,
+                    reason=reason,
+                    error=error,
+                )
+            )
+        return CanonicalFinancialHistory(company.ticker, max_years, tuple(series))
     return canonical_history_from_sec(
         load_raw_facts(source, company), ticker=company.ticker, max_years=max_years
     )
@@ -273,7 +371,7 @@ def screen_persisted_universe(
     selected = companies if companies is not None else load_persisted_companies(source)
     results: list[ScreeningResult] = []
     for company in selected:
-        if not company.available:
+        if not company.available and company.provider != "fmp":
             continue
         try:
             history = load_canonical_history(source, company, max_years=max_years)
@@ -309,9 +407,9 @@ class OverviewCounts:
     @property
     def worth_underwriting(self) -> int:
         """Companies in the two buckets that warrant expensive research time."""
-        return self.by_bucket.get(ScreeningBucket.HIGH_PRIORITY, 0) + self.by_bucket.get(
-            ScreeningBucket.WORTH_UNDERWRITING, 0
-        )
+        return self.by_bucket.get(
+            ScreeningBucket.HIGH_PRIORITY, 0
+        ) + self.by_bucket.get(ScreeningBucket.WORTH_UNDERWRITING, 0)
 
     @property
     def funnel(self) -> tuple[tuple[str, int], ...]:
@@ -391,21 +489,34 @@ class CompanyDetail:
     recent_compounding: EconomicCompoundingView | None
     long_term_compounding: EconomicCompoundingView | None
     summary: EconomicValueSummary | None
+    dataset_states: tuple[SecurityRefreshStateRecord, ...] = ()
+    evidence_snapshots: tuple[dict[str, Any], ...] = ()
+    quarterly_evidence: tuple[dict[str, Any], ...] = ()
+    eod_prices: tuple[dict[str, Any], ...] = ()
+    market_expectations: tuple[dict[str, Any], ...] = ()
+    annual_provenance: tuple[dict[str, Any], ...] = ()
+    evidence_errors: tuple[str, ...] = ()
 
     def layer_reason(self, layer: str) -> str | None:
         """Why an analytical layer is unavailable, from the Feature 6 contract."""
         result = self.coverage.layers.get(layer)
         if result is None or result.state is LayerCoverage.AVAILABLE:
             return None
-        return result.reason or f"{LAYER_LABEL.get(layer, layer)} is {result.state.value}"
+        return (
+            result.reason or f"{LAYER_LABEL.get(layer, layer)} is {result.state.value}"
+        )
 
     @property
     def capital_efficiency_unavailable_reason(self) -> str | None:
-        return None if self.capital_efficiency else self.layer_reason("capital_efficiency")
+        return (
+            None if self.capital_efficiency else self.layer_reason("capital_efficiency")
+        )
 
     @property
     def capital_allocation_unavailable_reason(self) -> str | None:
-        return None if self.capital_allocation else self.layer_reason("capital_allocation")
+        return (
+            None if self.capital_allocation else self.layer_reason("capital_allocation")
+        )
 
     @property
     def economic_value_unavailable_reason(self) -> str | None:
@@ -432,6 +543,48 @@ def company_detail(
     """Assemble one company's full research view from persisted data only."""
     history = load_canonical_history(source, company, max_years=max_years)
     evidence = assemble_screening_evidence(history)
+    supplemental: dict[str, Any] = {}
+    if company.provider == "fmp" and company.security_id is not None:
+        store = _fmp_store(source)
+        stored = store.get_fmp_security_evidence(company.security_id)
+        quarterly: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for snapshot in stored["snapshots"]:
+            if snapshot["dataset"].startswith("quarterly_") and snapshot[
+                "dataset"
+            ].endswith("_statement"):
+                try:
+                    rows = json.loads(source.raw_store.get(snapshot["content_hash"]))
+                except (PersistenceError, ValueError) as exc:
+                    errors.append(
+                        f"{snapshot['dataset']}: cannot read persisted evidence: {exc}"
+                    )
+                    continue
+                if not isinstance(rows, list) or any(
+                    not isinstance(row, dict) for row in rows
+                ):
+                    errors.append(
+                        f"{snapshot['dataset']}: stored evidence is not a list of rows."
+                    )
+                    continue
+                quarterly.extend(
+                    {
+                        **row,
+                        "dataset": snapshot["dataset"],
+                        "fetched_at": snapshot["fetched_at"],
+                        "content_hash": snapshot["content_hash"],
+                    }
+                    for row in rows
+                )
+        supplemental = {
+            "dataset_states": store.list_security_refresh_state(company.security_id),
+            "evidence_snapshots": stored["snapshots"],
+            "quarterly_evidence": tuple(quarterly),
+            "eod_prices": stored["prices"],
+            "market_expectations": stored["estimates"],
+            "annual_provenance": stored["annual_sources"],
+            "evidence_errors": tuple(errors),
+        }
     return CompanyDetail(
         company=company,
         screening=screen_company(evidence),
@@ -443,6 +596,7 @@ def company_detail(
         recent_compounding=evidence.recent_compounding,
         long_term_compounding=evidence.long_term_compounding,
         summary=evidence.summary,
+        **supplemental,
     )
 
 
@@ -617,12 +771,20 @@ class DataQualityReport:
     """What OwnerLens can and cannot see for one company, and why."""
 
     company: PersistedCompany
-    survey: CompanySurvey
+    survey: CompanySurvey | None
     metrics: tuple[DataQualityMetric, ...]
+    fmp_overall: str | None = None
+    fmp_layers: tuple[tuple[str, str, str | None], ...] = ()
+    dataset_states: tuple[SecurityRefreshStateRecord, ...] = ()
+    evidence_snapshots: tuple[dict[str, Any], ...] = ()
+    screening_reasons: tuple[str, ...] = ()
+    annual_provenance: tuple[dict[str, Any], ...] = ()
 
     @property
     def overall(self) -> str:
-        return self.survey.overall.value
+        return (
+            self.survey.overall.value if self.survey else self.fmp_overall or "FAILED"
+        )
 
     def with_status(self, status: MetricStatus) -> tuple[DataQualityMetric, ...]:
         return tuple(metric for metric in self.metrics if metric.status is status)
@@ -650,6 +812,8 @@ class DataQualityReport:
     @property
     def layers(self) -> dict[str, tuple[str, str | None]]:
         """Each analytical layer's state and the reason it is not available."""
+        if self.survey is None:
+            return {layer: (state, reason) for layer, state, reason in self.fmp_layers}
         return {
             layer: (probe.state.value, probe.reason)
             for layer, probe in self.survey.layers.items()
@@ -684,6 +848,53 @@ def data_quality_report(
     The survey is the Feature 6 diagnosis engine; nothing about concept
     selection, staleness, or composition is re-decided here.
     """
+    if company.provider == "fmp":
+        history = load_canonical_history(source, company, max_years=max_years)
+        evidence = assemble_screening_evidence(history)
+        result = screen_company(evidence)
+        coverage = company_coverage_from_history(history)
+        stored = (
+            _fmp_store(source).get_fmp_security_evidence(company.security_id)
+            if company.security_id is not None
+            else {"snapshots": ()}
+        )
+        return DataQualityReport(
+            company=company,
+            survey=None,
+            fmp_overall=result.coverage_class.value,
+            metrics=tuple(
+                DataQualityMetric(
+                    metric=item.metric,
+                    status=item.status,
+                    diagnosis=item.status.value,
+                    concept_used=item.observations[0].provider_field
+                    if item.observations
+                    else None,
+                    concepts_tried=(),
+                    candidates=(),
+                    latest_fiscal_year=item.observations[0].fiscal_year
+                    if item.observations
+                    else None,
+                    reason=item.reason,
+                    resolved_conflicts=(),
+                    blocking=item.status
+                    in (MetricStatus.UNSUPPORTED, MetricStatus.INVALID),
+                )
+                for item in history.series
+            ),
+            fmp_layers=tuple(
+                (layer, probe.state.value, probe.reason)
+                for layer, probe in coverage.layers.items()
+            ),
+            dataset_states=(
+                _fmp_store(source).list_security_refresh_state(company.security_id)
+                if company.security_id is not None
+                else ()
+            ),
+            evidence_snapshots=stored["snapshots"],
+            screening_reasons=tuple(reason.value for reason in result.coverage_reasons),
+            annual_provenance=stored.get("annual_sources", ()),
+        )
     survey = survey_company(
         load_raw_facts(source, company),
         ticker=company.ticker,
@@ -708,6 +919,7 @@ class CoverageStanding:
     overall: str
     unusable_metrics: tuple[str, ...]
     primary_blocker: str | None
+    dataset_states: tuple[SecurityRefreshStateRecord, ...] = ()
 
 
 def coverage_standings(
@@ -723,7 +935,7 @@ def coverage_standings(
     """
     standings: list[CoverageStanding] = []
     for company in companies:
-        if not company.available:
+        if not company.available and company.provider != "fmp":
             standings.append(
                 CoverageStanding(company, "NO SNAPSHOT", (), "no stored raw snapshot")
             )
@@ -740,7 +952,16 @@ def coverage_standings(
         )
         standings.append(
             CoverageStanding(
-                company, report.overall, unusable, report.survey.primary_blocker
+                company,
+                report.overall,
+                unusable,
+                report.survey.primary_blocker
+                if report.survey
+                else "; ".join(report.screening_reasons)
+                or next(
+                    (metric.reason for metric in report.blocking if metric.reason), None
+                ),
+                report.dataset_states,
             )
         )
     return tuple(standings)

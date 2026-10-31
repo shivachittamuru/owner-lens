@@ -120,6 +120,12 @@ def _build_parser() -> argparse.ArgumentParser:
     screen.add_argument(
         "--max-years", type=int, default=5, help="Fiscal years of history (>= 1)."
     )
+    screen.add_argument(
+        "--provider",
+        choices=("sec", "fmp"),
+        default="sec",
+        help="Explicit persisted evidence source (default: sec).",
+    )
 
     inspect = sub.add_parser("inspect", help="Print a raw Company Facts overview.")
     inspect.add_argument("ticker", help="SEC-resolvable ticker symbol.")
@@ -138,6 +144,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-browser",
         action="store_true",
         help="Do not open a browser window automatically.",
+    )
+    workbench.add_argument(
+        "--provider",
+        choices=("sec", "fmp"),
+        default="sec",
+        help="Initially selected evidence provider (default: sec).",
     )
 
     return parser
@@ -396,6 +408,51 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     store = build_local_store(settings)
     store.initialize()
     try:
+        if args.provider == "fmp":
+            from owner_lens.workbench.data import (
+                WorkbenchSource,
+                load_persisted_companies,
+                screen_persisted_universe,
+            )
+
+            source = WorkbenchSource(
+                store=store,
+                raw_store=FilesystemRawSnapshotStore(Path(settings.raw_data_path)),
+                db_path=settings.db_path,
+                raw_data_path=settings.raw_data_path,
+            )
+            companies_fmp = load_persisted_companies(source, "fmp")
+            wanted_fmp = {ticker.strip().upper() for ticker in args.tickers}
+            missing_fmp = wanted_fmp - {company.ticker for company in companies_fmp}
+            if missing_fmp:
+                print(
+                    f"Not in persisted S&P 500: {', '.join(sorted(missing_fmp))}.",
+                    file=sys.stderr,
+                )
+                return 1
+            selected_fmp = tuple(
+                company
+                for company in companies_fmp
+                if not wanted_fmp or company.ticker in wanted_fmp
+            )
+            if not selected_fmp:
+                print("No persisted FMP S&P 500 securities.", file=sys.stderr)
+                return 1
+            results_fmp = screen_persisted_universe(
+                source, selected_fmp, max_years=args.max_years
+            )
+            from owner_lens.screening import UniverseScreening
+
+            screening_fmp = UniverseScreening(results_fmp)
+            print(
+                "Provider: FMP · persisted annual canonical histories; no network calls."
+            )
+            print(
+                format_screening_detail(screening_fmp)
+                if args.detail
+                else format_screening_table(screening_fmp)
+            )
+            return 0
         companies = store.list_companies()
         wanted = {t.strip().upper() for t in args.tickers}
         if wanted:
@@ -505,6 +562,8 @@ def _cmd_workbench(args: argparse.Namespace) -> int:
     ]
     previous_argv, sys.argv = sys.argv, argv
     previous_db = os.environ.get("OWNER_LENS_DB_PATH")
+    previous_provider = os.environ.get("OWNER_LENS_WORKBENCH_PROVIDER")
+    os.environ["OWNER_LENS_WORKBENCH_PROVIDER"] = args.provider
     if args.db:
         os.environ["OWNER_LENS_DB_PATH"] = args.db
     try:
@@ -516,6 +575,10 @@ def _cmd_workbench(args: argparse.Namespace) -> int:
         # Both the argument vector and the environment are process-wide, so an
         # in-process caller must see them exactly as it left them.
         sys.argv = previous_argv
+        if previous_provider is None:
+            os.environ.pop("OWNER_LENS_WORKBENCH_PROVIDER", None)
+        else:
+            os.environ["OWNER_LENS_WORKBENCH_PROVIDER"] = previous_provider
         if args.db:
             if previous_db is None:
                 os.environ.pop("OWNER_LENS_DB_PATH", None)

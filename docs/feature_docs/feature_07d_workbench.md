@@ -1,4 +1,9 @@
-# Feature 7D — Local Research Workbench
+---
+title: "Feature 7D: Local Research Workbench"
+description: "Browse deterministic economics, screening, and coverage in a local Streamlit workbench."
+---
+
+## Local Research Workbench
 
 ## Purpose
 
@@ -70,6 +75,13 @@ uv run owner-lens workbench --db data/universe_6a.db
 ```
 
 Other options: `--port` (default 8501) and `--no-browser`.
+
+[Feature 8A3](feature_08a3_universe_workbench.md) extends these same pages to the
+current persisted FMP S&P 500 universe. Launch with
+`uv run owner-lens workbench --provider fmp`, or explicitly select FMP in the
+sidebar. SEC remains the default. Quarterly evidence, EOD price, and Market
+Expectations appear separately from annual screening, and missing histories
+remain inspectable.
 
 Streamlit lives in the `workbench` dependency group, which `uv sync` installs by
 default, so it never becomes a runtime dependency of the `owner_lens` package.

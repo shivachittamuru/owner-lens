@@ -7,13 +7,14 @@ the fingerprint every other cache key is built from, and invalidates the derived
 entries that depended on the old payload. Caching the list instead would have
 reduced the guarantee to "until the user remembers to press Reload".
 
-Cached functions take hashable scalars only and return plain data; no live
+Cached functions use hashable data keys and return plain data; no live
 handle is ever captured in a cache key or retained as hidden global state. That
 is not stylistic. A ``WorkbenchSource`` owns a SQLite connection, SQLite
 connections are bound to their creating thread, and Streamlit reruns a script on
 whichever thread is free. Each cached function therefore opens its own
-short-lived source and closes it, which is affordable precisely because the
-expensive results are what gets cached.
+short-lived source and closes it. The FMP screening loop passes that source as
+an excluded, transient argument to per-security cache misses, so it does not
+open hundreds of SQLite connections. No source is returned or retained.
 
 The data layer itself stays cache-free and Streamlit-free: this module is the
 only place caching is applied.
@@ -23,7 +24,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from owner_lens.screening import ScreeningResult
+from owner_lens.persistence import SqliteStore
+from owner_lens.screening import (
+    ScreeningResult,
+    assemble_screening_evidence,
+    screen_company,
+)
 from owner_lens.workbench.data import (
     DEFAULT_MAX_YEARS,
     CompanyDetail,
@@ -37,6 +43,7 @@ from owner_lens.workbench.data import (
     company_detail,
     coverage_standings,
     data_quality_report,
+    load_canonical_history,
     load_persisted_companies,
     open_source,
     screen_persisted_universe,
@@ -71,15 +78,15 @@ def fingerprint(
     return tuple(
         (company.ticker, company.content_hash or "")
         for company in companies
-        if company.available
+        if company.available or company.provider == "fmp"
     )
 
 
 def _select(
-    source: WorkbenchSource, wanted: tuple[tuple[str, str], ...]
+    source: WorkbenchSource, wanted: tuple[tuple[str, str], ...], provider: str = "sec"
 ) -> list[PersistedCompany]:
     """Resolve a fingerprint back to company records, in fingerprint order."""
-    by_ticker = {c.ticker: c for c in load_persisted_companies(source)}
+    by_ticker = {c.ticker: c for c in load_persisted_companies(source, provider)}
     return [
         _verify(by_ticker[ticker], content_hash)
         for ticker, content_hash in wanted
@@ -88,10 +95,11 @@ def _select(
 
 
 def _one(
-    source: WorkbenchSource, ticker: str, content_hash: str
+    source: WorkbenchSource, ticker: str, content_hash: str, provider: str = "sec"
 ) -> PersistedCompany:
     company = next(
-        (c for c in load_persisted_companies(source) if c.ticker == ticker), None
+        (c for c in load_persisted_companies(source, provider) if c.ticker == ticker),
+        None,
     )
     if company is None:
         raise WorkbenchError(f"{ticker} is no longer present in {source.db_path}.")
@@ -115,45 +123,85 @@ def _verify(company: PersistedCompany, content_hash: str) -> PersistedCompany:
 
 @st.cache_data(show_spinner="Screening the persisted universe…")
 def cached_screening(
-    companies: tuple[tuple[str, str], ...], max_years: int = DEFAULT_MAX_YEARS
+    companies: tuple[tuple[str, str], ...],
+    max_years: int = DEFAULT_MAX_YEARS,
+    provider: str = "sec",
+    db_path: str = "",
 ) -> tuple[ScreeningResult, ...]:
     """Screen every company in the fingerprint."""
+    if provider == "fmp":
+        with open_run_source() as source:
+            selected = _select(source, companies, provider)
+            return tuple(
+                sorted(
+                    (
+                        cached_screening_result(
+                            company, max_years, db_path, _source=source
+                        )
+                        for company in selected
+                    ),
+                    key=lambda result: result.rank_key,
+                )
+            )
     with open_run_source() as source:
         return screen_persisted_universe(
-            source, _select(source, companies), max_years=max_years
+            source, _select(source, companies, provider), max_years=max_years
         )
+
+
+@st.cache_data(show_spinner=False)
+def cached_screening_result(
+    company: PersistedCompany,
+    max_years: int = DEFAULT_MAX_YEARS,
+    db_path: str = "",
+    *,
+    _source: WorkbenchSource,
+) -> ScreeningResult:
+    history = load_canonical_history(_source, company, max_years=max_years)
+    return screen_company(assemble_screening_evidence(history))
 
 
 @st.cache_data(show_spinner="Building company detail…")
 def cached_company_detail(
-    ticker: str, content_hash: str, max_years: int = DEFAULT_MAX_YEARS
+    ticker: str,
+    content_hash: str,
+    max_years: int = DEFAULT_MAX_YEARS,
+    provider: str = "sec",
+    db_path: str = "",
 ) -> CompanyDetail:
     """One company's full research view, keyed on its exact stored payload."""
     with open_run_source() as source:
         return company_detail(
-            source, _one(source, ticker, content_hash), max_years=max_years
+            source, _one(source, ticker, content_hash, provider), max_years=max_years
         )
 
 
 @st.cache_data(show_spinner="Comparing companies…")
 def cached_comparison(
-    companies: tuple[tuple[str, str], ...], max_years: int = DEFAULT_MAX_YEARS
+    companies: tuple[tuple[str, str], ...],
+    max_years: int = DEFAULT_MAX_YEARS,
+    provider: str = "sec",
+    db_path: str = "",
 ) -> ComparisonTable:
     """The side-by-side table for the companies in the fingerprint."""
     return build_comparison(
-        cached_company_detail(ticker, content_hash, max_years)
+        cached_company_detail(ticker, content_hash, max_years, provider, db_path)
         for ticker, content_hash in companies
     )
 
 
 @st.cache_data(show_spinner="Diagnosing coverage…")
 def cached_data_quality(
-    ticker: str, content_hash: str, max_years: int = DEFAULT_MAX_YEARS
+    ticker: str,
+    content_hash: str,
+    max_years: int = DEFAULT_MAX_YEARS,
+    provider: str = "sec",
+    db_path: str = "",
 ) -> DataQualityReport:
     """One company's coverage diagnosis, keyed on its exact stored payload."""
     with open_run_source() as source:
         return data_quality_report(
-            source, _one(source, ticker, content_hash), max_years=max_years
+            source, _one(source, ticker, content_hash, provider), max_years=max_years
         )
 
 
@@ -162,6 +210,7 @@ def cached_coverage_standings(
     companies: tuple[tuple[str, str], ...],
     db_path: str,
     max_years: int = DEFAULT_MAX_YEARS,
+    provider: str = "sec",
 ) -> tuple[CoverageStanding, ...]:
     """Coverage standings for every persisted company, failures included.
 
@@ -169,16 +218,42 @@ def cached_coverage_standings(
     snapshot is absent from the fingerprint yet must still appear in the grid.
     """
     with open_run_source() as source:
+        if provider == "fmp":
+            if not isinstance(source.store, SqliteStore):
+                raise WorkbenchError("FMP coverage requires the SQLite store.")
+            states = source.store.list_security_refresh_state()
+            results = {
+                result.ticker: result
+                for result in cached_screening(companies, max_years, provider, db_path)
+            }
+            return tuple(
+                CoverageStanding(
+                    company,
+                    results[company.ticker].coverage_class.value,
+                    (),
+                    "; ".join(
+                        reason.value
+                        for reason in results[company.ticker].coverage_reasons
+                    )
+                    or None,
+                    tuple(
+                        state
+                        for state in states
+                        if state.security_id == company.security_id
+                    ),
+                )
+                for company in load_persisted_companies(source, provider)
+            )
         return coverage_standings(
-            source, load_persisted_companies(source), max_years=max_years
+            source, load_persisted_companies(source, provider), max_years=max_years
         )
 
 
 def clear_caches() -> None:
     """Drop every cached derived result, for example after a re-ingestion."""
     cached_screening.clear()
+    cached_screening_result.clear()
     cached_company_detail.clear()
     cached_comparison.clear()
     cached_data_quality.clear()
     cached_coverage_standings.clear()
-

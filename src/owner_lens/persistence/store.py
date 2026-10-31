@@ -18,7 +18,7 @@ import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
 from owner_lens.persistence.errors import (
     SchemaVersionError,
@@ -34,6 +34,8 @@ from owner_lens.persistence.records import (
     CompanyRecord,
     CoverageResultRecord,
     DerivedMetricRecord,
+    FmpCanonicalCoverageRecord,
+    FmpCanonicalFactRecord,
     FmpCanonicalHistoryRecord,
     FmpEodPriceRecord,
     FmpEstimateRecord,
@@ -1573,6 +1575,158 @@ class SqliteStore:
                 "Raw FMP evidence cannot be loaded because no raw snapshot store is configured."
             )
         return self._raw_store.get(content_hash)
+
+    def list_fmp_universe_evidence(self) -> tuple[dict[str, Any], ...]:
+        """Read current members and cache-invalidating evidence metadata in bulk."""
+        try:
+            rows = self._conn.execute(
+                """
+                SELECT m.security_id, m.symbol, m.name, m.cik, u.observed_at,
+                       h.history_id, h.input_hash, h.observed_at AS history_observed_at
+                FROM universe_members m
+                JOIN universe_snapshots u ON u.snapshot_id = m.snapshot_id
+                LEFT JOIN fmp_canonical_histories h ON h.history_id = (
+                    SELECT history_id FROM fmp_canonical_histories
+                    WHERE security_id = m.security_id
+                    ORDER BY observed_at DESC, history_id DESC LIMIT 1
+                )
+                WHERE m.snapshot_id = (
+                    SELECT snapshot_id FROM universe_snapshots WHERE provider = 'fmp'
+                    ORDER BY observed_at DESC, snapshot_id DESC LIMIT 1
+                )
+                ORDER BY m.symbol
+                """
+            ).fetchall()
+            evidence = self._conn.execute(
+                "SELECT security_id, snapshot_id, dataset, fetched_at, content_hash "
+                "FROM fmp_evidence_snapshots ORDER BY security_id, snapshot_id"
+            ).fetchall()
+            states = self.list_security_refresh_state()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read FMP universe evidence: {exc}") from exc
+        signatures: dict[int, list[str]] = {}
+        for item in evidence:
+            signatures.setdefault(int(item["security_id"]), []).append(
+                f"{item['snapshot_id']}:{item['dataset']}:{item['fetched_at']}:{item['content_hash']}"
+            )
+        for state in states:
+            signatures.setdefault(state.security_id, []).append(
+                f"{state.dataset}:{state.status}:{state.last_attempt_at}:{state.last_error}"
+            )
+        return tuple(
+            {
+                **dict(row),
+                "evidence_hash": compute_content_hash(
+                    "|".join(
+                        [
+                            str(row["input_hash"]),
+                            *signatures.get(row["security_id"], []),
+                        ]
+                    ).encode()
+                ),
+            }
+            for row in rows
+        )
+
+    def get_fmp_canonical_history(self, history_id: int) -> FmpCanonicalHistoryRecord:
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM fmp_canonical_histories WHERE history_id = ?",
+                (history_id,),
+            ).fetchone()
+            if row is None:
+                raise StorageReadError(
+                    f"FMP canonical history {history_id} is missing."
+                )
+            facts = self._conn.execute(
+                "SELECT * FROM fmp_canonical_facts WHERE history_id = ? "
+                "ORDER BY metric, fiscal_year DESC",
+                (history_id,),
+            ).fetchall()
+            coverage = self._conn.execute(
+                "SELECT metric, status, reason FROM fmp_metric_coverage WHERE history_id = ?",
+                (history_id,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read FMP canonical history: {exc}") from exc
+        return FmpCanonicalHistoryRecord(
+            security_id=int(row["security_id"]),
+            history_id=history_id,
+            input_hash=row["input_hash"],
+            observed_at=row["observed_at"],
+            max_years=int(row["max_years"]),
+            facts=tuple(
+                FmpCanonicalFactRecord(
+                    metric=fact["metric"],
+                    value=fact["value"],
+                    unit=fact["unit"],
+                    fiscal_year=fact["fiscal_year"],
+                    period_end=fact["period_end"],
+                    provider_field=fact["provider_field"],
+                    snapshot_id=fact["snapshot_id"],
+                )
+                for fact in facts
+            ),
+            coverage=tuple(
+                FmpCanonicalCoverageRecord(
+                    metric=item["metric"], status=item["status"], reason=item["reason"]
+                )
+                for item in coverage
+            ),
+        )
+
+    def get_fmp_security_evidence(self, security_id: int) -> dict[str, Any]:
+        """Latest dataset provenance plus separately persisted prices and expectations."""
+        try:
+            snapshots = self._conn.execute(
+                """
+                SELECT s.* FROM fmp_evidence_snapshots s
+                WHERE s.security_id = ? AND s.snapshot_id = (
+                    SELECT snapshot_id FROM fmp_evidence_snapshots
+                    WHERE security_id = s.security_id AND dataset = s.dataset
+                    ORDER BY fetched_at DESC, snapshot_id DESC LIMIT 1
+                ) ORDER BY s.dataset
+                """,
+                (security_id,),
+            ).fetchall()
+            prices = self._conn.execute(
+                "SELECT p.*, s.fetched_at, s.source_endpoint, s.content_hash "
+                "FROM fmp_eod_prices p JOIN fmp_evidence_snapshots s USING(snapshot_id) "
+                "WHERE p.security_id = ? ORDER BY p.market_date DESC, s.fetched_at DESC LIMIT 1",
+                (security_id,),
+            ).fetchall()
+            estimates = self._conn.execute(
+                """
+                SELECT e.*, s.dataset, s.fetched_at, s.content_hash FROM fmp_estimates e
+                JOIN fmp_evidence_snapshots s USING(snapshot_id)
+                WHERE s.security_id = ? AND s.snapshot_id = (
+                    SELECT snapshot_id FROM fmp_evidence_snapshots
+                    WHERE security_id = s.security_id AND dataset = s.dataset
+                    ORDER BY fetched_at DESC, snapshot_id DESC LIMIT 1
+                ) ORDER BY s.dataset, e.target_date
+                """,
+                (security_id,),
+            ).fetchall()
+            annual_sources = self._conn.execute(
+                """
+                SELECT DISTINCT s.* FROM fmp_evidence_snapshots s
+                JOIN fmp_canonical_facts f ON f.snapshot_id = s.snapshot_id
+                WHERE f.history_id = (
+                    SELECT history_id FROM fmp_canonical_histories
+                    WHERE security_id = ?
+                    ORDER BY observed_at DESC, history_id DESC LIMIT 1
+                ) ORDER BY s.dataset
+                """,
+                (security_id,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read FMP security evidence: {exc}") from exc
+        return {
+            "snapshots": tuple(dict(row) for row in snapshots),
+            "prices": tuple(dict(row) for row in prices),
+            "estimates": tuple(dict(row) for row in estimates),
+            "annual_sources": tuple(dict(row) for row in annual_sources),
+        }
 
     def save_fmp_canonical_history(
         self, history: FmpCanonicalHistoryRecord

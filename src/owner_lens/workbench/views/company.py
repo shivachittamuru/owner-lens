@@ -72,6 +72,60 @@ def render(detail: CompanyDetail) -> None:
             "does not derive from a filing. When those features land, they attach "
             "here without changing anything above."
         )
+    if detail.company.provider == "fmp":
+        _fmp_evidence(detail)
+
+
+def _fmp_evidence(detail: CompanyDetail) -> None:
+    st.divider()
+    for error in detail.evidence_errors:
+        st.warning(error)
+    st.subheader("Quarterly evidence")
+    st.caption(
+        "Reported FACT evidence only. Not used in annual economics or screening."
+    )
+    if detail.quarterly_evidence:
+        st.dataframe(frame(list(detail.quarterly_evidence)), width="stretch")
+    else:
+        st.info("No persisted quarterly statement rows.")
+    st.subheader("Latest EOD price")
+    st.caption(
+        "Market evidence, not a valuation or screening input. Currency is not inferred."
+    )
+    if detail.eod_prices:
+        st.dataframe(frame(list(detail.eod_prices)), width="stretch")
+    else:
+        st.info("No reliable persisted EOD close.")
+    st.subheader("Market Expectations")
+    st.caption(
+        "EXPECTATION: analyst consensus, not reported facts or OwnerLens assumptions."
+    )
+    if detail.market_expectations:
+        st.dataframe(frame(list(detail.market_expectations)), width="stretch")
+    else:
+        st.info("No persisted analyst estimates; check entitlement and dataset status.")
+    with st.expander("Provider provenance and dataset status"):
+        st.caption(
+            f"Annual canonical history {detail.company.history_id}: fact-linked source snapshots below. "
+            "Latest attempts can differ from the retained annual inputs."
+        )
+        st.dataframe(frame(list(detail.annual_provenance)), width="stretch")
+        st.caption("Latest dataset snapshots")
+        st.dataframe(frame(list(detail.evidence_snapshots)), width="stretch")
+        st.dataframe(
+            frame(
+                [
+                    {
+                        "Dataset": state.dataset,
+                        "Status": state.status,
+                        "Last attempt": state.last_attempt_at,
+                        "Reason": state.last_error,
+                    }
+                    for state in detail.dataset_states
+                ]
+            ),
+            width="stretch",
+        )
 
 
 def _header(detail: CompanyDetail) -> None:
@@ -93,10 +147,15 @@ def _header(detail: CompanyDetail) -> None:
         help="A dimension OwnerLens could not evaluate is excluded, never zeroed.",
     )
     st.caption(
-        f"CIK {company.cik} · snapshot "
+        f"Provider {company.provider.upper()} · CIK {company.cik or NOT_AVAILABLE} · "
+        f"{'evidence fingerprint' if company.provider == 'fmp' else 'snapshot'} "
         f"{(company.content_hash or '')[:12] or NOT_AVAILABLE} · fetched "
         f"{company.fetched_at or NOT_AVAILABLE}"
     )
+    if company.provider == "fmp":
+        st.caption(
+            f"Annual canonical input hash: {company.history_input_hash or NOT_AVAILABLE}"
+        )
 
 
 def _owner_economics(rows: Sequence[OwnerEconomicsRow]) -> None:
