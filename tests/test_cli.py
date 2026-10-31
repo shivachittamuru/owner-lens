@@ -13,6 +13,7 @@ from _fmp_universe_fixtures import sp500_payload
 import owner_lens
 from owner_lens import cli, ingestion
 from owner_lens.config import OwnerLensSettings
+from owner_lens.evidence_ingestion import EvidenceRefreshSummary
 from owner_lens.fmp import FmpConstituent, FmpConstituents
 from owner_lens.persistence import FilesystemRawSnapshotStore, SqliteStore
 from owner_lens.sec import CompanyResolutionError
@@ -296,19 +297,38 @@ def test_refresh_sp500_cli_persists_bounded_membership_without_live_fmp(
         lambda: _settings(tmp_path, fmp_api_key="fixture-key"),
     )
     monkeypatch.setattr(cli, "FmpClient", _FixtureFmpClient)
+    monkeypatch.setattr(
+        cli,
+        "refresh_sp500_evidence",
+        lambda **_kwargs: EvidenceRefreshSummary(
+            securities=3,
+            refreshed=0,
+            skipped=27,
+            unsupported=0,
+            failed=0,
+            canonical_histories=0,
+        ),
+    )
 
     assert cli.main(
         ["refresh-sp500", "--tickers", "ADBE", "GOOG", "GOOGL"]
     ) == 0
     output = capsys.readouterr().out
-    assert "S&P 500 refresh succeeded" in output
+    assert "S&P 500 refresh completed" in output
     assert "4 securities" in output
     assert "3 securities" in output
 
     store = _open(tmp_path)
     assert len(store.list_universe_members(1)) == 4
-    assert len(store.list_security_refresh_state()) == 3 * 4
+    assert len(store.list_security_refresh_state()) == 3 * 9
     store.close()
+
+    monkeypatch.setattr(
+        cli, "FmpClient", lambda _api_key: pytest.fail("evidence-status must be offline")
+    )
+    assert cli.main(["evidence-status", "--tickers", "ADBE"]) == 0
+    status_output = capsys.readouterr().out
+    assert "annual_income_statement: pending=1" in status_output
 
 
 def test_refresh_sp500_cli_requires_an_fmp_api_key(

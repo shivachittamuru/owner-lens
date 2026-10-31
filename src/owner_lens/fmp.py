@@ -1,9 +1,9 @@
-"""FMP (Financial Modeling Prep) annual financial-statement retrieval.
+"""FMP (Financial Modeling Prep) client and evidence response validation.
 
-A small synchronous client for the three FMP "stable" endpoints OwnerLens needs
-for annual fundamentals: income statement, balance sheet, and cash-flow
-statement. It performs no financial normalization; validated statement rows are
-returned unchanged so the FMP adapter can map them into canonical facts.
+The synchronous client retrieves stable endpoint payloads without financial
+normalization. Annual statement convenience methods retain their local response
+cache; evidence methods return raw bytes and retrieval provenance for persisted,
+versioned statement, EOD price, and analyst-estimate snapshots.
 
 The API key is a secret. It is sent only as the ``apikey`` query parameter and
 is redacted from every error message and recorded source URL.
@@ -30,7 +30,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Final, Self
@@ -48,6 +48,7 @@ __all__ = [
     "FmpConstituent",
     "FmpConstituents",
     "FmpError",
+    "FmpEvidencePayload",
     "FmpPlanRestrictionError",
     "FmpRateLimitError",
     "FmpResponseCache",
@@ -73,6 +74,8 @@ _MAX_REQUEST_ATTEMPTS: Final = 3
 _MAX_RETRY_DELAY_SECONDS: Final = 30.0
 _REDACTED: Final = "<redacted>"
 FMP_SP500_ENDPOINT: Final = "sp500-constituent"
+FMP_EOD_LIGHT_ENDPOINT: Final = "historical-price-eod/light"
+FMP_ANALYST_ESTIMATES_ENDPOINT: Final = "analyst-estimates"
 
 
 class FmpError(Exception):
@@ -154,6 +157,18 @@ class FmpConstituents:
 
     members: tuple[FmpConstituent, ...]
     source_url: str
+    raw_payload: bytes
+
+
+@dataclass(frozen=True)
+class FmpEvidencePayload:
+    """Validated provider rows and complete request/retrieval provenance."""
+
+    endpoint: str
+    request_parameters: tuple[tuple[str, str], ...]
+    source_url: str
+    fetched_at: str
+    rows: tuple[dict[str, Any], ...]
     raw_payload: bytes
 
 
@@ -404,6 +419,137 @@ class FmpClient:
             self.cache.save(path, body)
         return rows
 
+    def get_statement_evidence(
+        self,
+        statement: str,
+        symbol: str,
+        *,
+        period: str,
+        limit: int,
+    ) -> FmpEvidencePayload:
+        """Retrieve annual or quarterly statements with their raw response metadata."""
+        if statement not in FMP_STATEMENT_ENDPOINTS:
+            raise KeyError(f"Unknown FMP statement: {statement!r}.")
+        if period not in {"annual", "quarter"}:
+            raise ValueError("FMP statement period must be 'annual' or 'quarter'.")
+        normalized = _normalize_symbol(symbol)
+        _validate_limit(limit)
+        endpoint = FMP_STATEMENT_ENDPOINTS[statement]
+        request_parameters = {
+            "symbol": normalized,
+            "period": period,
+            "limit": str(limit),
+        }
+        source_url = self._source_uri(endpoint, request_parameters)
+        path = (
+            self.cache.path(endpoint, normalized, period=period, limit=limit)
+            if self.cache is not None
+            else None
+        )
+        payload, body, raw_payload = self._request_json(
+            endpoint,
+            {
+                "symbol": normalized,
+                "period": period,
+                "limit": limit,
+                "apikey": self._api_key,
+            },
+            source=source_url,
+            description=f"{period} {statement} statement for {normalized}",
+        )
+        rows = _validate_period_rows(
+            payload, endpoint, normalized, period, allow_empty=True
+        )
+        if path is not None and self.cache is not None:
+            self.cache.save(path, body)
+        return FmpEvidencePayload(
+            endpoint=endpoint,
+            request_parameters=tuple(sorted(request_parameters.items())),
+            source_url=source_url,
+            fetched_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            rows=rows,
+            raw_payload=raw_payload,
+        )
+
+    def get_eod_price_evidence(self, symbol: str) -> FmpEvidencePayload:
+        """Retrieve the recent EOD light response, bounded to the last 14 days."""
+        normalized = _normalize_symbol(symbol)
+        end = datetime.now(UTC).date()
+        start = end - timedelta(days=14)
+        endpoint = FMP_EOD_LIGHT_ENDPOINT
+        request_parameters = {
+            "symbol": normalized,
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+        }
+        source_url = self._source_uri(endpoint, request_parameters)
+        payload, _body, raw_payload = self._request_json(
+            endpoint,
+            {**request_parameters, "apikey": self._api_key},
+            source=source_url,
+            description=f"latest EOD price for {normalized}",
+        )
+        rows = _validate_market_rows(payload, endpoint, normalized)
+        return FmpEvidencePayload(
+            endpoint=endpoint,
+            request_parameters=tuple(sorted(request_parameters.items())),
+            source_url=source_url,
+            fetched_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            rows=rows,
+            raw_payload=raw_payload,
+        )
+
+    def get_analyst_estimates_evidence(
+        self, symbol: str, *, period: str, limit: int
+    ) -> FmpEvidencePayload:
+        """Retrieve annual or quarterly analyst estimates without treating them as facts."""
+        if period not in {"annual", "quarter"}:
+            raise ValueError("FMP estimate period must be 'annual' or 'quarter'.")
+        normalized = _normalize_symbol(symbol)
+        _validate_limit(limit)
+        endpoint = FMP_ANALYST_ESTIMATES_ENDPOINT
+        request_parameters = {
+            "symbol": normalized,
+            "period": period,
+            "page": "0",
+            "limit": str(limit),
+        }
+        source_url = self._source_uri(endpoint, request_parameters)
+        path = (
+            self.cache.path(
+                endpoint, normalized, period=period, limit=limit
+            )
+            if self.cache is not None
+            else None
+        )
+        payload, body, raw_payload = self._request_json(
+            endpoint,
+            {**request_parameters, "apikey": self._api_key},
+            source=source_url,
+            description=f"{period} analyst estimates for {normalized}",
+        )
+        rows = _validate_estimate_rows(
+            payload, endpoint, normalized, allow_empty=True
+        )
+        if path is not None and self.cache is not None:
+            self.cache.save(path, body)
+        return FmpEvidencePayload(
+            endpoint=endpoint,
+            request_parameters=tuple(sorted(request_parameters.items())),
+            source_url=source_url,
+            fetched_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            rows=rows,
+            raw_payload=raw_payload,
+        )
+
+    def _source_uri(
+        self, endpoint: str, request_parameters: dict[str, str]
+    ) -> str:
+        parameters = "&".join(
+            f"{key}={value}" for key, value in sorted(request_parameters.items())
+        )
+        return f"{self._base_url}/{endpoint}?{parameters}&apikey={_REDACTED}"
+
     def get_income_statement(
         self, symbol: str, *, limit: int = 5, refresh: bool = False
     ) -> tuple[dict[str, Any], ...]:
@@ -487,6 +633,159 @@ def _validate_rows(payload: Any, endpoint: str, symbol: str) -> tuple[dict[str, 
             raise MalformedFmpResponseError(
                 f"FMP {endpoint} row for {symbol} has an invalid date {row.get('date')!r}."
             ) from None
+        rows.append(row)
+    return tuple(rows)
+
+
+def _validate_period_rows(
+    payload: Any,
+    endpoint: str,
+    symbol: str,
+    period: str,
+    *,
+    allow_empty: bool,
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(payload, list):
+        raise MalformedFmpResponseError(
+            f"FMP {endpoint} for {symbol} is not a JSON list."
+        )
+    if not payload and not allow_empty:
+        raise FmpSymbolNotFoundError(
+            f"FMP returned no {period} {endpoint} rows for {symbol}."
+        )
+    rows: list[dict[str, Any]] = []
+    seen_periods: set[tuple[str, str]] = set()
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row at index {index} is not a JSON object."
+            )
+        row_symbol = row.get("symbol")
+        if not isinstance(row_symbol, str) or row_symbol.strip().upper() != symbol:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row identifies {row_symbol!r}, not {symbol}."
+            )
+        try:
+            period_end = date.fromisoformat(str(row.get("date")))
+        except ValueError:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row for {symbol} has an invalid date "
+                f"{row.get('date')!r}."
+            ) from None
+        fiscal_period = row.get("period")
+        if period == "annual":
+            valid_period = fiscal_period == "FY"
+        else:
+            valid_period = isinstance(fiscal_period, str) and re.fullmatch(
+                r"Q[1-4]", fiscal_period
+            ) is not None
+        if not valid_period:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row for {symbol} has invalid {period} period "
+                f"{fiscal_period!r}."
+            )
+        fiscal_year_value = row.get("fiscalYear")
+        if fiscal_year_value is None:
+            fiscal_year = str(period_end.year)
+        elif (
+            isinstance(fiscal_year_value, bool)
+            or not isinstance(fiscal_year_value, (str, int))
+            or not str(fiscal_year_value).isdigit()
+        ):
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row for {symbol} has invalid fiscalYear "
+                f"{fiscal_year_value!r}."
+            )
+        else:
+            fiscal_year = str(fiscal_year_value)
+        period_key = (fiscal_year, str(fiscal_period))
+        if period_key in seen_periods:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} contains duplicate {period} period "
+                f"{fiscal_year} {fiscal_period} for {symbol}."
+            )
+        seen_periods.add(period_key)
+        rows.append(row)
+    return tuple(rows)
+
+
+def _validate_market_rows(
+    payload: Any, endpoint: str, symbol: str
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(payload, list):
+        raise MalformedFmpResponseError(f"FMP {endpoint} response is not a JSON list.")
+    rows: list[dict[str, Any]] = []
+    seen_dates: set[date] = set()
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row at index {index} is not a JSON object."
+            )
+        row_symbol = row.get("symbol")
+        if not isinstance(row_symbol, str) or row_symbol.strip().upper() != symbol:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row identifies {row_symbol!r}, not {symbol}."
+            )
+        try:
+            market_date = date.fromisoformat(str(row.get("date")))
+        except ValueError:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row for {symbol} has invalid date "
+                f"{row.get('date')!r}."
+            ) from None
+        if market_date in seen_dates:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} contains duplicate EOD date {market_date} for {symbol}."
+            )
+        seen_dates.add(market_date)
+        price = row.get("price", row.get("close"))
+        if isinstance(price, bool) or not isinstance(price, (int, float)):
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row for {symbol} has invalid close/price {price!r}."
+            )
+        rows.append(row)
+    return tuple(rows)
+
+
+def _validate_estimate_rows(
+    payload: Any,
+    endpoint: str,
+    symbol: str,
+    *,
+    allow_empty: bool,
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(payload, list):
+        raise MalformedFmpResponseError(
+            f"FMP {endpoint} for {symbol} is not a JSON list."
+        )
+    if not payload and not allow_empty:
+        raise FmpSymbolNotFoundError(
+            f"FMP returned no {endpoint} rows for {symbol}."
+        )
+    rows: list[dict[str, Any]] = []
+    seen_dates: set[date] = set()
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row at index {index} is not a JSON object."
+            )
+        row_symbol = row.get("symbol")
+        if not isinstance(row_symbol, str) or row_symbol.strip().upper() != symbol:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row identifies {row_symbol!r}, not {symbol}."
+            )
+        try:
+            target_date = date.fromisoformat(str(row.get("date")))
+        except ValueError:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} row for {symbol} has invalid target date "
+                f"{row.get('date')!r}."
+            ) from None
+        if target_date in seen_dates:
+            raise MalformedFmpResponseError(
+                f"FMP {endpoint} contains duplicate target date {target_date} for {symbol}."
+            )
+        seen_dates.add(target_date)
         rows.append(row)
     return tuple(rows)
 

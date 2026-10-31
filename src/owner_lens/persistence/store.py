@@ -34,6 +34,10 @@ from owner_lens.persistence.records import (
     CompanyRecord,
     CoverageResultRecord,
     DerivedMetricRecord,
+    FmpCanonicalHistoryRecord,
+    FmpEodPriceRecord,
+    FmpEstimateRecord,
+    FmpEvidenceSnapshotRecord,
     ReportedFactRecord,
     SecurityRecord,
     SecurityRefreshStateRecord,
@@ -172,12 +176,81 @@ CREATE TABLE IF NOT EXISTS security_refresh_state (
     security_id      INTEGER NOT NULL REFERENCES securities(security_id),
     dataset          TEXT NOT NULL,
     status           TEXT NOT NULL CHECK(status IN (
-                         'PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'
+                         'PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED',
+                         'PARTIAL', 'UNSUPPORTED'
                      )),
     last_attempt_at  TEXT,
     last_error       TEXT,
     updated_at       TEXT NOT NULL,
     PRIMARY KEY(security_id, dataset)
+);
+CREATE TABLE IF NOT EXISTS fmp_evidence_snapshots (
+    snapshot_id          INTEGER PRIMARY KEY,
+    security_id          INTEGER NOT NULL REFERENCES securities(security_id),
+    dataset              TEXT NOT NULL,
+    period_type          TEXT NOT NULL,
+    source_endpoint      TEXT NOT NULL,
+    request_parameters   TEXT NOT NULL,
+    fetched_at           TEXT NOT NULL,
+    content_hash         TEXT NOT NULL,
+    raw_object_ref        TEXT,
+    evidence_kind        TEXT NOT NULL CHECK(evidence_kind IN ('FACT', 'EXPECTATION')),
+    UNIQUE(security_id, dataset, request_parameters, content_hash, fetched_at)
+);
+CREATE INDEX IF NOT EXISTS fmp_evidence_by_dataset
+    ON fmp_evidence_snapshots(security_id, dataset, fetched_at);
+CREATE TABLE IF NOT EXISTS fmp_canonical_histories (
+    history_id     INTEGER PRIMARY KEY,
+    security_id    INTEGER NOT NULL REFERENCES securities(security_id),
+    provider       TEXT NOT NULL CHECK(provider = 'fmp'),
+    period_type    TEXT NOT NULL CHECK(period_type = 'annual'),
+    input_hash     TEXT NOT NULL,
+    observed_at    TEXT NOT NULL,
+    max_years      INTEGER NOT NULL,
+    UNIQUE(security_id, provider, period_type, input_hash)
+);
+CREATE TABLE IF NOT EXISTS fmp_canonical_facts (
+    history_id    INTEGER NOT NULL REFERENCES fmp_canonical_histories(history_id),
+    snapshot_id   INTEGER NOT NULL REFERENCES fmp_evidence_snapshots(snapshot_id),
+    metric        TEXT NOT NULL,
+    fiscal_year   INTEGER NOT NULL,
+    period_end    TEXT NOT NULL,
+    value         INTEGER NOT NULL,
+    unit          TEXT NOT NULL,
+    provider      TEXT NOT NULL CHECK(provider = 'fmp'),
+    provider_field TEXT NOT NULL,
+    PRIMARY KEY(history_id, metric, fiscal_year, period_end)
+);
+CREATE TABLE IF NOT EXISTS fmp_metric_coverage (
+    history_id INTEGER NOT NULL REFERENCES fmp_canonical_histories(history_id),
+    metric     TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK(status IN (
+                   'AVAILABLE', 'STRUCTURALLY_ABSENT', 'UNSUPPORTED', 'INVALID'
+               )),
+    reason     TEXT,
+    PRIMARY KEY(history_id, metric)
+);
+CREATE TABLE IF NOT EXISTS fmp_eod_prices (
+    snapshot_id  INTEGER PRIMARY KEY REFERENCES fmp_evidence_snapshots(snapshot_id),
+    security_id  INTEGER NOT NULL REFERENCES securities(security_id),
+    market_date  TEXT NOT NULL,
+    close        REAL NOT NULL CHECK(close > 0),
+    source_field TEXT NOT NULL,
+    currency     TEXT
+);
+CREATE TABLE IF NOT EXISTS fmp_estimates (
+    snapshot_id            INTEGER NOT NULL REFERENCES fmp_evidence_snapshots(snapshot_id),
+    target_date            TEXT NOT NULL,
+    revenue_low            REAL,
+    revenue_average        REAL,
+    revenue_high           REAL,
+    revenue_analyst_count  INTEGER,
+    eps_low                REAL,
+    eps_average            REAL,
+    eps_high               REAL,
+    eps_analyst_count      INTEGER,
+    evidence_kind          TEXT NOT NULL CHECK(evidence_kind = 'EXPECTATION'),
+    PRIMARY KEY(snapshot_id, target_date)
 );
 """
 
@@ -292,7 +365,8 @@ class SqliteStore:
                 self._conn.commit()
             else:
                 stored = int(row["value"])
-                if stored == 1 and SCHEMA_VERSION == 2:
+                if 1 <= stored < SCHEMA_VERSION:
+                    self._migrate_to_current_schema(stored)
                     self._conn.execute(
                         "UPDATE schema_meta SET value = ? "
                         "WHERE key = 'schema_version'",
@@ -307,6 +381,48 @@ class SqliteStore:
         except sqlite3.Error as exc:
             raise StorageConnectionError(
                 f"Cannot initialize persistence store: {exc}"
+            ) from exc
+
+    def _migrate_to_current_schema(self, stored_version: int) -> None:
+        if stored_version not in (1, 2):
+            raise SchemaVersionError(
+                f"No migration path from schema version {stored_version}."
+            )
+        try:
+            with self.transaction():
+                rows = self._conn.execute(
+                    "SELECT security_id, dataset, status, last_attempt_at, "
+                    "last_error, updated_at FROM security_refresh_state"
+                ).fetchall()
+                self._conn.execute("DROP TABLE security_refresh_state")
+                self._conn.execute(
+                    "CREATE TABLE security_refresh_state ("
+                    "security_id INTEGER NOT NULL REFERENCES securities(security_id), "
+                    "dataset TEXT NOT NULL, "
+                    "status TEXT NOT NULL CHECK(status IN ("
+                    "'PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', "
+                    "'PARTIAL', 'UNSUPPORTED')), "
+                    "last_attempt_at TEXT, last_error TEXT, updated_at TEXT NOT NULL, "
+                    "PRIMARY KEY(security_id, dataset))"
+                )
+                self._conn.executemany(
+                    "INSERT INTO security_refresh_state(security_id, dataset, status, "
+                    "last_attempt_at, last_error, updated_at) VALUES(?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            row["security_id"],
+                            row["dataset"],
+                            row["status"],
+                            row["last_attempt_at"],
+                            row["last_error"],
+                            row["updated_at"],
+                        )
+                        for row in rows
+                    ],
+                )
+        except sqlite3.Error as exc:
+            raise StorageConnectionError(
+                f"Cannot migrate persistence schema from version {stored_version}: {exc}"
             ) from exc
 
     def close(self) -> None:
@@ -1172,6 +1288,29 @@ class SqliteStore:
             for row in rows
         )
 
+    def get_security_refresh_state(
+        self, security_id: int, dataset: str
+    ) -> SecurityRefreshStateRecord | None:
+        try:
+            row = self._conn.execute(
+                "SELECT security_id, dataset, status, last_attempt_at, last_error "
+                "FROM security_refresh_state WHERE security_id = ? AND dataset = ?",
+                (security_id, dataset),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read refresh state for security {security_id}/{dataset}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return SecurityRefreshStateRecord(
+            security_id=int(row["security_id"]),
+            dataset=row["dataset"],
+            status=row["status"],
+            last_attempt_at=row["last_attempt_at"],
+            last_error=row["last_error"],
+        )
+
     def get_universe_refresh_run(
         self, run_id: str
     ) -> UniverseRefreshRunRecord | None:
@@ -1211,3 +1350,296 @@ class SqliteStore:
                 f"Cannot resolve security IDs for universe snapshot {snapshot_id}: {exc}"
             ) from exc
         return {row["symbol"]: int(row["security_id"]) for row in rows}
+
+    def update_security_refresh_state(
+        self,
+        security_id: int,
+        dataset: str,
+        *,
+        status: str,
+        updated_at: str,
+        last_error: str | None = None,
+    ) -> None:
+        if status not in {
+            "PENDING",
+            "RUNNING",
+            "SUCCEEDED",
+            "FAILED",
+            "PARTIAL",
+            "UNSUPPORTED",
+        }:
+            raise ValueError(f"Invalid security refresh status: {status!r}.")
+        try:
+            self._conn.execute(
+                "INSERT INTO security_refresh_state(security_id, dataset, status, "
+                "last_attempt_at, last_error, updated_at) VALUES(?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(security_id, dataset) DO UPDATE SET "
+                "status = excluded.status, last_attempt_at = excluded.last_attempt_at, "
+                "last_error = excluded.last_error, updated_at = excluded.updated_at",
+                (security_id, dataset, status, updated_at, last_error, updated_at),
+            )
+            self._commit()
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot update refresh state for security {security_id}/{dataset}: {exc}"
+            ) from exc
+
+    def get_latest_fmp_evidence_snapshot(
+        self, security_id: int, dataset: str
+    ) -> FmpEvidenceSnapshotRecord | None:
+        try:
+            row = self._conn.execute(
+                "SELECT snapshot_id, security_id, dataset, period_type, "
+                "source_endpoint, request_parameters, fetched_at, content_hash, "
+                "raw_object_ref, evidence_kind FROM fmp_evidence_snapshots "
+                "WHERE security_id = ? AND dataset = ? "
+                "ORDER BY fetched_at DESC, snapshot_id DESC LIMIT 1",
+                (security_id, dataset),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read latest FMP evidence for security {security_id}/{dataset}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return FmpEvidenceSnapshotRecord(
+            snapshot_id=int(row["snapshot_id"]),
+            security_id=int(row["security_id"]),
+            dataset=row["dataset"],
+            period_type=row["period_type"],
+            source_endpoint=row["source_endpoint"],
+            request_parameters=row["request_parameters"],
+            fetched_at=row["fetched_at"],
+            content_hash=row["content_hash"],
+            raw_object_ref=row["raw_object_ref"],
+            evidence_kind=row["evidence_kind"],
+        )
+
+    def save_fmp_evidence_snapshot(
+        self,
+        snapshot: FmpEvidenceSnapshotRecord,
+        *,
+        raw_payload: bytes,
+    ) -> tuple[int, bool, FmpEvidenceSnapshotRecord]:
+        if compute_content_hash(raw_payload) != snapshot.content_hash:
+            raise StorageWriteError(
+                "FMP evidence content hash does not match its raw payload."
+            )
+        raw_object_ref = snapshot.raw_object_ref
+        if self._raw_store is not None:
+            raw_object_ref = self._raw_store.put(snapshot.content_hash, raw_payload)
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    "INSERT INTO fmp_evidence_snapshots(security_id, dataset, "
+                    "period_type, source_endpoint, request_parameters, fetched_at, "
+                    "content_hash, raw_object_ref, evidence_kind) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(security_id, dataset, request_parameters, content_hash, "
+                    "fetched_at) "
+                    "DO NOTHING",
+                    (
+                        snapshot.security_id,
+                        snapshot.dataset,
+                        snapshot.period_type,
+                        snapshot.source_endpoint,
+                        snapshot.request_parameters,
+                        snapshot.fetched_at,
+                        snapshot.content_hash,
+                        raw_object_ref,
+                        snapshot.evidence_kind,
+                    ),
+                )
+                row = self._conn.execute(
+                    "SELECT snapshot_id, fetched_at, raw_object_ref, evidence_kind "
+                    "FROM fmp_evidence_snapshots WHERE "
+                    "security_id = ? AND dataset = ? AND request_parameters = ? "
+                    "AND content_hash = ? AND fetched_at = ?",
+                    (
+                        snapshot.security_id,
+                        snapshot.dataset,
+                        snapshot.request_parameters,
+                        snapshot.content_hash,
+                        snapshot.fetched_at,
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise StorageWriteError(
+                        f"Cannot resolve FMP evidence snapshot for "
+                        f"security {snapshot.security_id}/{snapshot.dataset}."
+                    )
+                inserted = self._conn.execute(
+                    "SELECT changes() AS changed"
+                ).fetchone()["changed"] == 1
+                stored = FmpEvidenceSnapshotRecord(
+                    snapshot_id=int(row["snapshot_id"]),
+                    security_id=snapshot.security_id,
+                    dataset=snapshot.dataset,
+                    period_type=snapshot.period_type,
+                    source_endpoint=snapshot.source_endpoint,
+                    request_parameters=snapshot.request_parameters,
+                    fetched_at=row["fetched_at"],
+                    content_hash=snapshot.content_hash,
+                    raw_object_ref=row["raw_object_ref"],
+                    evidence_kind=row["evidence_kind"],
+                )
+                return int(row["snapshot_id"]), inserted, stored
+        except StorageWriteError:
+            raise
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot save FMP evidence for security {snapshot.security_id}/"
+                f"{snapshot.dataset}: {exc}"
+            ) from exc
+
+    def get_raw_snapshot(self, content_hash: str) -> bytes:
+        if self._raw_store is None:
+            raise StorageReadError(
+                "Raw FMP evidence cannot be loaded because no raw snapshot store is configured."
+            )
+        return self._raw_store.get(content_hash)
+
+    def save_fmp_canonical_history(
+        self, history: FmpCanonicalHistoryRecord
+    ) -> tuple[int, bool]:
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    "INSERT INTO fmp_canonical_histories(security_id, provider, "
+                    "period_type, input_hash, observed_at, max_years) "
+                    "VALUES(?, 'fmp', 'annual', ?, ?, ?) "
+                    "ON CONFLICT(security_id, provider, period_type, input_hash) "
+                    "DO NOTHING",
+                    (
+                        history.security_id,
+                        history.input_hash,
+                        history.observed_at,
+                        history.max_years,
+                    ),
+                )
+                row = self._conn.execute(
+                    "SELECT history_id FROM fmp_canonical_histories "
+                    "WHERE security_id = ? AND provider = 'fmp' "
+                    "AND period_type = 'annual' AND input_hash = ?",
+                    (history.security_id, history.input_hash),
+                ).fetchone()
+                if row is None:
+                    raise StorageWriteError("Cannot resolve FMP canonical history.")
+                history_id = int(row["history_id"])
+                inserted_history = self._conn.execute(
+                    "SELECT changes() AS changed"
+                ).fetchone()["changed"] == 1
+                if inserted_history:
+                    self._conn.executemany(
+                        "INSERT INTO fmp_canonical_facts(history_id, snapshot_id, metric, "
+                        "fiscal_year, period_end, value, unit, provider, provider_field) "
+                        "VALUES(?, ?, ?, ?, ?, ?, ?, 'fmp', ?)",
+                        [
+                            (
+                                history_id,
+                                fact.snapshot_id,
+                                fact.metric,
+                                fact.fiscal_year,
+                                fact.period_end,
+                                fact.value,
+                                fact.unit,
+                                fact.provider_field,
+                            )
+                            for fact in history.facts
+                        ],
+                    )
+                    self._conn.executemany(
+                        "INSERT INTO fmp_metric_coverage(history_id, metric, status, "
+                        "reason) VALUES(?, ?, ?, ?)",
+                        [
+                            (history_id, metric.metric, metric.status, metric.reason)
+                            for metric in history.coverage
+                        ],
+                    )
+                return history_id, inserted_history
+        except StorageWriteError:
+            raise
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot save annual FMP canonical history for security "
+                f"{history.security_id}: {exc}"
+            ) from exc
+
+    def save_fmp_eod_price(self, price: FmpEodPriceRecord) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO fmp_eod_prices(snapshot_id, security_id, market_date, "
+                "close, source_field, currency) VALUES(?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(snapshot_id) DO NOTHING",
+                (
+                    price.snapshot_id,
+                    price.security_id,
+                    price.market_date,
+                    price.close,
+                    price.source_field,
+                    price.currency,
+                ),
+            )
+            self._commit()
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot save EOD price for security {price.security_id}: {exc}"
+            ) from exc
+
+    def save_fmp_estimates(
+        self, estimates: Sequence[FmpEstimateRecord]
+    ) -> None:
+        target_dates = [estimate.target_date for estimate in estimates]
+        if len(set(target_dates)) != len(target_dates):
+            raise StorageWriteError(
+                "Duplicate target date in an FMP estimate snapshot."
+            )
+        try:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO fmp_estimates(snapshot_id, target_date, revenue_low, "
+                "revenue_average, revenue_high, revenue_analyst_count, eps_low, "
+                "eps_average, eps_high, eps_analyst_count, evidence_kind) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        estimate.snapshot_id,
+                        estimate.target_date,
+                        estimate.revenue_low,
+                        estimate.revenue_average,
+                        estimate.revenue_high,
+                        estimate.revenue_analyst_count,
+                        estimate.eps_low,
+                        estimate.eps_average,
+                        estimate.eps_high,
+                        estimate.eps_analyst_count,
+                        estimate.evidence_kind,
+                    )
+                    for estimate in estimates
+                ],
+            )
+            self._commit()
+        except sqlite3.Error as exc:
+            raise StorageWriteError(f"Cannot save FMP estimates: {exc}") from exc
+
+    def list_evidence_status_counts(
+        self, security_ids: Sequence[int] | None = None
+    ) -> dict[str, dict[str, int]]:
+        query = (
+            "SELECT dataset, status, COUNT(*) AS count FROM security_refresh_state"
+        )
+        params: tuple[int, ...] = ()
+        if security_ids is not None:
+            if not security_ids:
+                return {}
+            placeholders = ",".join("?" for _ in security_ids)
+            query += f" WHERE security_id IN ({placeholders})"
+            params = tuple(security_ids)
+        query += " GROUP BY dataset, status ORDER BY dataset, status"
+        try:
+            rows = self._conn.execute(query, params).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot summarize evidence status: {exc}") from exc
+        result: dict[str, dict[str, int]] = {}
+        for row in rows:
+            result.setdefault(row["dataset"], {})[row["status"]] = int(row["count"])
+        return result

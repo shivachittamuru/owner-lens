@@ -27,6 +27,7 @@ from owner_lens.config import (
     require_fmp_api_key,
 )
 from owner_lens.coverage import LAYER_ORDER
+from owner_lens.evidence_ingestion import refresh_sp500_evidence
 from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
 from owner_lens.persistence import FilesystemRawSnapshotStore, OwnerLensStore
@@ -70,16 +71,33 @@ def _build_parser() -> argparse.ArgumentParser:
 
     refresh_sp500 = sub.add_parser(
         "refresh-sp500",
-        help="Fetch and version current FMP S&P 500 membership.",
+        help="Refresh current FMP S&P 500 membership and persisted evidence.",
     )
     refresh_sp500.add_argument(
         "--tickers",
         nargs="+",
         metavar="TICKER",
         help=(
-            "Initialize future dataset refresh state only for these current "
-            "members (the full membership snapshot is still persisted)."
+            "Limit evidence acquisition to these current members; the full "
+            "membership snapshot is still persisted."
         ),
+    )
+    refresh_sp500.add_argument(
+        "--force",
+        action="store_true",
+        help="Refetch evidence even when a recent persisted response is available.",
+    )
+
+    evidence_status = sub.add_parser(
+        "evidence-status",
+        help="Summarize persisted S&P 500 evidence coverage without network calls.",
+    )
+    evidence_status.add_argument(
+        "--tickers",
+        nargs="*",
+        default=[],
+        metavar="TICKER",
+        help="Limit the summary to these securities.",
     )
 
     show = sub.add_parser("show", help="Show the latest persisted summary/coverage.")
@@ -229,24 +247,75 @@ def _cmd_refresh_sp500(args: argparse.Namespace) -> int:
     try:
         store.initialize()
         with FmpClient(api_key) as client:
-            result = refresh_sp500_universe(
+            universe = refresh_sp500_universe(
                 client=client,
                 store=store,
                 tickers=tuple(args.tickers) if args.tickers else None,
             )
-        snapshot_status = "new" if result.new_snapshot else "unchanged"
-        print(f"S&P 500 refresh succeeded (run {result.run_id[:8]}).")
+            evidence = refresh_sp500_evidence(
+                client=client,
+                store=store,
+                tickers=tuple(args.tickers) if args.tickers else None,
+                force=args.force,
+            )
+        snapshot_status = "new" if universe.new_snapshot else "unchanged"
+        print(f"S&P 500 refresh completed (run {universe.run_id[:8]}).")
         print(
-            f"Membership: {result.member_count} securities; snapshot "
-            f"{result.snapshot_id} ({snapshot_status}, {result.content_hash[:12]})."
+            f"Membership: {universe.member_count} securities; snapshot "
+            f"{universe.snapshot_id} ({snapshot_status}, {universe.content_hash[:12]})."
         )
         print(
-            f"Refresh state: {result.state_symbol_count} securities; "
-            f"{result.state_row_count} dataset entries initialized or refreshed."
+            f"Evidence: {evidence.securities} securities; "
+            f"{evidence.refreshed} refreshed, {evidence.skipped} reused, "
+            f"{evidence.unsupported} unsupported, {evidence.failed} failed; "
+            f"{evidence.canonical_histories} annual canonical histories."
         )
-        return 0
-    except (FmpError, PersistenceError, UniverseRefreshError) as exc:
+        return 1 if evidence.failed else 0
+    except (FmpError, PersistenceError, UniverseRefreshError, ValueError) as exc:
         print(f"S&P 500 refresh failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+
+def _cmd_evidence_status(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = build_local_store(settings)
+    try:
+        store.initialize()
+        snapshot = store.get_latest_universe_snapshot("fmp")
+        if snapshot is None or snapshot.snapshot_id is None:
+            print("No persisted FMP S&P 500 universe is available.", file=sys.stderr)
+            return 1
+        members = store.list_universe_members(snapshot.snapshot_id)
+        requested = {ticker.strip().upper() for ticker in args.tickers}
+        selected = [member for member in members if member.symbol in requested]
+        if requested:
+            missing = requested - {member.symbol for member in selected}
+            if missing:
+                print(
+                    f"Not in persisted S&P 500 snapshot: {', '.join(sorted(missing))}.",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            selected = list(members)
+        security_ids = store.universe_security_ids(snapshot.snapshot_id)
+        counts = store.list_evidence_status_counts(
+            [security_ids[member.symbol] for member in selected]
+        )
+        print(
+            f"Persisted universe: {len(members)} securities, "
+            f"snapshot {snapshot.snapshot_id} observed {snapshot.observed_at}."
+        )
+        for dataset, states in sorted(counts.items()):
+            summary = ", ".join(
+                f"{status.lower()}={count}" for status, count in sorted(states.items())
+            )
+            print(f"{dataset}: {summary}")
+        return 0
+    except PersistenceError as exc:
+        print(f"Cannot read evidence status: {exc}", file=sys.stderr)
         return 1
     finally:
         store.close()
@@ -463,6 +532,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest(args)
     if args.command == "refresh-sp500":
         return _cmd_refresh_sp500(args)
+    if args.command == "evidence-status":
+        return _cmd_evidence_status(args)
     if args.command == "show":
         return _cmd_show(args)
     if args.command == "screen":

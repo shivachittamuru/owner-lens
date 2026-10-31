@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 # Store-level version awareness.
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 
@@ -26,6 +26,12 @@ __all__ = [
     "CompanyRecord",
     "CoverageResultRecord",
     "DerivedMetricRecord",
+    "FmpCanonicalCoverageRecord",
+    "FmpCanonicalFactRecord",
+    "FmpCanonicalHistoryRecord",
+    "FmpEodPriceRecord",
+    "FmpEstimateRecord",
+    "FmpEvidenceSnapshotRecord",
     "ReportedFactRecord",
     "SecurityRecord",
     "SecurityRefreshStateRecord",
@@ -114,6 +120,86 @@ class SecurityRefreshStateRecord:
     status: str
     last_attempt_at: str | None = None
     last_error: str | None = None
+
+
+@dataclass(frozen=True)
+class FmpEvidenceSnapshotRecord:
+    """Immutable raw evidence response and request provenance."""
+
+    security_id: int
+    dataset: str
+    period_type: str
+    source_endpoint: str
+    request_parameters: str
+    fetched_at: str
+    content_hash: str
+    evidence_kind: str = "FACT"
+    raw_object_ref: str | None = None
+    snapshot_id: int | None = None
+
+
+@dataclass(frozen=True)
+class FmpCanonicalFactRecord:
+    """One FMP-derived annual canonical observation."""
+
+    metric: str
+    value: int
+    unit: str
+    fiscal_year: int
+    period_end: str
+    provider_field: str
+    snapshot_id: int
+
+
+@dataclass(frozen=True)
+class FmpCanonicalCoverageRecord:
+    """Explicit availability state for one annual FMP canonical metric."""
+
+    metric: str
+    status: str
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class FmpCanonicalHistoryRecord:
+    """Provider-isolated annual FMP history and its canonical coverage."""
+
+    security_id: int
+    input_hash: str
+    observed_at: str
+    max_years: int
+    facts: tuple[FmpCanonicalFactRecord, ...]
+    coverage: tuple[FmpCanonicalCoverageRecord, ...]
+    history_id: int | None = None
+
+
+@dataclass(frozen=True)
+class FmpEodPriceRecord:
+    """Latest persisted EOD closing price linked to one raw evidence snapshot."""
+
+    snapshot_id: int
+    security_id: int
+    market_date: str
+    close: float
+    source_field: str
+    currency: str | None = None
+
+
+@dataclass(frozen=True)
+class FmpEstimateRecord:
+    """One time-stamped analyst expectation for a target fiscal period."""
+
+    snapshot_id: int
+    target_date: str
+    revenue_low: float | None = None
+    revenue_average: float | None = None
+    revenue_high: float | None = None
+    revenue_analyst_count: int | None = None
+    eps_low: float | None = None
+    eps_average: float | None = None
+    eps_high: float | None = None
+    eps_analyst_count: int | None = None
+    evidence_kind: str = "EXPECTATION"
 
 
 @dataclass(frozen=True)

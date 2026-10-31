@@ -148,6 +148,108 @@ def test_empty_statement_list_means_symbol_not_found() -> None:
         _client(_ok(payloads)).retrieve_annual_statements("ADBE")
 
 
+def test_premium_evidence_endpoints_preserve_raw_payload_and_parameters() -> None:
+    seen: list[httpx.Request] = []
+    responses: dict[str, Any] = {
+        "/stable/income-statement": [
+            {
+                "symbol": "ADBE",
+                "date": "2025-12-31",
+                "fiscalYear": "2025",
+                "period": "FY",
+            }
+        ],
+        "/stable/analyst-estimates": [
+            {"symbol": "ADBE", "date": "2026-12-31", "revenueAvg": 100.0}
+        ],
+        "/stable/historical-price-eod/light": [
+            {"symbol": "ADBE", "date": "2026-01-02", "price": 123.45}
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=responses[request.url.path])
+
+    client = _client(handler)
+    annual = client.get_statement_evidence(
+        "income", "ADBE", period="annual", limit=15
+    )
+    estimate = client.get_analyst_estimates_evidence(
+        "ADBE", period="quarter", limit=4
+    )
+    eod = client.get_eod_price_evidence("ADBE")
+
+    assert annual.rows[0]["period"] == "FY"
+    assert json.loads(annual.raw_payload)[0]["symbol"] == "ADBE"
+    assert seen[0].url.params["period"] == "annual"
+    assert seen[0].url.params["limit"] == "15"
+    assert seen[1].url.params["period"] == "quarter"
+    assert seen[1].url.params["limit"] == "4"
+    assert seen[1].url.params["page"] == "0"
+    assert seen[2].url.path == "/stable/historical-price-eod/light"
+    assert eod.rows[0]["price"] == 123.45
+    assert estimate.endpoint == "analyst-estimates"
+
+
+def test_quarterly_statement_request_uses_fmp_period_label() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "symbol": "ADBE",
+                    "date": "2025-03-31",
+                    "fiscalYear": "2025",
+                    "period": "Q1",
+                }
+            ],
+        )
+
+    payload = _client(handler).get_statement_evidence(
+        "income", "ADBE", period="quarter", limit=8
+    )
+
+    assert seen[0].url.params["period"] == "quarter"
+    assert payload.request_parameters == (
+        ("limit", "8"),
+        ("period", "quarter"),
+        ("symbol", "ADBE"),
+    )
+
+
+def test_premium_evidence_rejects_duplicate_quarterly_periods() -> None:
+    row = {
+        "symbol": "ADBE",
+        "date": "2025-03-31",
+        "fiscalYear": "2025",
+        "period": "Q1",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[row, row])
+
+    with pytest.raises(MalformedFmpResponseError, match="duplicate quarter period"):
+        _client(handler).get_statement_evidence(
+            "income", "ADBE", period="quarter", limit=8
+        )
+
+
+def test_premium_estimates_reject_duplicate_target_periods() -> None:
+    row = {"symbol": "ADBE", "date": "2026-12-31"}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[row, row])
+
+    with pytest.raises(MalformedFmpResponseError, match="duplicate target date"):
+        _client(handler).get_analyst_estimates_evidence(
+            "ADBE", period="annual", limit=3
+        )
+
+
 @pytest.mark.parametrize("limit", [0, -1, True])
 def test_invalid_limit_is_rejected_before_any_request(limit: Any) -> None:
     def handler(request: httpx.Request) -> httpx.Response:

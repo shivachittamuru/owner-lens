@@ -27,10 +27,15 @@ __all__ = [
 
 SP500_PROVIDER = "fmp"
 SP500_REFRESH_DATASETS = (
-    "annual_statements",
-    "quarterly_statements",
+    "annual_income_statement",
+    "annual_balance_sheet_statement",
+    "annual_cash_flow_statement",
+    "quarterly_income_statement",
+    "quarterly_balance_sheet_statement",
+    "quarterly_cash_flow_statement",
     "eod_price",
-    "analyst_estimates",
+    "annual_analyst_estimates",
+    "quarterly_analyst_estimates",
 )
 _SYMBOL_PATTERN = re.compile(r"[A-Z0-9][A-Z0-9.\-]*")
 
