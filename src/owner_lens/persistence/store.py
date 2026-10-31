@@ -13,6 +13,7 @@ as the persistence-category errors in ``owner_lens.persistence.errors``.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -25,7 +26,7 @@ from owner_lens.persistence.errors import (
     StorageReadError,
     StorageWriteError,
 )
-from owner_lens.persistence.raw import RawSnapshotStore
+from owner_lens.persistence.raw import RawSnapshotStore, compute_content_hash
 from owner_lens.persistence.records import (
     SCHEMA_VERSION,
     AnalysisDriverRecord,
@@ -34,7 +35,12 @@ from owner_lens.persistence.records import (
     CoverageResultRecord,
     DerivedMetricRecord,
     ReportedFactRecord,
+    SecurityRecord,
+    SecurityRefreshStateRecord,
     SourceSnapshotRecord,
+    UniverseConstituentRecord,
+    UniverseRefreshRunRecord,
+    UniverseSnapshotRecord,
 )
 
 __all__ = ["OwnerLensStore", "SqliteStore"]
@@ -122,6 +128,56 @@ CREATE TABLE IF NOT EXISTS coverage_results (
     reason         TEXT,
     blocking_input TEXT,
     UNIQUE(snapshot_id, subject_kind, subject)
+);
+CREATE TABLE IF NOT EXISTS securities (
+    security_id INTEGER PRIMARY KEY,
+    symbol      TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    cik         TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS universe_snapshots (
+    snapshot_id     INTEGER PRIMARY KEY,
+    provider        TEXT NOT NULL,
+    observed_at     TEXT NOT NULL,
+    source_uri      TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    raw_object_ref  TEXT,
+    UNIQUE(provider, content_hash)
+);
+CREATE TABLE IF NOT EXISTS universe_members (
+    snapshot_id INTEGER NOT NULL REFERENCES universe_snapshots(snapshot_id),
+    security_id INTEGER NOT NULL REFERENCES securities(security_id),
+    symbol      TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    cik         TEXT,
+    sector      TEXT,
+    subsector   TEXT,
+    PRIMARY KEY(snapshot_id, security_id),
+    UNIQUE(snapshot_id, symbol)
+);
+CREATE TABLE IF NOT EXISTS universe_refresh_runs (
+    run_id             TEXT PRIMARY KEY,
+    started_at         TEXT NOT NULL,
+    completed_at       TEXT,
+    status             TEXT NOT NULL CHECK(status IN (
+                           'RUNNING', 'SUCCEEDED', 'FAILED'
+                       )),
+    snapshot_id        INTEGER REFERENCES universe_snapshots(snapshot_id),
+    requested_symbols  TEXT NOT NULL,
+    error              TEXT
+);
+CREATE TABLE IF NOT EXISTS security_refresh_state (
+    security_id      INTEGER NOT NULL REFERENCES securities(security_id),
+    dataset          TEXT NOT NULL,
+    status           TEXT NOT NULL CHECK(status IN (
+                         'PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'
+                     )),
+    last_attempt_at  TEXT,
+    last_error       TEXT,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY(security_id, dataset)
 );
 """
 
@@ -236,7 +292,14 @@ class SqliteStore:
                 self._conn.commit()
             else:
                 stored = int(row["value"])
-                if stored != SCHEMA_VERSION:
+                if stored == 1 and SCHEMA_VERSION == 2:
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value = ? "
+                        "WHERE key = 'schema_version'",
+                        (str(SCHEMA_VERSION),),
+                    )
+                    self._conn.commit()
+                elif stored != SCHEMA_VERSION:
                     raise SchemaVersionError(
                         f"Stored schema version {stored} is incompatible with "
                         f"expected version {SCHEMA_VERSION}."
@@ -807,3 +870,344 @@ class SqliteStore:
             raise StorageWriteError(
                 f"Cannot update processing status for {cik}: {exc}"
             ) from exc
+
+    def start_universe_refresh_run(
+        self, run: UniverseRefreshRunRecord
+    ) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO universe_refresh_runs(run_id, started_at, status, "
+                "requested_symbols) VALUES(?, ?, 'RUNNING', ?)",
+                (
+                    run.run_id,
+                    run.started_at,
+                    json.dumps(run.requested_symbols, separators=(",", ":")),
+                ),
+            )
+            self._commit()
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot start universe refresh run {run.run_id}: {exc}"
+            ) from exc
+
+    def finish_universe_refresh_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        completed_at: str,
+        snapshot_id: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        if status not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError(f"Invalid completed refresh-run status: {status!r}.")
+        try:
+            cursor = self._conn.execute(
+                "UPDATE universe_refresh_runs SET status = ?, completed_at = ?, "
+                "snapshot_id = ?, error = ? WHERE run_id = ? AND status = 'RUNNING'",
+                (status, completed_at, snapshot_id, error, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise StorageWriteError(
+                    f"Refresh run {run_id} is missing or is no longer running."
+                )
+            self._commit()
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot finish universe refresh run {run_id}: {exc}"
+            ) from exc
+
+    def save_universe_snapshot(
+        self,
+        snapshot: UniverseSnapshotRecord,
+        members: Sequence[UniverseConstituentRecord],
+        *,
+        raw_payload: bytes,
+        state_symbols: Sequence[str],
+        datasets: Sequence[str],
+        created_at: str,
+    ) -> tuple[int, bool, int]:
+        """Persist raw evidence, immutable membership, security identities, and pending work."""
+        if compute_content_hash(raw_payload) != snapshot.content_hash:
+            raise StorageWriteError(
+                "Universe snapshot content hash does not match its raw payload."
+            )
+        raw_object_ref = snapshot.raw_object_ref
+        if self._raw_store is not None:
+            raw_object_ref = self._raw_store.put(snapshot.content_hash, raw_payload)
+
+        wanted = set(state_symbols)
+        if not wanted.issubset({member.symbol for member in members}):
+            raise StorageWriteError(
+                "Refresh state requested for a symbol outside the universe snapshot."
+            )
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    "INSERT INTO universe_snapshots(provider, observed_at, source_uri, "
+                    "content_hash, raw_object_ref) VALUES(?, ?, ?, ?, ?) "
+                    "ON CONFLICT(provider, content_hash) DO NOTHING",
+                    (
+                        snapshot.provider,
+                        snapshot.observed_at,
+                        snapshot.source_uri,
+                        snapshot.content_hash,
+                        raw_object_ref,
+                    ),
+                )
+                snapshot_row = self._conn.execute(
+                    "SELECT snapshot_id FROM universe_snapshots "
+                    "WHERE provider = ? AND content_hash = ?",
+                    (snapshot.provider, snapshot.content_hash),
+                ).fetchone()
+                if snapshot_row is None:
+                    raise StorageWriteError(
+                        "Universe snapshot insert did not produce a readable row."
+                    )
+                snapshot_id = int(snapshot_row["snapshot_id"])
+                inserted_snapshot = self._conn.execute(
+                    "SELECT COUNT(*) AS count FROM universe_members "
+                    "WHERE snapshot_id = ?",
+                    (snapshot_id,),
+                ).fetchone()["count"] == 0
+                if inserted_snapshot:
+                    for member in members:
+                        self._conn.execute(
+                            "INSERT INTO securities(symbol, name, cik, created_at, "
+                            "updated_at) VALUES(?, ?, ?, ?, ?) "
+                            "ON CONFLICT(symbol) DO UPDATE SET name = excluded.name, "
+                            "cik = excluded.cik, updated_at = excluded.updated_at",
+                            (
+                                member.symbol,
+                                member.name,
+                                member.cik,
+                                created_at,
+                                created_at,
+                            ),
+                        )
+                        security_id_row = self._conn.execute(
+                            "SELECT security_id FROM securities WHERE symbol = ?",
+                            (member.symbol,),
+                        ).fetchone()
+                        if security_id_row is None:
+                            raise StorageWriteError(
+                                f"Cannot resolve security identity for {member.symbol}."
+                            )
+                        security_id = int(security_id_row["security_id"])
+                        self._conn.execute(
+                            "INSERT INTO universe_members(snapshot_id, security_id, "
+                            "symbol, name, cik, sector, subsector) "
+                            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                snapshot_id,
+                                security_id,
+                                member.symbol,
+                                member.name,
+                                member.cik,
+                                member.sector,
+                                member.subsector,
+                            ),
+                        )
+                else:
+                    for member in members:
+                        self._conn.execute(
+                            "INSERT INTO securities(symbol, name, cik, created_at, "
+                            "updated_at) VALUES(?, ?, ?, ?, ?) "
+                            "ON CONFLICT(symbol) DO UPDATE SET name = excluded.name, "
+                            "cik = excluded.cik, updated_at = excluded.updated_at",
+                            (
+                                member.symbol,
+                                member.name,
+                                member.cik,
+                                created_at,
+                                created_at,
+                            ),
+                        )
+
+                state_count = 0
+                for symbol in state_symbols:
+                    row = self._conn.execute(
+                        "SELECT security_id FROM securities WHERE symbol = ?",
+                        (symbol,),
+                    ).fetchone()
+                    if row is None:
+                        raise StorageWriteError(
+                            f"Cannot resolve security refresh state for {symbol}."
+                        )
+                    security_id = int(row["security_id"])
+                    for dataset in datasets:
+                        cursor = self._conn.execute(
+                            "INSERT INTO security_refresh_state("
+                            "security_id, dataset, status, updated_at) "
+                            "VALUES(?, ?, 'PENDING', ?) "
+                            "ON CONFLICT(security_id, dataset) DO UPDATE SET "
+                            "updated_at = excluded.updated_at",
+                            (security_id, dataset, created_at),
+                        )
+                        state_count += cursor.rowcount
+                return snapshot_id, inserted_snapshot, state_count
+        except StorageWriteError:
+            raise
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"Cannot save universe snapshot {snapshot.content_hash}: {exc}"
+            ) from exc
+
+    def get_universe_snapshot(
+        self, provider: str, content_hash: str
+    ) -> UniverseSnapshotRecord | None:
+        try:
+            row = self._conn.execute(
+                "SELECT snapshot_id, provider, observed_at, source_uri, content_hash, "
+                "raw_object_ref FROM universe_snapshots "
+                "WHERE provider = ? AND content_hash = ?",
+                (provider, content_hash),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read universe snapshot {provider}/{content_hash}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return UniverseSnapshotRecord(
+            snapshot_id=int(row["snapshot_id"]),
+            provider=row["provider"],
+            observed_at=row["observed_at"],
+            source_uri=row["source_uri"],
+            content_hash=row["content_hash"],
+            raw_object_ref=row["raw_object_ref"],
+        )
+
+    def get_latest_universe_snapshot(
+        self, provider: str
+    ) -> UniverseSnapshotRecord | None:
+        try:
+            row = self._conn.execute(
+                "SELECT snapshot_id, provider, observed_at, source_uri, content_hash, "
+                "raw_object_ref FROM universe_snapshots WHERE provider = ? "
+                "ORDER BY observed_at DESC, snapshot_id DESC LIMIT 1",
+                (provider,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read latest universe snapshot for {provider}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return UniverseSnapshotRecord(
+            snapshot_id=int(row["snapshot_id"]),
+            provider=row["provider"],
+            observed_at=row["observed_at"],
+            source_uri=row["source_uri"],
+            content_hash=row["content_hash"],
+            raw_object_ref=row["raw_object_ref"],
+        )
+
+    def list_universe_members(
+        self, snapshot_id: int
+    ) -> tuple[UniverseConstituentRecord, ...]:
+        try:
+            rows = self._conn.execute(
+                "SELECT symbol, name, cik, sector, subsector FROM universe_members "
+                "WHERE snapshot_id = ? ORDER BY symbol",
+                (snapshot_id,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot list members for universe snapshot {snapshot_id}: {exc}"
+            ) from exc
+        return tuple(
+            UniverseConstituentRecord(
+                symbol=row["symbol"],
+                name=row["name"],
+                cik=row["cik"],
+                sector=row["sector"],
+                subsector=row["subsector"],
+            )
+            for row in rows
+        )
+
+    def list_securities(self) -> tuple[SecurityRecord, ...]:
+        try:
+            rows = self._conn.execute(
+                "SELECT security_id, symbol, name, cik FROM securities "
+                "ORDER BY symbol"
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot list securities: {exc}") from exc
+        return tuple(
+            SecurityRecord(
+                security_id=int(row["security_id"]),
+                symbol=row["symbol"],
+                name=row["name"],
+                cik=row["cik"],
+            )
+            for row in rows
+        )
+
+    def list_security_refresh_state(
+        self, security_id: int | None = None
+    ) -> tuple[SecurityRefreshStateRecord, ...]:
+        query = (
+            "SELECT security_id, dataset, status, last_attempt_at, last_error "
+            "FROM security_refresh_state"
+        )
+        params: tuple[int, ...] = ()
+        if security_id is not None:
+            query += " WHERE security_id = ?"
+            params = (security_id,)
+        query += " ORDER BY security_id, dataset"
+        try:
+            rows = self._conn.execute(query, params).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot list security refresh state: {exc}") from exc
+        return tuple(
+            SecurityRefreshStateRecord(
+                security_id=int(row["security_id"]),
+                dataset=row["dataset"],
+                status=row["status"],
+                last_attempt_at=row["last_attempt_at"],
+                last_error=row["last_error"],
+            )
+            for row in rows
+        )
+
+    def get_universe_refresh_run(
+        self, run_id: str
+    ) -> UniverseRefreshRunRecord | None:
+        try:
+            row = self._conn.execute(
+                "SELECT run_id, started_at, completed_at, status, snapshot_id, "
+                "requested_symbols, error FROM universe_refresh_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read universe refresh run {run_id}: {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return UniverseRefreshRunRecord(
+            run_id=row["run_id"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            status=row["status"],
+            snapshot_id=row["snapshot_id"],
+            requested_symbols=tuple(json.loads(row["requested_symbols"])),
+            error=row["error"],
+        )
+
+    def universe_security_ids(
+        self, snapshot_id: int
+    ) -> dict[str, int]:
+        try:
+            rows = self._conn.execute(
+                "SELECT symbol, security_id FROM universe_members "
+                "WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot resolve security IDs for universe snapshot {snapshot_id}: {exc}"
+            ) from exc
+        return {row["symbol"]: int(row["security_id"]) for row in rows}

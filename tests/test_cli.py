@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
 from _fixtures import FakeSecClient
+from _fmp_universe_fixtures import sp500_payload
 
 import owner_lens
 from owner_lens import cli, ingestion
 from owner_lens.config import OwnerLensSettings
+from owner_lens.fmp import FmpConstituent, FmpConstituents
 from owner_lens.persistence import FilesystemRawSnapshotStore, SqliteStore
 from owner_lens.sec import CompanyResolutionError
 
@@ -24,11 +27,16 @@ _STRUCTURED_TABLES = (
 )
 
 
-def _settings(tmp_path: Path, user_agent: str | None = "OwnerLens test@example.com"):
+def _settings(
+    tmp_path: Path,
+    user_agent: str | None = "OwnerLens test@example.com",
+    fmp_api_key: str | None = None,
+):
     return OwnerLensSettings(
         sec_user_agent=user_agent,
         db_path=str(tmp_path / "db.sqlite"),
         raw_data_path=str(tmp_path / "raw"),
+        fmp_api_key=fmp_api_key,
     )
 
 
@@ -246,3 +254,69 @@ def test_screen_rejects_a_non_positive_history_window(
     _patch(monkeypatch, tmp_path)
 
     assert cli.main(["screen", "--max-years", "0"]) == 2
+
+
+class _FixtureFmpClient:
+    def __init__(self, _api_key: str) -> None:
+        rows = sp500_payload()
+        self.response = FmpConstituents(
+            members=tuple(
+                FmpConstituent(
+                    symbol=row["symbol"],
+                    name=row["name"],
+                    cik=row["cik"],
+                    sector=row["sector"],
+                    subsector=row["subSector"],
+                )
+                for row in rows
+            ),
+            source_url="https://financialmodelingprep.com/stable/sp500-constituent",
+            raw_payload=json.dumps(rows).encode(),
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def get_sp500_constituents(self, *, refresh: bool = True) -> FmpConstituents:
+        assert refresh
+        return self.response
+
+
+def test_refresh_sp500_cli_persists_bounded_membership_without_live_fmp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: _settings(tmp_path, fmp_api_key="fixture-key"),
+    )
+    monkeypatch.setattr(cli, "FmpClient", _FixtureFmpClient)
+
+    assert cli.main(
+        ["refresh-sp500", "--tickers", "ADBE", "GOOG", "GOOGL"]
+    ) == 0
+    output = capsys.readouterr().out
+    assert "S&P 500 refresh succeeded" in output
+    assert "4 securities" in output
+    assert "3 securities" in output
+
+    store = _open(tmp_path)
+    assert len(store.list_universe_members(1)) == 4
+    assert len(store.list_security_refresh_state()) == 3 * 4
+    store.close()
+
+
+def test_refresh_sp500_cli_requires_an_fmp_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: _settings(tmp_path))
+
+    assert cli.main(["refresh-sp500"]) == 2
+    assert "OWNER_LENS_FMP_API_KEY" in capsys.readouterr().err

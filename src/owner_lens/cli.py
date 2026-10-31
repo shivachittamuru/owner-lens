@@ -20,11 +20,17 @@ import sys
 from pathlib import Path
 
 from owner_lens.canonical import CanonicalFinancialHistory
-from owner_lens.config import OwnerLensSettings, build_local_store, load_settings
+from owner_lens.config import (
+    OwnerLensSettings,
+    build_local_store,
+    load_settings,
+    require_fmp_api_key,
+)
 from owner_lens.coverage import LAYER_ORDER
+from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
 from owner_lens.persistence import FilesystemRawSnapshotStore, OwnerLensStore
-from owner_lens.persistence.errors import StorageReadError
+from owner_lens.persistence.errors import PersistenceError, StorageReadError
 from owner_lens.screening import (
     format_screening_detail,
     format_screening_table,
@@ -33,6 +39,10 @@ from owner_lens.screening import (
 )
 from owner_lens.sec import SecClient, SecError
 from owner_lens.sec_adapter import canonical_history_from_sec
+from owner_lens.universe_ingestion import (
+    UniverseRefreshError,
+    refresh_sp500_universe,
+)
 
 __all__ = ["format_result", "main"]
 
@@ -56,6 +66,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Re-run analytics against an already-stored snapshot.",
+    )
+
+    refresh_sp500 = sub.add_parser(
+        "refresh-sp500",
+        help="Fetch and version current FMP S&P 500 membership.",
+    )
+    refresh_sp500.add_argument(
+        "--tickers",
+        nargs="+",
+        metavar="TICKER",
+        help=(
+            "Initialize future dataset refresh state only for these current "
+            "members (the full membership snapshot is still persisted)."
+        ),
     )
 
     show = sub.add_parser("show", help="Show the latest persisted summary/coverage.")
@@ -191,6 +215,41 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         store.close()
 
     return 1 if result.status is IngestionStatus.FAILED else 0
+
+
+def _cmd_refresh_sp500(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    try:
+        api_key = require_fmp_api_key(settings)
+    except FmpConfigurationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    store = build_local_store(settings)
+    try:
+        store.initialize()
+        with FmpClient(api_key) as client:
+            result = refresh_sp500_universe(
+                client=client,
+                store=store,
+                tickers=tuple(args.tickers) if args.tickers else None,
+            )
+        snapshot_status = "new" if result.new_snapshot else "unchanged"
+        print(f"S&P 500 refresh succeeded (run {result.run_id[:8]}).")
+        print(
+            f"Membership: {result.member_count} securities; snapshot "
+            f"{result.snapshot_id} ({snapshot_status}, {result.content_hash[:12]})."
+        )
+        print(
+            f"Refresh state: {result.state_symbol_count} securities; "
+            f"{result.state_row_count} dataset entries initialized or refreshed."
+        )
+        return 0
+    except (FmpError, PersistenceError, UniverseRefreshError) as exc:
+        print(f"S&P 500 refresh failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
 
 
 def _cmd_show(args: argparse.Namespace) -> int:
@@ -402,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.command == "ingest":
         return _cmd_ingest(args)
+    if args.command == "refresh-sp500":
+        return _cmd_refresh_sp500(args)
     if args.command == "show":
         return _cmd_show(args)
     if args.command == "screen":

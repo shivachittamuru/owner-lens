@@ -28,8 +28,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Final, Self
 
@@ -38,10 +40,13 @@ import httpx
 __all__ = [
     "DEFAULT_FMP_CACHE_DIR",
     "FMP_BASE_URL",
+    "FMP_SP500_ENDPOINT",
     "FMP_STATEMENT_ENDPOINTS",
     "FmpAuthenticationError",
     "FmpClient",
     "FmpConfigurationError",
+    "FmpConstituent",
+    "FmpConstituents",
     "FmpError",
     "FmpPlanRestrictionError",
     "FmpRateLimitError",
@@ -64,7 +69,10 @@ _ANNUAL_PERIOD: Final = "FY"
 _REQUEST_PERIOD: Final = "annual"
 _CACHEABLE_SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9.\-]*")
 _REQUEST_TIMEOUT_SECONDS: Final = 30.0
+_MAX_REQUEST_ATTEMPTS: Final = 3
+_MAX_RETRY_DELAY_SECONDS: Final = 30.0
 _REDACTED: Final = "<redacted>"
+FMP_SP500_ENDPOINT: Final = "sp500-constituent"
 
 
 class FmpError(Exception):
@@ -127,6 +135,26 @@ class FmpStatements:
             raise KeyError(f"Unknown FMP statement: {statement!r}.")
         rows: tuple[dict[str, Any], ...] = getattr(self, statement)
         return rows
+
+
+@dataclass(frozen=True)
+class FmpConstituent:
+    """Validated point-in-time FMP constituent identity and membership metadata."""
+
+    symbol: str
+    name: str
+    cik: str | None
+    sector: str | None
+    subsector: str | None
+
+
+@dataclass(frozen=True)
+class FmpConstituents:
+    """Validated constituent payload and its raw retrieval provenance."""
+
+    members: tuple[FmpConstituent, ...]
+    source_url: str
+    raw_payload: bytes
 
 
 class _DefaultCache:
@@ -226,55 +254,125 @@ class FmpClient:
 
     def _get_json(self, endpoint: str, symbol: str, limit: int) -> tuple[Any, str]:
         """Call FMP and return the parsed payload with its raw body text."""
-        url = f"{self._base_url}/{endpoint}"
-        params: dict[str, str | int] = {
-            "symbol": symbol,
-            "period": _REQUEST_PERIOD,
-            "limit": limit,
-            "apikey": self._api_key,
-        }
         source = self._source_url(endpoint, symbol, limit)
-        try:
-            response = self._client().get(url, params=params)
-        except httpx.HTTPError as exc:
+        payload, body, _raw = self._request_json(
+            endpoint,
+            {
+                "symbol": symbol,
+                "period": _REQUEST_PERIOD,
+                "limit": limit,
+                "apikey": self._api_key,
+            },
+            source=source,
+            description=f"{endpoint} for {symbol}",
+        )
+        return payload, body
+
+    def _request_json(
+        self,
+        endpoint: str,
+        params: dict[str, str | int],
+        *,
+        source: str,
+        description: str,
+    ) -> tuple[Any, str, bytes]:
+        """Request JSON with bounded retries for transient transport and HTTP failures."""
+        url = f"{self._base_url}/{endpoint}"
+        response: httpx.Response | None = None
+        last_transport_error: httpx.HTTPError | None = None
+        for attempt in range(_MAX_REQUEST_ATTEMPTS):
+            try:
+                response = self._client().get(url, params=params)
+                last_transport_error = None
+            except httpx.HTTPError as exc:
+                last_transport_error = exc
+                if attempt + 1 < _MAX_REQUEST_ATTEMPTS:
+                    time.sleep(min(0.5 * (2**attempt), _MAX_RETRY_DELAY_SECONDS))
+                    continue
+                break
+            if response.status_code not in (429, 500, 502, 503, 504):
+                break
+            if attempt + 1 < _MAX_REQUEST_ATTEMPTS:
+                time.sleep(_retry_delay(response, attempt))
+        if response is None or last_transport_error is not None:
+            detail = self._redact(str(last_transport_error))
             raise FmpTransportError(
-                self._redact(f"Failed to reach FMP at {source}: {exc}")
+                self._redact(f"Failed to reach FMP at {source}: {detail}")
             ) from None
         detail = self._redact(response.text.strip())[:300]
         status = response.status_code
         if status == httpx.codes.PAYMENT_REQUIRED:
             raise FmpPlanRestrictionError(
-                f"FMP {endpoint} for {symbol} is not available on the current "
+                f"FMP {description} is not available on the current "
                 f"subscription (HTTP 402): {detail}",
                 status_code=status,
             )
         if status in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
             raise FmpAuthenticationError(
-                f"FMP rejected the API key for {endpoint} (HTTP {status}): {detail}",
+                f"FMP rejected the API key for {description} (HTTP {status}): {detail}",
                 status_code=status,
             )
         if status == httpx.codes.TOO_MANY_REQUESTS:
             raise FmpRateLimitError(
-                f"FMP rate limit reached for {endpoint} (HTTP 429): {detail}",
+                f"FMP rate limit reached for {description} (HTTP 429): {detail}",
                 status_code=status,
             )
         if status != httpx.codes.OK:
             raise FmpResponseError(
-                f"FMP {endpoint} for {symbol} returned HTTP {status}: {detail}",
+                f"FMP {description} returned HTTP {status}: {detail}",
                 status_code=status,
             )
         try:
             payload = response.json()
         except ValueError as exc:
             raise MalformedFmpResponseError(
-                f"FMP {endpoint} for {symbol} did not return valid JSON: {exc}"
+                f"FMP {description} did not return valid JSON: {exc}"
             ) from None
         if isinstance(payload, dict) and "Error Message" in payload:
             raise FmpResponseError(
                 self._redact(f"FMP {endpoint} error: {payload['Error Message']}"),
                 status_code=status,
             )
-        return payload, response.text
+        return payload, response.text, response.content
+
+    def get_sp500_constituents(self, *, refresh: bool = True) -> FmpConstituents:
+        """Retrieve the current S&P 500 constituents from FMP's stable endpoint.
+
+        A normal refresh always requests the latest provider membership. Passing
+        ``refresh=False`` opts into the local response cache.
+        """
+        endpoint = FMP_SP500_ENDPOINT
+        path = (
+            self.cache.path(endpoint, "SP500", period="current", limit=1)
+            if self.cache is not None
+            else None
+        )
+        if path is not None and self.cache is not None and not refresh:
+            cached = self.cache.load(path)
+            if cached is not None:
+                try:
+                    members = _validate_constituents(cached)
+                    return FmpConstituents(
+                        members=members,
+                        source_url=f"{self._base_url}/{endpoint}",
+                        raw_payload=path.read_bytes(),
+                    )
+                except (OSError, MalformedFmpResponseError):
+                    pass
+
+        source_url = f"{self._base_url}/{endpoint}"
+        payload, body, raw_payload = self._request_json(
+            endpoint,
+            {"apikey": self._api_key},
+            source=source_url,
+            description="S&P 500 constituents",
+        )
+        members = _validate_constituents(payload)
+        if path is not None and self.cache is not None:
+            self.cache.save(path, body)
+        return FmpConstituents(
+            members=members, source_url=source_url, raw_payload=raw_payload
+        )
 
     def get_annual_statement(
         self, statement: str, symbol: str, *, limit: int = 5, refresh: bool = False
@@ -391,3 +489,95 @@ def _validate_rows(payload: Any, endpoint: str, symbol: str) -> tuple[dict[str, 
             ) from None
         rows.append(row)
     return tuple(rows)
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            delay = float(retry_after)
+        except ValueError:
+            try:
+                retry_time = parsedate_to_datetime(retry_after)
+                if retry_time.tzinfo is None:
+                    retry_time = retry_time.replace(tzinfo=UTC)
+                delay = (retry_time - datetime.now(UTC)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                delay = 0.5 * (2**attempt)
+    else:
+        delay = 0.5 * (2**attempt)
+    return min(max(delay, 0.0), _MAX_RETRY_DELAY_SECONDS)
+
+
+def _validate_constituents(payload: Any) -> tuple[FmpConstituent, ...]:
+    if not isinstance(payload, list) or not payload:
+        raise MalformedFmpResponseError(
+            "FMP S&P 500 constituents must be a non-empty JSON list."
+        )
+    members: list[FmpConstituent] = []
+    seen_symbols: set[str] = set()
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise MalformedFmpResponseError(
+                f"FMP S&P 500 constituent at index {index} is not a JSON object."
+            )
+        symbol_value = row.get("symbol")
+        if not isinstance(symbol_value, str):
+            raise MalformedFmpResponseError(
+                f"FMP S&P 500 constituent at index {index} has no valid symbol."
+            )
+        symbol = symbol_value.strip().upper()
+        if not _CACHEABLE_SYMBOL.fullmatch(symbol):
+            raise MalformedFmpResponseError(
+                f"FMP S&P 500 constituent at index {index} has invalid symbol "
+                f"{symbol_value!r}."
+            )
+        if symbol in seen_symbols:
+            raise MalformedFmpResponseError(
+                f"FMP S&P 500 response contains duplicate symbol {symbol}."
+            )
+        seen_symbols.add(symbol)
+
+        name_value = row.get("name")
+        if not isinstance(name_value, str) or not name_value.strip():
+            raise MalformedFmpResponseError(
+                f"FMP S&P 500 constituent {symbol} has no valid name."
+            )
+
+        cik_value = row.get("cik")
+        cik: str | None = None
+        if cik_value is not None:
+            if isinstance(cik_value, bool) or not isinstance(cik_value, (int, str)):
+                raise MalformedFmpResponseError(
+                    f"FMP S&P 500 constituent {symbol} has an invalid CIK."
+                )
+            cik_digits = str(cik_value).strip()
+            if not cik_digits.isdigit() or len(cik_digits) > 10:
+                raise MalformedFmpResponseError(
+                    f"FMP S&P 500 constituent {symbol} has an invalid CIK."
+                )
+            cik = cik_digits.zfill(10)
+
+        sector = _optional_text(row.get("sector"), "sector", symbol)
+        subsector_value = row.get("subSector", row.get("subsector"))
+        subsector = _optional_text(subsector_value, "subsector", symbol)
+        members.append(
+            FmpConstituent(
+                symbol=symbol,
+                name=name_value.strip(),
+                cik=cik,
+                sector=sector,
+                subsector=subsector,
+            )
+        )
+    return tuple(members)
+
+
+def _optional_text(value: Any, field: str, symbol: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise MalformedFmpResponseError(
+            f"FMP S&P 500 constituent {symbol} has an invalid {field}."
+        )
+    return value.strip() or None

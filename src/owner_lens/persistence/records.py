@@ -12,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-# Store-level version awareness (minimum viable; no migration framework).
-SCHEMA_VERSION: Final = 1
+# Store-level version awareness.
+SCHEMA_VERSION: Final = 2
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 
@@ -27,7 +27,12 @@ __all__ = [
     "CoverageResultRecord",
     "DerivedMetricRecord",
     "ReportedFactRecord",
+    "SecurityRecord",
+    "SecurityRefreshStateRecord",
     "SourceSnapshotRecord",
+    "UniverseConstituentRecord",
+    "UniverseRefreshRunRecord",
+    "UniverseSnapshotRecord",
 ]
 
 
@@ -52,6 +57,63 @@ class SourceSnapshotRecord:
     content_hash: str
     raw_object_ref: str | None = None
     processing_status: str | None = None
+
+
+@dataclass(frozen=True)
+class SecurityRecord:
+    """Security identity independent of its optional, non-unique issuer CIK."""
+
+    security_id: int
+    symbol: str
+    name: str
+    cik: str | None
+
+
+@dataclass(frozen=True)
+class UniverseConstituentRecord:
+    """One historical security membership row in a provider snapshot."""
+
+    symbol: str
+    name: str
+    cik: str | None
+    sector: str | None = None
+    subsector: str | None = None
+
+
+@dataclass(frozen=True)
+class UniverseSnapshotRecord:
+    """Immutable version of a provider's observed universe membership."""
+
+    provider: str
+    observed_at: str
+    source_uri: str
+    content_hash: str
+    raw_object_ref: str | None = None
+    snapshot_id: int | None = None
+
+
+@dataclass(frozen=True)
+class UniverseRefreshRunRecord:
+    """One attempt to refresh a provider universe."""
+
+    run_id: str
+    started_at: str
+    requested_symbols: tuple[str, ...] = ()
+    status: str = "RUNNING"
+    completed_at: str | None = None
+    snapshot_id: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class SecurityRefreshStateRecord:
+    """Pending or completed dataset refresh state for one stable security."""
+
+    security_id: int
+    dataset: str
+    status: str
+    last_attempt_at: str | None = None
+    last_error: str | None = None
 
 
 @dataclass(frozen=True)
