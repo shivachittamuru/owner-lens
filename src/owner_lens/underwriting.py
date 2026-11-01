@@ -77,6 +77,25 @@ class Thesis:
     category: SemanticType = SemanticType.JUDGMENT
 
 
+class ScenarioName(StrEnum):
+    BEAR = "BEAR"
+    BASE = "BASE"
+    BULL = "BULL"
+
+
+@dataclass(frozen=True)
+class ScenarioAssumption:
+    name: ScenarioName
+    narrative: str
+    revenue_cagr: float
+    fcf_margin_year5: float
+    share_count_cagr: float
+    terminal_fcf_multiple: float
+    horizon_years: int
+    key_dependency: str | None = None
+    category: SemanticType = SemanticType.ASSUMPTION
+
+
 @dataclass(frozen=True)
 class ManualUnderwriting:
     as_of_date: str | None
@@ -86,6 +105,7 @@ class ManualUnderwriting:
     disconfirming_evidence: tuple[Statement, ...]
     thesis: Thesis
     decision: Statement | None = None
+    scenarios: tuple[ScenarioAssumption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,6 +154,8 @@ class UnderwritingSnapshot:
 
     def to_json(self) -> str:
         data = asdict(self)
+        if not self.manual.scenarios:
+            data["manual"].pop("scenarios")
         data["evidence"] = json.loads(data.pop("evidence_json"))
         return json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -275,6 +297,7 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         "disconfirming_evidence",
         "thesis",
         "decision",
+        "scenarios",
     }
     root = _object(
         data,
@@ -343,7 +366,9 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
                 references=_references(item.get("references", [])),
             )
         )
-    if not assumptions:
+    scenario_inputs = _list(root.get("scenarios", []), "scenarios")
+    scenarios = parse_scenarios(scenario_inputs) if scenario_inputs else ()
+    if not assumptions and not scenarios:
         raise UnderwritingError("Supply at least one explicit forward assumption.")
     thesis_fields = {
         "dependencies",
@@ -396,7 +421,59 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         _statement(root["decision"], "decision", SemanticType.JUDGMENT)
         if root.get("decision") is not None
         else None,
+        scenarios,
     )
+
+
+def parse_scenarios(data: Any) -> tuple[ScenarioAssumption, ...]:
+    """One strict five-year contract shared by input parsing and valuation."""
+    scenarios: dict[ScenarioName, ScenarioAssumption] = {}
+    fields = {"name", "narrative", "revenue_cagr", "fcf_margin_year5",
+              "share_count_cagr", "terminal_fcf_multiple", "horizon_years",
+              "key_dependency", "category"}
+    for raw in _list(data, "scenarios"):
+        item = _object(raw, "scenario", fields, fields - {"key_dependency"})
+        try:
+            name = ScenarioName(item["name"])
+        except (ValueError, TypeError) as exc:
+            raise UnderwritingError("Scenario name must be BEAR, BASE, or BULL.") from exc
+        if name in scenarios:
+            raise UnderwritingError(f"Duplicate scenario: {name}.")
+        if item["category"] != SemanticType.ASSUMPTION:
+            raise UnderwritingError("Scenarios must be ASSUMPTION.")
+        horizon = item["horizon_years"]
+        if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon != 5:
+            raise UnderwritingError("Each scenario requires horizon_years=5.")
+        numeric: dict[str, float] = {}
+        for key in ("revenue_cagr", "fcf_margin_year5", "share_count_cagr", "terminal_fcf_multiple"):
+            value = item[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise UnderwritingError(f"{name}.{key} must be a finite number.")
+            try:
+                number = float(value)
+            except OverflowError as exc:
+                raise UnderwritingError(f"{name}.{key} is outside numeric range.") from exc
+            if not math.isfinite(number):
+                raise UnderwritingError(f"{name}.{key} must be finite.")
+            numeric[key] = number
+        if numeric["revenue_cagr"] <= -1 or numeric["share_count_cagr"] <= -1:
+            raise UnderwritingError("Revenue/share-count CAGR must be greater than -1 (decimal ratios).")
+        if not 0 <= numeric["fcf_margin_year5"] <= 1:
+            raise UnderwritingError("Year-5 FCF margin must be between 0 and 1.")
+        if numeric["terminal_fcf_multiple"] <= 0:
+            raise UnderwritingError("Terminal equity FCF multiple must be positive.")
+        scenarios[name] = ScenarioAssumption(
+            name=name, narrative=_text(item["narrative"], "scenario.narrative"),
+            horizon_years=horizon,
+            revenue_cagr=numeric["revenue_cagr"],
+            fcf_margin_year5=numeric["fcf_margin_year5"],
+            share_count_cagr=numeric["share_count_cagr"],
+            terminal_fcf_multiple=numeric["terminal_fcf_multiple"],
+            key_dependency=_optional_text(item.get("key_dependency"), "key_dependency"),
+        )
+    if set(scenarios) != set(ScenarioName):
+        raise UnderwritingError("Supply exactly one BEAR, BASE, and BULL scenario.")
+    return tuple(scenarios[name] for name in ScenarioName)
 
 
 def _capture_financials(

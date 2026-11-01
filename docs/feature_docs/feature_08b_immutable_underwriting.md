@@ -19,6 +19,12 @@ evidence. There are no generated business assumptions or automatic decisions.
 
 ## Domain sections
 
+[Feature 8C](feature_08c_scenario_valuation.md) adds optional explicitly typed
+BEAR/BASE/BULL scenario assumptions to new underwriting versions. Old records
+remain unchanged. When complete scenarios are supplied, the generic
+`forward_assumptions` list can be empty; no generic assumption is silently
+substituted into a scenario.
+
 | Section | Semantic category | Contents |
 |---------|-------------------|----------|
 | Starting financial state | `FACT` | Latest fiscal-year revenue, operating margin, FCF, FCF margin, diluted shares, FCF/share, signed net cash/debt, and ROIC |

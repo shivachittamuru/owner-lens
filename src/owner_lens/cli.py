@@ -53,6 +53,7 @@ from owner_lens.universe_ingestion import (
     UniverseRefreshError,
     refresh_sp500_universe,
 )
+from owner_lens.valuation import MODEL_VERSION, ValuationError, run_valuation
 
 __all__ = ["format_result", "main"]
 
@@ -174,7 +175,42 @@ def _build_parser() -> argparse.ArgumentParser:
     history = actions.add_parser("history", help="List preserved versions.")
     history.add_argument("ticker")
 
+    valuation = sub.add_parser("valuation", help="Offline deterministic five-year scenario valuation.")
+    valuation_actions = valuation.add_subparsers(dest="valuation_action", required=True)
+    for action in ("run", "show"):
+        valuation_command = valuation_actions.add_parser(
+            action, help="Compute and persist valuation." if action == "run" else "Read a saved valuation."
+        )
+        valuation_command.add_argument("ticker")
+        valuation_command.add_argument("--version", type=int, required=True,
+                                       help="Exact immutable underwriting version.")
+
     return parser
+
+
+def _cmd_valuation(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise ValuationError("Valuation requires SQLite persistence.")
+            records = source.store.list_underwriting(args.ticker.strip().upper())
+            record = next((item for item in records if item.version == args.version), None)
+            if record is None:
+                raise ValuationError(f"Underwriting {args.ticker} version {args.version} not found.")
+            if args.valuation_action == "run":
+                result_json = run_valuation(source.store, record)
+            else:
+                saved_json = source.store.get_valuation(record.underwriting_id, MODEL_VERSION)
+                if saved_json is None:
+                    raise ValuationError("No saved valuation for this version. Run 'valuation run' first.")
+                result_json = saved_json
+            print(json.dumps(json.loads(result_json), indent=2))
+        return 0
+    except (ValuationError, PersistenceError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_underwriting(args: argparse.Namespace) -> int:
@@ -673,5 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_workbench(args)
     if args.command == "underwriting":
         return _cmd_underwriting(args)
+    if args.command == "valuation":
+        return _cmd_valuation(args)
     parser.error(f"unknown command: {args.command}")
     return 2

@@ -22,6 +22,7 @@ from typing import Any, Protocol, Self
 from uuid import uuid4
 
 from owner_lens.persistence.errors import (
+    PersistenceError,
     SchemaVersionError,
     StorageConnectionError,
     StorageReadError,
@@ -118,6 +119,28 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS valuation_results (
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    model_version TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY(underwriting_id, model_version)
+);
+CREATE TRIGGER IF NOT EXISTS valuation_no_update
+BEFORE UPDATE ON valuation_results BEGIN
+    SELECT RAISE(ABORT, 'Valuation results are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS valuation_no_delete
+BEFORE DELETE ON valuation_results BEGIN
+    SELECT RAISE(ABORT, 'Valuation results are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS valuation_no_replace
+BEFORE INSERT ON valuation_results
+WHEN EXISTS (SELECT 1 FROM valuation_results WHERE
+    underwriting_id = NEW.underwriting_id AND model_version = NEW.model_version)
+BEGIN
+    SELECT RAISE(ABORT, 'Valuation results are immutable');
+END;
 CREATE TABLE IF NOT EXISTS underwriting_records (
     underwriting_id TEXT PRIMARY KEY,
     security_id INTEGER NOT NULL REFERENCES securities(security_id),
@@ -479,8 +502,8 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version == 3:
-            return  # Additive v4 tables and triggers are installed by _SCHEMA.
+        if stored_version in (3, 4):
+            return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
                 f"No migration path from schema version {stored_version}."
@@ -575,6 +598,41 @@ class SqliteStore:
             if compute_content_hash(record.snapshot_json.encode()) != record.content_hash:
                 raise StorageReadError(f"Underwriting {record.underwriting_id} failed integrity verification.")
         return records
+
+    def get_valuation(self, underwriting_id: str, model_version: str) -> str | None:
+        try:
+            row = self._conn.execute(
+                "SELECT result_json, content_hash FROM valuation_results "
+                "WHERE underwriting_id=? AND model_version=?",
+                (underwriting_id, model_version),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read valuation: {exc}") from exc
+        if row is None:
+            return None
+        if compute_content_hash(row["result_json"].encode()) != row["content_hash"]:
+            raise StorageReadError("Valuation result failed integrity verification.")
+        return str(row["result_json"])
+
+    def save_valuation(self, underwriting_id: str, model_version: str, result_json: str) -> str:
+        if self._in_transaction:
+            raise StorageWriteError("Valuation persistence requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            existing = self.get_valuation(underwriting_id, model_version)
+            if existing is not None:
+                if existing != result_json:
+                    raise StorageWriteError("Saved valuation differs for the same underwriting/model version.")
+            else:
+                self._conn.execute(
+                    "INSERT INTO valuation_results VALUES(?, ?, ?, ?)",
+                    (underwriting_id, model_version, result_json, compute_content_hash(result_json.encode())),
+                )
+            self._conn.commit()
+            return existing if existing is not None else result_json
+        except (sqlite3.Error, PersistenceError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot persist valuation: {exc}") from exc
 
     def get_underwriting_evidence(
         self, security_id: int, *, cutoff: str, as_of_date: str,

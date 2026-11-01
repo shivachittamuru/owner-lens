@@ -132,6 +132,11 @@ Manually capture immutable, semantically typed underwriting snapshots with
 See [Feature 8B](docs/feature_docs/feature_08b_immutable_underwriting.md) for the
 input template, version history, and offline validation workflow.
 
+Run deterministic five-year scenario valuation from an exact underwriting
+version with `uv run owner-lens valuation run ADBE --version 1`. See
+[Feature 8C](docs/feature_docs/feature_08c_scenario_valuation.md) for the
+Bear/Base/Bull contract, equations, and illustrative manual input.
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 
