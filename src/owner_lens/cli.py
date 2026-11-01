@@ -30,7 +30,11 @@ from owner_lens.coverage import LAYER_ORDER
 from owner_lens.evidence_ingestion import refresh_sp500_evidence
 from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
-from owner_lens.persistence import FilesystemRawSnapshotStore, OwnerLensStore
+from owner_lens.persistence import (
+    FilesystemRawSnapshotStore,
+    OwnerLensStore,
+    SqliteStore,
+)
 from owner_lens.persistence.errors import PersistenceError, StorageReadError
 from owner_lens.screening import (
     format_screening_detail,
@@ -40,6 +44,11 @@ from owner_lens.screening import (
 )
 from owner_lens.sec import SecClient, SecError
 from owner_lens.sec_adapter import canonical_history_from_sec
+from owner_lens.underwriting import (
+    UnderwritingError,
+    create_underwriting,
+    load_manual_json,
+)
 from owner_lens.universe_ingestion import (
     UniverseRefreshError,
     refresh_sp500_universe,
@@ -152,7 +161,64 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Initially selected evidence provider (default: sec).",
     )
 
+    underwriting = sub.add_parser(
+        "underwriting", help="Create or inspect immutable manual underwriting snapshots (offline)."
+    )
+    actions = underwriting.add_subparsers(dest="underwriting_action", required=True)
+    create = actions.add_parser("create", help="Append a new version using persisted FMP evidence.")
+    create.add_argument("ticker")
+    create.add_argument("--file", required=True, type=Path, help="Explicit manual JSON inputs.")
+    show_underwriting = actions.add_parser("show", help="Print a saved snapshot without recomputation.")
+    show_underwriting.add_argument("ticker")
+    show_underwriting.add_argument("--version", type=int, help="Version to show (default: latest).")
+    history = actions.add_parser("history", help="List preserved versions.")
+    history.add_argument("ticker")
+
     return parser
+
+
+def _cmd_underwriting(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise UnderwritingError("Underwriting requires SQLite persistence.")
+            if args.underwriting_action == "create":
+                manual = load_manual_json(args.file.read_text(encoding="utf-8-sig"))
+                record = create_underwriting(source, args.ticker, manual)
+                print(f"Created {record.ticker} underwriting v{record.version}: "
+                      f"{record.underwriting_id} | as of {record.as_of_date}")
+                return 0
+            records = source.store.list_underwriting(args.ticker.strip().upper())
+            if not records:
+                raise UnderwritingError(f"No underwriting records for {args.ticker}.")
+            if args.underwriting_action == "history":
+                print(json.dumps([
+                    {"underwriting_id": record.underwriting_id, "version": record.version,
+                     "ticker": record.ticker, "security_id": record.security_id,
+                     "created_at": record.created_at, "as_of_date": record.as_of_date,
+                     "content_hash": record.content_hash}
+                    for record in records
+                ], indent=2))
+            else:
+                version = args.version
+                selected_record = next((record for record in reversed(records)
+                               if version is None or record.version == version), None)
+                if selected_record is None:
+                    raise UnderwritingError(f"Underwriting version {version} not found.")
+                record = selected_record
+                print(json.dumps({
+                    "underwriting_id": record.underwriting_id, "version": record.version,
+                    "ticker": record.ticker, "security_id": record.security_id,
+                    "created_at": record.created_at, "as_of_date": record.as_of_date,
+                    "content_hash": record.content_hash,
+                    "snapshot": json.loads(record.snapshot_json),
+                }, indent=2))
+        return 0
+    except (UnderwritingError, PersistenceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def format_result(result: IngestionResult, *, overall: str | None = None) -> str:
@@ -605,5 +671,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_inspect(args)
     if args.command == "workbench":
         return _cmd_workbench(args)
+    if args.command == "underwriting":
+        return _cmd_underwriting(args)
     parser.error(f"unknown command: {args.command}")
     return 2

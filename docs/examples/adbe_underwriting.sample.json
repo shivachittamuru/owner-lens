@@ -1,0 +1,52 @@
+{
+  "business_drivers": [
+    {"category": "JUDGMENT", "text": "REPLACE: first value-driving business dependency."},
+    {"category": "JUDGMENT", "text": "REPLACE: second value-driving business dependency."},
+    {"category": "JUDGMENT", "text": "REPLACE: third value-driving business dependency."}
+  ],
+  "forward_assumptions": [
+    {
+      "name": "revenue_growth_5y",
+      "category": "ASSUMPTION",
+      "value": 0.0,
+      "unit": "ratio",
+      "rationale": "REPLACE: your five-year annualized revenue growth and basis. Zero is only a placeholder."
+    },
+    {
+      "name": "operating_margin_year5",
+      "category": "ASSUMPTION",
+      "value": 0.0,
+      "unit": "ratio",
+      "rationale": "REPLACE: your year-five operating margin and basis."
+    },
+    {
+      "name": "fcf_margin_year5",
+      "category": "ASSUMPTION",
+      "value": 0.0,
+      "unit": "ratio",
+      "rationale": "REPLACE: your year-five FCF margin and basis."
+    },
+    {
+      "name": "annual_share_count_change",
+      "category": "ASSUMPTION",
+      "value": 0.0,
+      "unit": "ratio",
+      "rationale": "REPLACE: your annual diluted-share change and basis; negative means shrinkage."
+    },
+    {
+      "name": "terminal_assumption",
+      "category": "ASSUMPTION",
+      "value": "REPLACE: qualitative terminal assumption, not a calculated valuation.",
+      "rationale": "REPLACE: your evidence basis."
+    }
+  ],
+  "supporting_evidence": [],
+  "disconfirming_evidence": [],
+  "thesis": {
+    "dependencies": ["REPLACE: what must be true."],
+    "breakers": ["REPLACE: what would break the thesis."],
+    "biggest_uncertainty": "REPLACE: biggest uncertainty.",
+    "most_important_variable": "REPLACE: most important variable.",
+    "next_evidence_to_collect": ["REPLACE: next evidence to collect."]
+  }
+}

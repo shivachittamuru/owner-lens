@@ -19,6 +19,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any, Protocol, Self
+from uuid import uuid4
 
 from owner_lens.persistence.errors import (
     SchemaVersionError,
@@ -44,6 +45,7 @@ from owner_lens.persistence.records import (
     SecurityRecord,
     SecurityRefreshStateRecord,
     SourceSnapshotRecord,
+    UnderwritingRecord,
     UniverseConstituentRecord,
     UniverseRefreshRunRecord,
     UniverseSnapshotRecord,
@@ -116,6 +118,33 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS underwriting_records (
+    underwriting_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL REFERENCES securities(security_id),
+    ticker TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK(version > 0),
+    created_at TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    UNIQUE(security_id, version)
+);
+CREATE TRIGGER IF NOT EXISTS underwriting_no_update
+BEFORE UPDATE ON underwriting_records BEGIN
+    SELECT RAISE(ABORT, 'Underwriting records are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS underwriting_no_delete
+BEFORE DELETE ON underwriting_records BEGIN
+    SELECT RAISE(ABORT, 'Underwriting records are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS underwriting_no_replace
+BEFORE INSERT ON underwriting_records
+WHEN EXISTS (SELECT 1 FROM underwriting_records WHERE
+    underwriting_id = NEW.underwriting_id OR
+    (security_id = NEW.security_id AND version = NEW.version))
+BEGIN
+    SELECT RAISE(ABORT, 'Underwriting records are immutable');
+END;
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -450,6 +479,8 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
+        if stored_version == 3:
+            return  # Additive v4 tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
                 f"No migration path from schema version {stored_version}."
@@ -493,6 +524,111 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_underwriting(
+        self, *, security_id: int, ticker: str, created_at: str,
+        as_of_date: str, snapshot_json: str,
+    ) -> UnderwritingRecord:
+        """Allocate a version and append atomically, never updating a prior record."""
+        if self._in_transaction:
+            raise StorageWriteError("Underwriting creation requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS version "
+                "FROM underwriting_records WHERE security_id = ?", (security_id,),
+            ).fetchone()
+            record = UnderwritingRecord(
+                str(uuid4()), security_id, ticker, int(row["version"]),
+                created_at, as_of_date, snapshot_json,
+                compute_content_hash(snapshot_json.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO underwriting_records(underwriting_id, security_id, ticker, "
+                "version, created_at, as_of_date, snapshot_json, content_hash) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                (record.underwriting_id, record.security_id, record.ticker,
+                 record.version, record.created_at, record.as_of_date,
+                 record.snapshot_json, record.content_hash),
+            )
+            self._conn.commit()
+            return record
+        except sqlite3.Error as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append underwriting record: {exc}") from exc
+
+    def list_underwriting(self, ticker: str) -> tuple[UnderwritingRecord, ...]:
+        """Resolve by current security symbol or historical recorded symbol."""
+        try:
+            rows = self._conn.execute(
+                "SELECT u.* FROM underwriting_records u WHERE u.security_id IN ("
+                "SELECT security_id FROM securities WHERE symbol = ? UNION "
+                "SELECT security_id FROM underwriting_records WHERE ticker = ?) "
+                "ORDER BY version", (ticker, ticker),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read underwriting history: {exc}") from exc
+        records = tuple(UnderwritingRecord(**dict(row)) for row in rows)
+        if len({record.security_id for record in records}) > 1:
+            raise StorageReadError(f"Ambiguous historical security symbol: {ticker}.")
+        for record in records:
+            if compute_content_hash(record.snapshot_json.encode()) != record.content_hash:
+                raise StorageReadError(f"Underwriting {record.underwriting_id} failed integrity verification.")
+        return records
+
+    def get_underwriting_evidence(
+        self, security_id: int, *, cutoff: str, as_of_date: str,
+    ) -> dict[str, Any]:
+        """Read only evidence actually retrieved by the belief snapshot cutoff."""
+        try:
+            history = self._conn.execute(
+                "SELECT history_id FROM fmp_canonical_histories WHERE security_id = ? "
+                "AND julianday(observed_at) <= julianday(?) "
+                "ORDER BY julianday(observed_at) DESC, history_id DESC LIMIT 1",
+                (security_id, cutoff),
+            ).fetchone()
+            snapshots = self._conn.execute(
+                "SELECT s.* FROM fmp_evidence_snapshots s WHERE security_id = ? "
+                "AND dataset IN ('annual_analyst_estimates', 'quarterly_analyst_estimates') "
+                "AND julianday(fetched_at) <= julianday(?) AND snapshot_id = ("
+                "SELECT snapshot_id FROM fmp_evidence_snapshots WHERE security_id = s.security_id "
+                "AND dataset = s.dataset AND julianday(fetched_at) <= julianday(?) "
+                "ORDER BY julianday(fetched_at) DESC, snapshot_id DESC LIMIT 1) "
+                "ORDER BY dataset", (security_id, cutoff, cutoff),
+            ).fetchall()
+            estimates = [
+                tuple(dict(row) for row in self._conn.execute(
+                    "SELECT * FROM fmp_estimates WHERE snapshot_id = ? ORDER BY target_date",
+                    (snapshot["snapshot_id"],),
+                ).fetchall())
+                for snapshot in snapshots
+            ]
+            price = self._conn.execute(
+                "SELECT p.*, s.fetched_at, s.content_hash, s.source_endpoint, "
+                "s.request_parameters, s.raw_object_ref, s.evidence_kind FROM fmp_eod_prices p "
+                "JOIN fmp_evidence_snapshots s USING(snapshot_id) "
+                "WHERE p.security_id = ? AND p.market_date <= ? "
+                "AND julianday(s.fetched_at) <= julianday(?) "
+                "ORDER BY p.market_date DESC, julianday(s.fetched_at) DESC, s.snapshot_id DESC LIMIT 1",
+                (security_id, as_of_date, cutoff),
+            ).fetchone()
+            sources = self._conn.execute(
+                "SELECT DISTINCT s.* FROM fmp_evidence_snapshots s "
+                "JOIN fmp_canonical_facts f USING(snapshot_id) WHERE f.history_id = ? "
+                "ORDER BY s.dataset, s.snapshot_id",
+                (history["history_id"] if history else None,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read point-in-time underwriting evidence: {exc}") from exc
+        return {
+            "history_id": history["history_id"] if history else None,
+            "sources": tuple(dict(row) for row in sources),
+            "price": dict(price) if price else None,
+            "expectations": tuple(
+                {"source": dict(snapshot), "rows": rows}
+                for snapshot, rows in zip(snapshots, estimates, strict=True)
+            ),
+        }
 
     def __enter__(self) -> Self:
         return self

@@ -127,6 +127,11 @@ for the offline workflow and coverage inspection.
 
 ## Local persistence
 
+Manually capture immutable, semantically typed underwriting snapshots with
+`uv run owner-lens underwriting create ADBE --file .\data\underwriting\ADBE.json`.
+See [Feature 8B](docs/feature_docs/feature_08b_immutable_underwriting.md) for the
+input template, version history, and offline validation workflow.
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 

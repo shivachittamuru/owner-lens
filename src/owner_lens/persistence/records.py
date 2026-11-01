@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 # Store-level version awareness.
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 
@@ -36,10 +36,25 @@ __all__ = [
     "SecurityRecord",
     "SecurityRefreshStateRecord",
     "SourceSnapshotRecord",
+    "UnderwritingRecord",
     "UniverseConstituentRecord",
     "UniverseRefreshRunRecord",
     "UniverseSnapshotRecord",
 ]
+
+
+@dataclass(frozen=True)
+class UnderwritingRecord:
+    """Append-only self-contained belief snapshot for one stable security."""
+
+    underwriting_id: str
+    security_id: int
+    ticker: str
+    version: int
+    created_at: str
+    as_of_date: str
+    snapshot_json: str
+    content_hash: str
 
 
 @dataclass(frozen=True)
