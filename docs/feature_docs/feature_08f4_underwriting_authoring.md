@@ -92,6 +92,38 @@ review, an atomic version guard rejects the stale submission; review again.
 There is no permanent autosave. Discarding a draft does not change the store.
 Session drafts are temporary and are not underwriting versions.
 
+## Lightweight form hierarchy (8F4.1)
+
+The draft appears before existing read-only underwriting. Scenarios and
+probabilities/hurdle are expanded by default. Business judgment, evidence,
+thesis monitoring, reference context and optional metadata are collapsed.
+
+OwnerLens provides FACT + EXPECTATION. You provide ASSUMPTION + JUDGMENT.
+OwnerLens calculates the rest.
+
+| Importance | Fields | Save behavior |
+| --- | --- | --- |
+| Required | Each Bear/Base/Bull narrative, revenue CAGR, year-5 FCF margin, share-count CAGR, terminal FCF multiple, key dependency; three probabilities, probability rationale, hurdle | Missing/invalid values block domain review |
+| Recommended, but required by unchanged v2 | 3-5 business drivers, biggest uncertainty, most important variable, at least one dependency/breaker statement and next evidence item | Still block review; clearly labeled inside collapsed sections |
+| Recommended | Variant rationales, supporting/disconfirming evidence, condition observables and thresholds | May be empty |
+| Optional | Source/reference details, evidence ids/dates/relations, cadence, monitoring date, policy rationale | May be empty |
+
+The existing contract cannot accept entirely empty business judgment or thesis
+without changing v2. No defaults, placeholders or inferred beliefs are inserted
+to bypass those requirements. Start from latest is the normal update workflow.
+When evidence is authored, its claim and semantic category must still be valid.
+Optional metadata, when supplied, must satisfy existing date/reference validation.
+
+Required-field feedback appears beside inputs, with probability totals beside
+the distribution. Missing recommended evidence is identified as recommended,
+not required. Domain validation remains authoritative before persistence.
+
+Draft actions confirm creation, initialization from the exact ticker/version,
+evidence-context refresh and discard. For example: "Draft initialized from
+ADBE v7. Saving will create v8." Discard returns to the read-only view.
+The large OwnerLens Context section is collapsed after investor inputs;
+per-assumption history/consensus references are also collapsed.
+
 After creation, the page reloads and shows the new version as `CAPTURED`.
 Saved valuation/variant/summary/challenger values remain N/A until explicitly
 generated. The existing offline command expander supplies the exact ticker/

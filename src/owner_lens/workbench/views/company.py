@@ -74,9 +74,13 @@ def render(
             "bucket and never sets one."
         )
     with beliefs:
-        _underwriting(underwriting)
         if underwriting is not None and authoring_source is not None:
             underwriting_authoring.render(detail.company.ticker, underwriting, authoring_source)
+        if st.session_state.get("authoring." + detail.company.ticker):
+            with st.expander("Existing underwriting [Read-only]"):
+                _underwriting(underwriting)
+        else:
+            _underwriting(underwriting)
     context = build_research_context(detail, underwriting)
     if st.button("Copy Research Context"):
         st.session_state["research_context_open"] = True

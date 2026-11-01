@@ -47,6 +47,11 @@ def _text(label: str, key: str, value: str | None = None, *, area: bool = False)
     return str(widget(label, value=value or "", key=key)).strip()
 
 
+def _required_feedback(value: Any, label: str) -> None:
+    if value is None or value == "":
+        st.caption(f"{label} is required.")
+
+
 def _optional_date(label: str, key: str, value: str | None) -> str | None:
     result = st.date_input(label, value=date.fromisoformat(value) if value else None, key=key)
     return result.isoformat() if result is not None else None
@@ -69,7 +74,7 @@ def _references(seed: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     for index in range(count):
         item = seed[index] if index < len(seed) else {}
         prefix = f"{key}.{index}"
-        with st.expander(f"Source {index + 1}", expanded=not item):
+        with st.expander(f"Source {index + 1} [Optional]", expanded=False):
             ref = {
                 "title": _text("Source/title", prefix + ".title", item.get("title")) or None,
                 "uri": _text("Reference URI", prefix + ".uri", item.get("uri")) or None,
@@ -91,16 +96,21 @@ def _conditions(seed: list[dict[str, Any]], field: str, key: str) -> list[dict[s
         item = seed[index] if index < len(seed) else {}
         prefix = f"{key}.{index}"
         with st.expander(f"{label.title()} {index + 1}", expanded=index == 0):
-            result.append({
+            condition: dict[str, Any] = {
                 "category": "JUDGMENT",
-                "condition_id": _text("Condition ID", prefix + ".id", item.get("condition_id", f"{field}-{index + 1}")),
                 "statement": _text("Statement", prefix + ".statement", item.get("statement"), area=True),
                 "observable": _text("Metric / observable", prefix + ".observable", item.get("observable")) or None,
                 "threshold": _text("Threshold / condition", prefix + ".threshold", item.get("threshold")) or None,
-                "sources": _references(item.get("sources", []), prefix + ".sources"),
-                "monitoring_cadence": _text("Monitoring cadence", prefix + ".cadence", item.get("monitoring_cadence")) or None,
-                "monitoring_date": _optional_date("Monitoring date (optional)", prefix + ".date", item.get("monitoring_date")),
-            })
+            }
+            _required_feedback(condition["statement"], f"{label.title()} statement (v2 contract)")
+            with st.expander("Sources / monitoring metadata [Optional]"):
+                condition.update({
+                    "condition_id": _text("Condition ID", prefix + ".id", item.get("condition_id", f"{field}-{index + 1}")),
+                    "sources": _references(item.get("sources", []), prefix + ".sources"),
+                    "monitoring_cadence": _text("Monitoring cadence", prefix + ".cadence", item.get("monitoring_cadence")) or None,
+                    "monitoring_date": _optional_date("Monitoring date (optional)", prefix + ".date", item.get("monitoring_date")),
+                })
+            result.append(condition)
     return result
 
 
@@ -120,18 +130,22 @@ def _evidence(seed: list[dict[str, Any]], field: str, key: str, links: dict[str,
                 key=prefix + ".category",
             )
             options = list(dict.fromkeys([*links, *item.get("belief_references", [])]))
-            result.append({
+            evidence = {
                 "category": category,
                 "text": _text("Claim / observation", prefix + ".text", item.get("text"), area=True),
-                "evidence_id": _text("Evidence ID", prefix + ".id", item.get("evidence_id", f"{field}-{index + 1}")) or None,
-                "evidence_date": _optional_date("Evidence date / as-of (optional)", prefix + ".date", item.get("evidence_date")),
-                "references": _references(item.get("references", []), prefix + ".refs"),
                 "belief_references": st.multiselect(
                     "Supports / challenges belief (optional)", options,
                     default=item.get("belief_references", []), format_func=lambda pointer: links.get(pointer, pointer),
                     key=prefix + ".links",
                 ),
-            })
+            }
+            with st.expander("Sources / evidence metadata [Optional]"):
+                evidence.update({
+                    "evidence_id": _text("Evidence ID", prefix + ".id", item.get("evidence_id", f"{field}-{index + 1}")) or None,
+                    "evidence_date": _optional_date("Evidence date / as-of (optional)", prefix + ".date", item.get("evidence_date")),
+                    "references": _references(item.get("references", []), prefix + ".refs"),
+                })
+            result.append(evidence)
     return result
 
 
@@ -142,7 +156,7 @@ def _assumption(context: DriverContext, scenario: dict[str, Any], key: str) -> f
     scale = 1 if is_multiple else 100
     input_key = key + "." + driver
     entry, information = st.columns([3, 2])
-    with information:
+    with information, st.expander("History / consensus reference"):
         if is_multiple:
             st.caption("Investor ASSUMPTION only. No terminal-multiple consensus or preset is available.")
         else:
@@ -171,27 +185,30 @@ def _assumption(context: DriverContext, scenario: dict[str, Any], key: str) -> f
             step=0.5 if is_multiple else 0.1, format="%.4f", key=input_key,
             placeholder="Investor approval required",
         )
+        _required_feedback(number, LABELS[driver])
     return number / scale if number is not None else None
 
 
 def _fields(seed: dict[str, Any], contexts: tuple[DriverContext, ...], key: str) -> dict[str, Any]:
     payload = empty_authoring()
-    st.subheader("Scenario assumptions [ASSUMPTION]")
+    st.subheader("1. Scenarios [Required · ASSUMPTION]")
     for index, original in enumerate(seed["assumptions"]["scenarios"]):
         name = original["name"]
         prefix = f"{key}.scenario.{name}"
-        with st.expander(name, expanded=name == "BASE"):
+        with st.expander(name + " [Required]", expanded=True):
             scenario = {
                 "name": name, "category": "ASSUMPTION", "horizon_years": 5,
                 "narrative": _text("Scenario narrative", prefix + ".narrative", original.get("narrative"), area=True),
                 "key_dependency": _text("Scenario key dependency", prefix + ".dependency", original.get("key_dependency"), area=True) or None,
             }
+            _required_feedback(scenario["narrative"], f"{name.title()} narrative")
+            _required_feedback(scenario["key_dependency"], f"{name.title()} key dependency")
             for context in contexts:
                 scenario[context.driver] = _assumption(context, original, prefix)
             payload["assumptions"]["scenarios"][index] = scenario
     judgment = payload["judgments"]
     original_judgment = seed["judgments"]
-    st.subheader("Probability distribution and investor policy [JUDGMENT]")
+    st.subheader("2. Probabilities & hurdle [Required · JUDGMENT]")
     for index, probability in enumerate(original_judgment["probability_distribution"]["scenarios"]):
         value = probability["probability"]
         entered = st.number_input(
@@ -207,55 +224,73 @@ def _fields(seed: dict[str, Any], contexts: tuple[DriverContext, ...], key: str)
     judgment["probability_distribution"]["rationale"] = _text(
         "Probability rationale", key + ".probability.rationale", original_judgment["probability_distribution"].get("rationale"), area=True
     ) or None
+    _required_feedback(judgment["probability_distribution"]["rationale"], "Probability rationale")
     original_policy = original_judgment["investor_policy"]
     hurdle = st.number_input(
         "Required-return hurdle (%)", value=float(original_policy["required_return"]) * 100 if original_policy["required_return"] is not None else None,
         step=0.5, key=key + ".hurdle",
     )
-    judgment["investor_policy"] = {
-        "category": "JUDGMENT", "required_return": hurdle / 100 if hurdle is not None else None,
-        "rationale": _text("Required-return policy rationale (optional)", key + ".policy.rationale", original_policy.get("rationale")) or None,
-    }
-    st.subheader("Business judgment")
-    count = _count("business driver", key + ".drivers.count", len(original_judgment["business_drivers"]), minimum=3, maximum=5)
-    judgment["business_drivers"] = [
-        {**(original_judgment["business_drivers"][i] if i < len(original_judgment["business_drivers"]) else {}),
-         "category": "JUDGMENT", "text": _text(f"Business/value driver {i + 1}", f"{key}.drivers.{i}",
-          original_judgment["business_drivers"][i]["text"] if i < len(original_judgment["business_drivers"]) else "", area=True)}
-        for i in range(count)
-    ]
+    _required_feedback(hurdle, "Required-return hurdle")
+    with st.expander("Investor policy rationale [Optional]"):
+        judgment["investor_policy"] = {
+            "category": "JUDGMENT", "required_return": hurdle / 100 if hurdle is not None else None,
+            "rationale": _text("Required-return policy rationale (optional)", key + ".policy.rationale", original_policy.get("rationale")) or None,
+        }
     thesis = original_judgment["thesis"]
-    for field, label in (("biggest_uncertainty", "Biggest uncertainty"), ("most_important_variable", "Most important variable")):
-        judgment["thesis"][field] = _text(label, key + "." + field, thesis[field], area=True)
-    count = _count("next evidence", key + ".next.count", len(thesis["next_evidence_to_collect"]), minimum=1)
-    judgment["thesis"]["next_evidence_to_collect"] = [
-        _text(f"Next evidence to collect {i + 1}", f"{key}.next.{i}",
-              thesis["next_evidence_to_collect"][i] if i < len(thesis["next_evidence_to_collect"]) else "", area=True)
-        for i in range(count)
-    ]
-    with st.expander("Variant rationales [JUDGMENT]"):
+    with st.expander("3. Business judgment [Recommended; v2 required fields inside]"):
+        st.info("The unchanged v2 contract requires 3-5 drivers, biggest uncertainty, most important variable and next evidence. "
+                "Start from latest to reuse your existing judgments; no placeholders are invented.")
+        count = _count("business driver", key + ".drivers.count", len(original_judgment["business_drivers"]), minimum=3, maximum=5)
+        judgment["business_drivers"] = [
+            {**(original_judgment["business_drivers"][i] if i < len(original_judgment["business_drivers"]) else {}),
+             "category": "JUDGMENT", "text": _text(f"Business/value driver {i + 1} [Required by v2]", f"{key}.drivers.{i}",
+              original_judgment["business_drivers"][i]["text"] if i < len(original_judgment["business_drivers"]) else "", area=True)}
+            for i in range(count)
+        ]
+        for field, label in (("biggest_uncertainty", "Biggest uncertainty"), ("most_important_variable", "Most important variable")):
+            judgment["thesis"][field] = _text(label + " [Required by v2]", key + "." + field, thesis[field], area=True)
+            _required_feedback(judgment["thesis"][field], label + " (v2 contract)")
+        for index, driver in enumerate(judgment["business_drivers"]):
+            _required_feedback(driver["text"], f"Business driver {index + 1} (v2 contract)")
+        count = _count("next evidence", key + ".next.count", len(thesis["next_evidence_to_collect"]), minimum=1)
+        judgment["thesis"]["next_evidence_to_collect"] = [
+            _text(f"Next evidence to collect {i + 1} [Required by v2]", f"{key}.next.{i}",
+                  thesis["next_evidence_to_collect"][i] if i < len(thesis["next_evidence_to_collect"]) else "", area=True)
+            for i in range(count)
+        ]
+        for index, text in enumerate(judgment["thesis"]["next_evidence_to_collect"]):
+            _required_feedback(text, f"Next evidence {index + 1} (v2 contract)")
+    with st.expander("Variant rationales [Recommended · JUDGMENT]"):
         for driver, label in LABELS.items():
             previous: dict[str, Any] = next((item for item in original_judgment["variant_rationales"] if item["driver"] == driver), {})
             text = _text(label + " rationale", f"{key}.variant.{driver}", previous.get("text"), area=True)
             if text:
                 judgment["variant_rationales"].append({**previous, "driver": driver, "category": "JUDGMENT", "text": text})
-    for field, label in (("dependencies", "What must be true"), ("breakers", "What would break the thesis")):
-        st.subheader(label + " [JUDGMENT]")
-        judgment["thesis"][field] = _conditions(thesis[field], field, f"{key}.{field}")
+    evidence_section = st.container()
+    thesis_section = st.container()
+    with thesis_section, st.expander("5. Thesis monitoring [Recommended; v2 required statements inside]"):
+        st.caption("Required by the existing v2 contract: at least one dependency and breaker statement. "
+                   "Observables/thresholds are recommended; sources/cadence/dates are optional.")
+        for field, label in (("dependencies", "What must be true"), ("breakers", "What would break the thesis")):
+            st.subheader(label + " [JUDGMENT]")
+            judgment["thesis"][field] = _conditions(thesis[field], field, f"{key}.{field}")
     links = {f"/manual/business_drivers/{i}": f"Business driver {i + 1}" for i in range(len(judgment["business_drivers"]))}
     links.update({f"/manual/scenarios/{i}/{driver}": f"{scenario['name']} {LABELS[driver]}"
                   for i, scenario in enumerate(payload["assumptions"]["scenarios"]) for driver in LABELS})
     for field in ("dependencies", "breakers"):
         links.update({f"/manual/thesis/monitoring_{field}/{i}": f"{field.title()}: {item['statement']}"
                       for i, item in enumerate(judgment["thesis"][field])})
-    for field, label in (("supporting_evidence", "Supporting evidence"), ("disconfirming_evidence", "Disconfirming evidence")):
-        with st.expander(label):
-            judgment[field] = _evidence(original_judgment[field], field, f"{key}.{field}", links)
+    with evidence_section, st.expander("4. Evidence [Recommended]"):
+        for field, label in (("supporting_evidence", "Supporting evidence"), ("disconfirming_evidence", "Disconfirming evidence")):
+            with st.expander(label):
+                judgment[field] = _evidence(original_judgment[field], field, f"{key}.{field}", links)
+            if not judgment[field]:
+                st.caption(f"No {label.lower()} recorded - recommended, not required.")
     return payload
 
 
 def _context(inputs: UnderwritingInputs) -> None:
-    with st.expander("OwnerLens supplied FACT / EXPECTATION context", expanded=True):
+    with st.expander("OwnerLens Context - Facts, History & Consensus", expanded=False):
         st.caption(f"FMP-only input capture {inputs.captured_at}; underwriting as-of {inputs.as_of_date}. "
                    "Sources are persisted, not retrieved. Nothing here is copied into assumptions unless you apply a preset.")
         st.dataframe([{"FACT": item.name, "FY": item.fiscal_year, "Value": item.value,
@@ -304,9 +339,13 @@ def render(ticker: str, projection: UnderwritingProjection, source_factory: Sour
     success = st.session_state.pop(state_key + ".success", None)
     if success:
         st.success(f"Created immutable underwriting v{success}. Status CAPTURED. Existing versions were not changed.")
+    notice = st.session_state.pop(state_key + ".notice", None)
+    if notice:
+        st.success(notice)
     if st.button("Create New Underwriting", key=state_key + ".open"):
         st.session_state[state_key] = {"seed": empty_authoring(), "id": 1 + int(st.session_state.get(state_key + ".generation", 0))}
         st.session_state[state_key + ".generation"] = st.session_state[state_key]["id"]
+        st.success(f"Draft created for {ticker} v{version + 1}. Nothing has been saved.")
     draft = st.session_state.get(state_key)
     if not draft:
         return
@@ -315,12 +354,14 @@ def render(ticker: str, projection: UnderwritingProjection, source_factory: Sour
     controls = st.columns(3)
     if controls[0].button("Discard draft", key=state_key + ".discard"):
         del st.session_state[state_key]
+        st.session_state[state_key + ".notice"] = "Draft discarded. Returned to read-only underwriting."
         st.rerun()
     if projection.snapshot and controls[1].button("Start from latest underwriting", key=state_key + ".clone"):
         draft["seed"] = authoring_from_manual(projection.snapshot.manual)
         draft["id"] += 1
         draft.pop("review", None)
         st.session_state[state_key + ".generation"] = draft["id"]
+        st.session_state[state_key + ".notice"] = f"Draft initialized from {ticker} v{version}. Saving will create v{version + 1}."
         st.rerun()
     prefix = state_key + f".draft.{draft['id']}"
     as_of = st.date_input("Underwriting as-of date", value=datetime.now(UTC).date(), key=prefix + ".asof")
@@ -330,16 +371,18 @@ def render(ticker: str, projection: UnderwritingProjection, source_factory: Sour
             with source_factory() as source:
                 draft["inputs"] = capture_underwriting_inputs(source, ticker, as_of_date=as_of.isoformat())
             draft.pop("review", None)
+            if refresh:
+                st.success("Evidence context refreshed from persisted data. Nothing has been saved.")
         inputs: UnderwritingInputs = draft["inputs"]
         if inputs.as_of_date != as_of.isoformat():
             st.warning("As-of changed. Refresh draft evidence context before review.")
             return
-        _context(inputs)
         contexts = authoring_context(inputs)
         payload = _fields(draft["seed"], contexts, prefix)
-        with st.expander("Deterministic hints (not investment judgment)", expanded=True):
+        _context(inputs)
+        with st.expander("Deterministic hints [Recommended; not investment judgment]", expanded=False):
             for hint in draft_hints(payload, contexts):
-                st.info(hint)
+                st.info(hint + (" Recommended, not required." if hint.startswith("No ") else ""))
         fingerprint = compute_content_hash(json.dumps(payload, sort_keys=True).encode())
         if draft.get("review") and (draft["review"]["hash"] != fingerprint or draft["review"]["version"] != version):
             draft.pop("review")
@@ -364,6 +407,7 @@ def render(ticker: str, projection: UnderwritingProjection, source_factory: Sour
                 draft["id"] += 1
                 draft.pop("review", None)
                 st.session_state[state_key + ".generation"] = draft["id"]
+                st.session_state[state_key + ".notice"] = "JSON loaded into draft. No immutable version was created."
                 st.rerun()
     except (UnderwritingError, VariantError, PersistenceError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         st.error(f"Underwriting draft could not be reviewed/saved: {exc}")

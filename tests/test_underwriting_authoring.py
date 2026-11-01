@@ -326,3 +326,62 @@ def test_repeatable_evidence_thesis_widgets_roundtrip_and_invalidate_review(sour
     assert item.belief_references == ("/manual/business_drivers/0",)
     assert snapshot.manual.thesis.monitoring_dependencies[0].observable == "Retention"
     assert snapshot.manual.thesis.monitoring_dependencies[0].threshold == "At least 90%"
+
+
+def test_progressive_disclosure_inputs_first_and_action_feedback(source: WorkbenchSource) -> None:
+    original = create_underwriting(source, "ADBE", parse_manual_input(authoring()), now=NOW)
+    app = _app(source)
+    _button(app, "Create New Underwriting").click().run()
+    assert any("Draft created for ADBE v2" in item.value for item in app.success)
+    assert any("Terminal equity FCF multiple is required" in item.value for item in app.caption)
+    expanders = list(app.get("expander"))
+    context = next(item for item in expanders if item.label == "OwnerLens Context - Facts, History & Consensus")
+    assert not context.proto.expanded
+    assert all(not item.proto.expanded for item in expanders if "Recommended" in item.label or "Optional" in item.label)
+    assert all(item.proto.expanded for item in expanders if item.label in ("BEAR [Required]", "BASE [Required]", "BULL [Required]"))
+    blocks = list(app.main)
+    # Streamlit's recursive iteration follows the visible page order.
+    scenario_position = next(index for index, item in enumerate(blocks)
+                             if item.type == "subheader" and item.value == "1. Scenarios [Required · ASSUMPTION]")
+    context_position = next(index for index, item in enumerate(blocks) if item is context)
+    assert scenario_position < context_position
+    _button(app, "Start from latest underwriting").click().run()
+    assert any("Draft initialized from ADBE v1. Saving will create v2." in item.value for item in app.success)
+    assert source.store.list_underwriting("ADBE") == (original,)
+    _button(app, "Refresh draft evidence context").click().run()
+    assert any("Evidence context refreshed" in item.value for item in app.success)
+    _button(app, "Discard draft").click().run()
+    assert any("Draft discarded" in item.value for item in app.success)
+    assert not any(item.label == "Review Draft" for item in app.button)
+    assert source.store.list_underwriting("ADBE") == (original,)
+
+
+def test_recommended_optional_empty_where_contract_allows_and_contract_exceptions(source: WorkbenchSource) -> None:
+    data = authoring()
+    judgment = data["judgments"]
+    judgment["supporting_evidence"] = []
+    judgment["disconfirming_evidence"] = []
+    judgment["variant_rationales"] = []
+    judgment["investor_policy"]["rationale"] = None
+    for field in ("dependencies", "breakers"):
+        judgment["thesis"][field] = [
+            {"category": "JUDGMENT", "condition_id": field + "-1", "statement": "Investor-authored condition."}
+        ]
+    app = _app(source)
+    _button(app, "Create New Underwriting").click().run()
+    _seed_draft(app, data)
+    assert any("No disconfirming evidence recorded - recommended, not required." in item.value for item in app.caption)
+    _button(app, "Review Draft").click().run()
+    assert not app.exception and not app.error
+    _button(app, "Create Immutable Underwriting Version").click().run()
+    record = source.store.list_underwriting("ADBE")[0]
+    snapshot = UnderwritingSnapshot.from_json(record.snapshot_json)
+    assert not snapshot.manual.supporting_evidence
+    assert not snapshot.manual.variant_rationales
+    assert snapshot.manual.thesis.monitoring_dependencies[0].monitoring_date is None
+    assert snapshot.manual.thesis.monitoring_dependencies[0].sources == ()
+    inputs = capture_underwriting_inputs(source, "ADBE", now=NOW)
+    judgment["business_drivers"] = []
+    with pytest.raises(UnderwritingError, match="3 to 5"):
+        review_authoring(data, inputs)
+    assert len(source.store.list_underwriting("ADBE")) == 1
