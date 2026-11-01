@@ -1,0 +1,44 @@
+{
+  "authoring_version": 2,
+  "assumptions": {
+    "category": "ASSUMPTION",
+    "scenarios": [
+      {"name": "BEAR", "category": "ASSUMPTION", "narrative": "Illustrative: weak demand and margin pressure.", "revenue_cagr": 0.0, "fcf_margin_year5": 0.25, "share_count_cagr": 0.0, "terminal_fcf_multiple": 15, "horizon_years": 5, "key_dependency": "Demand deterioration persists."},
+      {"name": "BASE", "category": "ASSUMPTION", "narrative": "Illustrative: modest growth with durable cash generation.", "revenue_cagr": 0.05, "fcf_margin_year5": 0.35, "share_count_cagr": -0.01, "terminal_fcf_multiple": 20, "horizon_years": 5, "key_dependency": "Retention and monetization support growth."},
+      {"name": "BULL", "category": "ASSUMPTION", "narrative": "Illustrative: stronger monetization and operating leverage.", "revenue_cagr": 0.10, "fcf_margin_year5": 0.40, "share_count_cagr": -0.02, "terminal_fcf_multiple": 25, "horizon_years": 5, "key_dependency": "New products expand paid demand."}
+    ]
+  },
+  "judgments": {
+    "category": "JUDGMENT",
+    "business_drivers": [
+      {"category": "JUDGMENT", "text": "Retention and pricing power of core creative products."},
+      {"category": "JUDGMENT", "text": "Incremental paid demand versus product substitution."},
+      {"category": "JUDGMENT", "text": "Cash conversion and disciplined share-count evolution."}
+    ],
+    "supporting_evidence": [],
+    "disconfirming_evidence": [],
+    "variant_rationales": [],
+    "probability_distribution": {
+      "category": "JUDGMENT",
+      "rationale": "Illustrative only: central case receives half the weight, with meaningful downside and upside uncertainty. Replace with evidence-backed approval.",
+      "scenarios": [
+        {"name": "BEAR", "category": "JUDGMENT", "probability": 0.25},
+        {"name": "BASE", "category": "JUDGMENT", "probability": 0.50},
+        {"name": "BULL", "category": "JUDGMENT", "probability": 0.25}
+      ]
+    },
+    "investor_policy": {"category": "JUDGMENT", "required_return": 0.12, "rationale": "Illustrative investor policy; replace with your hurdle."},
+    "thesis": {
+      "category": "JUDGMENT",
+      "dependencies": [
+        {"condition_id": "retention", "category": "JUDGMENT", "statement": "Core customer demand remains durable.", "observable": "Reported retention and product revenue trend", "threshold": "No sustained erosion in retention or paid demand", "sources": [{"title": "Future filed annual report and company disclosures"}], "monitoring_cadence": "Quarterly"}
+      ],
+      "breakers": [
+        {"condition_id": "erosion", "category": "JUDGMENT", "statement": "Structural competitive erosion invalidates the demand thesis.", "observable": "Revenue growth and disclosed customer retention", "threshold": "Two consecutive annual revenue declines with deteriorating retention", "sources": [{"title": "Filed annual reports"}], "monitoring_cadence": "At each annual filing"}
+      ],
+      "biggest_uncertainty": "Whether new product monetization offsets substitution pressure.",
+      "most_important_variable": "Sustainable revenue growth.",
+      "next_evidence_to_collect": ["Collect dated retention and monetization evidence that distinguishes cyclical pressure from structural erosion."]
+    }
+  }
+}

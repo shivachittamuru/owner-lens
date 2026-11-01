@@ -149,6 +149,12 @@ and `uv run owner-lens challenger run ADBE --version 1`. See
 approved probabilities, transparent hurdle bands and the advisory rules-only
 challenger. Neither command is a buy/sell recommendation.
 
+For new underwriting, use the consolidated
+[canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and
+[version-2 authoring example](docs/examples/adbe_consolidated_underwriting.sample.json).
+OwnerLens supplies FACT/EXPECTATION; you author ASSUMPTION/JUDGMENT.
+Existing immutable versions remain unchanged.
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 

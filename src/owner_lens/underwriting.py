@@ -54,6 +54,21 @@ class Statement:
     category: SemanticType
     text: str
     references: tuple[Reference, ...] = ()
+    evidence_id: str | None = None
+    evidence_date: str | None = None
+    belief_references: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ThesisCondition:
+    condition_id: str
+    statement: str
+    observable: str | None = None
+    threshold: str | None = None
+    sources: tuple[Reference, ...] = ()
+    monitoring_cadence: str | None = None
+    monitoring_date: str | None = None
+    category: SemanticType = SemanticType.JUDGMENT
 
 
 @dataclass(frozen=True)
@@ -75,6 +90,8 @@ class Thesis:
     most_important_variable: str
     next_evidence_to_collect: tuple[str, ...]
     category: SemanticType = SemanticType.JUDGMENT
+    monitoring_dependencies: tuple[ThesisCondition, ...] = ()
+    monitoring_breakers: tuple[ThesisCondition, ...] = ()
 
 
 class ScenarioName(StrEnum):
@@ -138,6 +155,7 @@ class ManualUnderwriting:
     variant_rationales: tuple[DriverRationale, ...] = ()
     probability_distribution: ProbabilityDistribution | None = None
     investor_policy: InvestorPolicy | None = None
+    contract_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -186,6 +204,16 @@ class UnderwritingSnapshot:
 
     def to_json(self) -> str:
         data = asdict(self)
+        if self.manual.contract_version == 1:
+            data["manual"].pop("contract_version")
+        for field in ("business_drivers", "supporting_evidence", "disconfirming_evidence"):
+            for item in data["manual"][field]:
+                _omit_statement_metadata(item)
+        if data["manual"]["decision"] is not None:
+            _omit_statement_metadata(data["manual"]["decision"])
+        for field in ("monitoring_dependencies", "monitoring_breakers"):
+            if not data["manual"]["thesis"][field]:
+                data["manual"]["thesis"].pop(field)
         if not self.manual.scenarios:
             data["manual"].pop("scenarios")
         if not self.manual.variant_rationales:
@@ -199,10 +227,12 @@ class UnderwritingSnapshot:
     @classmethod
     def from_json(cls, payload: str) -> UnderwritingSnapshot:
         data = json.loads(payload)
-        if data["schema_version"] != 1:
+        if data["schema_version"] not in (1, 2):
             raise UnderwritingError("Unsupported underwriting snapshot schema.")
         manual_data = data["manual"]
         manual = parse_manual_input(manual_data)
+        if manual.contract_version != data["schema_version"]:
+            raise UnderwritingError("Snapshot and authoring contract versions do not match.")
         starting = tuple(
             FinancialState(
                 **{
@@ -232,7 +262,25 @@ class UnderwritingSnapshot:
             json.dumps(data["evidence"], sort_keys=True, allow_nan=False),
             data["latest_fiscal_year"],
             data["calculation_version"],
+            data["schema_version"],
         )
+
+
+def _omit_statement_metadata(item: dict[str, Any]) -> None:
+    for field in ("evidence_id", "evidence_date", "belief_references"):
+        if not item[field]:
+            item.pop(field)
+
+
+def _optional_date(value: Any, label: str) -> str | None:
+    text = _optional_text(value, label)
+    if text is not None:
+        try:
+            if date.fromisoformat(text).isoformat() != text:
+                raise ValueError
+        except ValueError as exc:
+            raise UnderwritingError(f"{label} must be YYYY-MM-DD.") from exc
+    return text
 
 
 def _object(
@@ -298,7 +346,8 @@ def _statement(
     value: Any, name: str, category: SemanticType | None = None
 ) -> Statement:
     item = _object(
-        value, name, {"category", "text", "references"}, {"category", "text"}
+        value, name, {"category", "text", "references", "evidence_id", "evidence_date", "belief_references"},
+        {"category", "text"}
     )
     try:
         kind = SemanticType(item["category"])
@@ -309,7 +358,10 @@ def _statement(
     if category is not None and kind is not category:
         raise UnderwritingError(f"{name} must be {category}, not {kind}.")
     return Statement(
-        kind, _text(item["text"], name), _references(item.get("references", []))
+        kind, _text(item["text"], name), _references(item.get("references", [])),
+        _optional_text(item.get("evidence_id"), "evidence_id"),
+        _optional_date(item.get("evidence_date"), "evidence_date"),
+        tuple(_text(raw, "belief reference") for raw in _list(item.get("belief_references", []), "belief_references")),
     )
 
 
@@ -326,6 +378,10 @@ _ASSUMPTIONS = {
 
 def parse_manual_input(data: Any) -> ManualUnderwriting:
     """Reject category substitution and unknown fields; never accept starting-fact overrides."""
+    if isinstance(data, dict) and "authoring_version" in data:
+        from owner_lens.underwriting_contract import parse_authoring_input
+
+        return parse_authoring_input(data)
     fields = {
         "as_of_date",
         "business_drivers",
@@ -338,6 +394,7 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         "variant_rationales",
         "probability_distribution",
         "investor_policy",
+        "contract_version",
     }
     root = _object(
         data,
@@ -345,6 +402,9 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         fields,
         {"business_drivers", "forward_assumptions", "thesis"},
     )
+    contract_version = root.get("contract_version", 1)
+    if type(contract_version) is not int or contract_version not in (1, 2):
+        raise UnderwritingError("Unsupported underwriting contract version.")
     as_of = _optional_text(root.get("as_of_date"), "as_of_date")
     if as_of is not None:
         try:
@@ -420,7 +480,7 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         "next_evidence_to_collect",
     }
     thesis_data = _object(
-        root["thesis"], "thesis", thesis_fields | {"category"}, thesis_fields
+        root["thesis"], "thesis", thesis_fields | {"category", "monitoring_dependencies", "monitoring_breakers"}, thesis_fields
     )
     if thesis_data.get("category", SemanticType.JUDGMENT) != SemanticType.JUDGMENT:
         raise UnderwritingError("Thesis must be JUDGMENT.")
@@ -442,6 +502,8 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         most_important_variable=_text(
             thesis_data["most_important_variable"], "most_important_variable"
         ),
+        monitoring_dependencies=_conditions(thesis_data.get("monitoring_dependencies", [])),
+        monitoring_breakers=_conditions(thesis_data.get("monitoring_breakers", [])),
     )
     rationales: list[DriverRationale] = []
     for raw in _list(root.get("variant_rationales", []), "variant_rationales"):
@@ -461,7 +523,7 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
             "variant rationale", SemanticType.JUDGMENT,
         )
         rationales.append(DriverRationale(driver, statement.text, references=statement.references))
-    return ManualUnderwriting(
+    manual = ManualUnderwriting(
         as_of,
         drivers,
         tuple(assumptions),
@@ -487,7 +549,41 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         if root.get("probability_distribution") is not None else None,
         parse_investor_policy(root["investor_policy"])
         if root.get("investor_policy") is not None else None,
+        contract_version,
     )
+    if contract_version == 2:
+        if (manual.forward_assumptions or not manual.scenarios
+                or manual.probability_distribution is None
+                or not manual.probability_distribution.rationale
+                or manual.investor_policy is None):
+            raise UnderwritingError("Contract v2 requires complete scenarios, probability rationale and investor policy, without duplicated forward assumptions.")
+        if (manual.thesis.dependencies != tuple(item.statement for item in manual.thesis.monitoring_dependencies)
+                or manual.thesis.breakers != tuple(item.statement for item in manual.thesis.monitoring_breakers)):
+            raise UnderwritingError("Contract v2 thesis text must match structured conditions.")
+    return manual
+
+
+def _conditions(data: Any) -> tuple[ThesisCondition, ...]:
+    result: list[ThesisCondition] = []
+    for raw in _list(data, "thesis conditions"):
+        item = _object(raw, "thesis condition",
+                       {"condition_id", "statement", "observable", "threshold", "sources",
+                        "monitoring_cadence", "monitoring_date", "category"},
+                       {"condition_id", "statement", "category"})
+        if item["category"] != SemanticType.JUDGMENT:
+            raise UnderwritingError("Thesis conditions must be JUDGMENT.")
+        identifier = _text(item["condition_id"], "condition_id")
+        if any(existing.condition_id == identifier for existing in result):
+            raise UnderwritingError("Duplicate thesis condition id.")
+        result.append(ThesisCondition(
+            identifier, _text(item["statement"], "condition statement"),
+            _optional_text(item.get("observable"), "observable"),
+            _optional_text(item.get("threshold"), "threshold"),
+            _references(item.get("sources", [])),
+            _optional_text(item.get("monitoring_cadence"), "monitoring_cadence"),
+            _optional_date(item.get("monitoring_date"), "monitoring_date"),
+        ))
+    return tuple(result)
 
 
 PROBABILITY_TOLERANCE = 1e-9
@@ -841,7 +937,11 @@ def create_underwriting(
         rates,
         json.dumps(copied, sort_keys=True, allow_nan=False),
         year,
+        schema_version=manual.contract_version,
     )
+    from owner_lens.underwriting_contract import validate_belief_links
+
+    validate_belief_links(snapshot, as_of.isoformat())
     return source.store.save_underwriting(
         security_id=security.security_id,
         ticker=symbol,
