@@ -7,6 +7,7 @@ empty chart, so the reader always learns why something is missing.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -19,6 +20,8 @@ from owner_lens.capital_allocation import CapitalAllocationRow
 from owner_lens.capital_efficiency import CapitalEfficiencyRow
 from owner_lens.compounding import EconomicCompoundingView
 from owner_lens.owner_economics import OwnerEconomicsRow
+from owner_lens.research_context import build_research_context, scenario_rows
+from owner_lens.underwriting_contract import UnderwritingProjection
 from owner_lens.workbench.data import (
     NOT_AVAILABLE,
     CompanyDetail,
@@ -40,15 +43,15 @@ from owner_lens.workbench.views._common import (
 __all__ = ["render"]
 
 
-def render(detail: CompanyDetail) -> None:
+def render(detail: CompanyDetail, underwriting: UnderwritingProjection | None = None) -> None:
     """Render one company's research page."""
     _header(detail)
     st.divider()
     reason_lists(detail.screening)
     st.divider()
 
-    fundamentals, screening, future = st.tabs(
-        ["Fundamentals", "Screening", "Future: Valuation · Edge"]
+    fundamentals, screening, beliefs = st.tabs(
+        ["Fundamentals", "Screening", "Underwriting"]
     )
     with fundamentals:
         _owner_economics(detail.owner_economics)
@@ -65,15 +68,141 @@ def render(detail: CompanyDetail) -> None:
             "Bands are coarse by design. The score orders companies within a "
             "bucket and never sets one."
         )
-    with future:
-        st.info(
-            "Valuation, expected return, edge, and position sizing are not part "
-            "of this layer. They need a price, which is the first input OwnerLens "
-            "does not derive from a filing. When those features land, they attach "
-            "here without changing anything above."
-        )
+    with beliefs:
+        _underwriting(underwriting)
+    context = build_research_context(detail, underwriting)
+    if st.button("Copy Research Context"):
+        st.session_state["research_context_open"] = True
+    if st.session_state.get("research_context_open"):
+        with st.expander("Research Context", expanded=True):
+            st.caption("Select and copy the text below, or download it. No data is sent automatically. Review before sharing.")
+            st.code(context.markdown, language="markdown")
+            st.download_button("Download Markdown", context.markdown,
+                               file_name=f"{detail.company.ticker}-research.md", mime="text/markdown")
+            st.download_button("Download JSON", context.json_export,
+                               file_name=f"{detail.company.ticker}-research.json", mime="application/json")
     if detail.company.provider == "fmp":
         _fmp_evidence(detail)
+
+
+def _underwriting(projection: UnderwritingProjection | None) -> None:
+    st.subheader("Underwriting")
+    if projection is None:
+        st.info("Underwriting unavailable for this store.")
+        return
+    if projection.record is None or projection.snapshot is None:
+        st.info("No immutable underwriting record. No values or assumptions are generated.")
+        return
+    record, snapshot, summary = projection.record, projection.snapshot, projection.summary
+    st.caption(f"Underwriting v{record.version} | as of {record.as_of_date} | {projection.status} | read-only")
+    evidence = json.loads(snapshot.evidence_json)
+    st.caption("Underwriting evidence provider: " + str(evidence.get("provider", NOT_AVAILABLE)))
+    price = evidence.get("eod_price", {}).get("value")
+    st.caption(f"Frozen market price FACT: {format_per_share(price['close'] if price else None)} | "
+               f"market date: {price['market_date'] if price else NOT_AVAILABLE}")
+    policy = snapshot.manual.investor_policy
+    columns = st.columns(4)
+    columns[0].metric("Classification", summary.classification if summary else NOT_AVAILABLE)
+    columns[1].metric("Expected 5Y CAGR", format_ratio(summary.expected_5y_cagr if summary else None))
+    columns[2].metric("Required return", format_ratio(
+        summary.investor_policy.required_return if summary else policy.required_return if policy else None))
+    columns[3].metric("Spread vs hurdle", format_ratio(summary.return_spread if summary else None))
+    st.caption("CALCULATION outcomes; JUDGMENT hurdle/probabilities. Conditional assessment, not a buy/sell recommendation.")
+    st.caption("Variant view: " + (projection.variant.conclusion if projection.variant else NOT_AVAILABLE))
+    if projection.status == "CAPTURED":
+        st.info("Derived outputs are N/A for this exact version. The page does not generate them.")
+        with st.expander("Offline commands to generate missing artifacts"):
+            st.code(
+                f"uv run owner-lens valuation run {record.ticker} --version {record.version}\n"
+                f"uv run owner-lens variant show {record.ticker} --version {record.version}\n"
+                f"uv run owner-lens underwriting summary {record.ticker} --version {record.version}\n"
+                f"uv run owner-lens challenger run {record.ticker} --version {record.version}",
+                language="powershell",
+            )
+    st.caption("Probability rationale [JUDGMENT]: " + (
+        snapshot.manual.probability_distribution.rationale
+        if snapshot.manual.probability_distribution and snapshot.manual.probability_distribution.rationale
+        else NOT_AVAILABLE))
+    st.subheader("Bear / Base / Bull")
+    rows = scenario_rows(projection)
+    for row in rows:
+        row["Probability [JUDGMENT]"] = format_ratio(row["Probability [JUDGMENT]"])
+        row["Value/share [CALCULATION]"] = format_per_share(row["Value/share [CALCULATION]"])
+        row["Implied CAGR [CALCULATION]"] = format_ratio(row["Implied CAGR [CALCULATION]"])
+    if rows:
+        st.dataframe(frame(rows), width="stretch")
+    else:
+        st.info("No approved scenario assumptions.")
+    st.subheader("What drives the result")
+    st.write("Biggest uncertainty [JUDGMENT]: " + snapshot.manual.thesis.biggest_uncertainty)
+    st.write("Most important variable [JUDGMENT]: " + snapshot.manual.thesis.most_important_variable)
+    if projection.variant:
+        st.dataframe(frame([{
+            "Driver": driver.driver, "Sensitivity": driver.sensitivity.band,
+            "Perturbation": driver.sensitivity.perturbation,
+            "CAGR effect": format_ratio(driver.sensitivity.cagr_delta),
+            "Consensus": format_ratio(driver.consensus.value),
+            "Delta": format_ratio(driver.absolute_delta),
+            "Rationale [JUDGMENT]": driver.rationale.text if driver.rationale else NOT_AVAILABLE,
+        } for driver in sorted(projection.variant.drivers, key=lambda item: abs(item.sensitivity.cagr_delta), reverse=True)]),
+            width="stretch")
+    else:
+        st.info("No projected variant or sensitivity outputs. No valuation is run by this page.")
+    with st.expander("Thesis and evidence"):
+        manual = snapshot.manual
+        for label, statements in (("Key business/value drivers", manual.business_drivers),
+                                  ("Supporting evidence", manual.supporting_evidence),
+                                  ("Disconfirming evidence", manual.disconfirming_evidence)):
+            st.markdown(f"**{label}**")
+            if not statements:
+                st.info("None recorded; evidence is missing, not assumed.")
+            for statement in statements:
+                st.write(f"[{statement.category}] {statement.text}")
+                if statement.evidence_date:
+                    st.caption("Evidence date: " + statement.evidence_date)
+                for reference in statement.references:
+                    st.caption(f"Source: {reference.title or NOT_AVAILABLE} | {reference.observed_at or NOT_AVAILABLE}")
+        for label, texts, conditions in (
+            ("Dependencies / what must be true", manual.thesis.dependencies, manual.thesis.monitoring_dependencies),
+            ("Thesis breakers", manual.thesis.breakers, manual.thesis.monitoring_breakers),
+        ):
+            st.markdown(f"**{label} [JUDGMENT]**")
+            if conditions:
+                for condition in conditions:
+                    st.write(condition.statement)
+                    st.caption(f"Observable: {condition.observable or NOT_AVAILABLE} | "
+                               f"Condition: {condition.threshold or NOT_AVAILABLE} | "
+                               f"Monitor: {condition.monitoring_cadence or condition.monitoring_date or NOT_AVAILABLE}")
+                    st.caption("Sources: " + (", ".join(reference.title or NOT_AVAILABLE for reference in condition.sources) or NOT_AVAILABLE))
+            else:
+                for text in texts:
+                    st.write(text)
+        st.markdown("**Next evidence to collect [JUDGMENT]**")
+        for text in manual.thesis.next_evidence_to_collect:
+            st.write(text)
+    with st.expander("Challenger [JUDGMENT]"):
+        if not projection.challenger_runs:
+            st.info("No saved challenger run. The UI never runs the challenger.")
+        else:
+            run = projection.challenger_runs[-1]
+            st.caption(f"Saved advisory run: {run.created_at} | underwriting v{run.underwriting_version}")
+            output = json.loads(run.output_json)
+            for field in ("overall_assessment", "strongest_argument_against", "fragile_assumptions",
+                          "probability_challenges", "missing_evidence", "variant_view_challenge", "questions_to_resolve"):
+                st.markdown(f"**{field.replace('_', ' ').capitalize()}**")
+                values = output[field] if isinstance(output[field], list) else [output[field]]
+                if not values:
+                    st.caption("None recorded.")
+                for finding in values:
+                    st.write(finding["text"])
+                    if not finding["evidence_available"]:
+                        st.caption("Evidence unavailable.")
+                    st.caption("References: " + ", ".join(item["path"] for item in finding["references"]))
+    with st.expander("Missing evidence and outputs"):
+        if not projection.missing_evidence:
+            st.caption("No explicit gaps reported; this is not an evidence-quality certification.")
+        for missing in projection.missing_evidence:
+            st.write(f"{missing.section}: {missing.reason}")
 
 
 def _fmp_evidence(detail: CompanyDetail) -> None:

@@ -15,7 +15,12 @@ import os
 import streamlit as st
 
 from owner_lens.canonical import CanonicalDataError
+from owner_lens.persistence import SqliteStore
 from owner_lens.persistence.errors import PersistenceError
+from owner_lens.underwriting import UnderwritingError
+from owner_lens.underwriting_contract import project_underwriting
+from owner_lens.underwriting_summary import SummaryError
+from owner_lens.variant import VariantError
 from owner_lens.workbench.cache import (
     cached_company_detail,
     cached_comparison,
@@ -212,7 +217,14 @@ def _company_page(
         )
     )
     if detail is not None:
-        company.render(detail)
+        try:
+            with open_run_source() as source:
+                projection = (project_underwriting(source.store, selected.ticker)
+                              if isinstance(source.store, SqliteStore) else None)
+        except (UnderwritingError, SummaryError, VariantError, PersistenceError, OSError) as exc:
+            st.error(f"Underwriting could not be loaded: {exc}")
+            return
+        company.render(detail, projection)
     else:
         st.title(f"Company: {selected.ticker}")
 

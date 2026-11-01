@@ -155,6 +155,11 @@ For new underwriting, use the consolidated
 OwnerLens supplies FACT/EXPECTATION; you author ASSUMPTION/JUDGMENT.
 Existing immutable versions remain unchanged.
 
+The Company page now shows saved underwriting and offers **Copy Research Context**
+with Markdown/JSON downloads. See
+[Feature 8F2](docs/feature_docs/feature_08f2_company_underwriting.md) for the
+read-only workflow and manual inspection checklist.
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 
