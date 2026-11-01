@@ -1,4 +1,7 @@
-# OwnerLens Data Quality & Coverage Reference
+---
+title: "OwnerLens Data Quality & Coverage Reference"
+description: "Provider, canonical and analytical coverage with explicit underwriting evidence limitations."
+---
 
 ## Purpose
 
@@ -355,12 +358,25 @@ Begin with:
 | EOD market price | FMP |
 | Analyst consensus expectations | FMP |
 | FCF, FCF/share, ROIC, margins, screening | OwnerLens deterministic code |
-| Personal thesis assumptions | Future underwriting record |
-| Scenario valuation | Future OwnerLens deterministic code |
+| Personal thesis assumptions | Investor-approved ASSUMPTION in immutable underwriting |
+| Scenario valuation / expected return | OwnerLens deterministic code over frozen underwriting inputs |
 | Scenario probability | Explicit judgment |
 | Investment decision | Investor |
 
 Do not silently fill an FMP metric with SEC inside one canonical history or vice versa.
+
+## Underwriting evidence is not screening completeness
+
+Investor-entered evidence labeled `JUDGMENT` is an interpretation, not automatically
+equivalent to independently verified FACT or provider provenance. Source references
+retain what the investor supplied; OwnerLens does not autonomously retrieve or
+verify them. Other asserted categories also do not establish independent verification.
+
+Missing consensus, supporting/disconfirming evidence and unsaved derived outputs
+remain explicit. `FULL` screening coverage does not establish a complete thesis;
+`CAPTURED` underwriting does not establish saved valuation or challenger output.
+Absence of evidence, including disconfirming evidence, is not positive evidence.
+These distinctions do not change the failure taxonomy above.
 
 # Point-in-time discipline
 

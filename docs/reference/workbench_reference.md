@@ -1,4 +1,7 @@
-# OwnerLens Workbench Reference Guide
+---
+title: "OwnerLens Workbench Reference Guide"
+description: "Offline screening, immutable underwriting authoring and research-context workflows."
+---
 
 ## Purpose
 
@@ -8,7 +11,10 @@ Its job is to answer:
 
 > **Where should I spend my next hour of research, and what does the evidence say so far?**
 
-It is **not** a stock picker. It does not yet answer whether a company is cheap, what its intrinsic value is, what return to expect, or how large a position should be.
+It is **not** a stock picker. Feature 7 directs research attention; Feature 8
+shows deterministic scenario valuations and expected return from explicit
+investor beliefs and a frozen price. Neither produces a buy/sell recommendation
+or determines position size.
 
 ```text
 Persisted SEC / FMP evidence
@@ -24,7 +30,8 @@ Workbench
 Deeper underwriting
 ```
 
-Feature 7 answers **where to look**. Later underwriting answers **whether the opportunity is attractive at the current price**.
+Feature 7 answers **where to look**. Feature 8 underwriting assesses
+**whether the opportunity is attractive at its frozen price under approved beliefs**.
 
 ## Launch
 
@@ -341,6 +348,107 @@ FACT ≠ EXPECTATION ≠ ASSUMPTION ≠ JUDGMENT ≠ CALCULATION
 
 Quarterly evidence, EOD price and analyst expectations do not currently feed Feature 7's annual screening rules.
 
+### Underwriting
+
+The Underwriting tab displays the latest immutable version and as-of date,
+with its frozen market price/date. `CAPTURED` means the record exists; it does
+not mean valuation or challenger outputs have been saved for that version.
+Absent outputs remain `N/A`, and no calculation or challenger runs automatically.
+Use the displayed exact-version offline commands when you choose to generate them.
+
+Read the section in this order:
+
+```text
+Expected return
+→ Bear/Base/Bull
+→ sensitivity
+→ variant view
+→ evidence
+→ dependencies/breakers
+→ challenger
+```
+
+* Start with expected five-year CAGR, your required-return hurdle, spread versus
+  hurdle and conditional classification. Expected CAGR comes from the
+  probability-weighted terminal value and frozen price, not averaged scenario
+  CAGRs. Classification is an underwriting assessment, not a buy/sell recommendation.
+* Inspect Bear/Base/Bull assumptions, manually approved probabilities, terminal
+  value/share and implied scenario CAGR. These expose the beliefs behind the result.
+* Check Base-case sensitivities and the recorded variant view: which inputs
+  drive value, and where do your beliefs actually differ from captured expectations?
+* Review business drivers, supporting versus disconfirming evidence, biggest
+  uncertainty and most important variable. Missing evidence remains explicit.
+* Read thesis dependencies (what must be true), breakers (what would invalidate
+  the thesis) and next evidence to collect.
+* Review saved challenger findings: assessment, strongest argument against,
+  fragile assumptions, probability challenges, missing evidence and questions.
+  Challenger commentary is advisory JUDGMENT, not verified FACT.
+
+### Create or revise underwriting
+
+Select **Create New Underwriting**. **Start from latest underwriting** copies
+ASSUMPTION/JUDGMENT into a new draft, with feedback identifying the source and
+next version. Existing versions remain immutable; saving appends a new version.
+**Review Draft** is required before **Create Immutable Underwriting Version**.
+Edits invalidate review. Drafts are not permanent underwriting records.
+
+| Field hierarchy | Contents |
+| --- | --- |
+| Required, expanded | Each Bear/Base/Bull narrative, revenue CAGR, year-5 FCF margin, share-count CAGR, terminal FCF multiple and key dependency; three probabilities, probability rationale and required return |
+| Required by current v2, in collapsed deeper-work sections | 3–5 business drivers, biggest uncertainty, most important variable, dependency/breaker statements and next evidence to collect |
+| Recommended, collapsed | Variant rationales, supporting/disconfirming evidence, observables and thresholds |
+| Optional, collapsed | Detailed sources/references, monitoring cadence/date, extra evidence metadata and policy rationale |
+
+The current v2-required judgments still block review when empty. Recommended
+omissions do not; supplied evidence/metadata must still pass domain validation.
+The large OwnerLens facts/history/consensus context is a collapsed reference,
+not a form to re-enter. Available presets require explicit investor selection.
+
+```text
+OwnerLens supplies FACT + EXPECTATION
+Investor supplies/approves ASSUMPTION + JUDGMENT
+OwnerLens produces CALCULATION
+```
+
+The Workbench form is the preferred human authoring experience. Versioned JSON
+remains the durable import/export and CLI/testing contract. See the
+[canonical contract](../feature_docs/feature_08f1_underwriting_contract.md) and
+[authoring guide](../feature_docs/feature_08f4_underwriting_authoring.md).
+
+### Copy Research Context
+
+Select **Copy Research Context** to reveal compact Markdown for ChatGPT or
+human reasoning, with Markdown and sanitized machine-readable JSON downloads.
+No data is sent automatically; review the content before sharing.
+
+The export distinguishes current persisted economics/screening from frozen
+underwriting inputs. It includes nearest available captured forward consensus,
+beliefs, available outputs and explicit missing data, without raw evidence
+blobs, secrets or internal paths. Newer context does not alter an old version.
+
+```text
+OwnerLens evidence
+→ ChatGPT / human reasoning
+→ investor-approved judgment
+→ new immutable underwriting version
+```
+
+### Feature 8 lifecycle
+
+```text
+Evidence
+→ Immutable Underwriting
+→ Deterministic Valuation
+→ Market Expectations / Variant Perception
+→ Probabilities / Expected Return
+→ Challenger
+→ Thesis Monitoring
+```
+
+Probabilities are manually approved when authoring; this reading sequence does
+not imply automatic probability generation. Monitoring conditions, sources and
+dates are structured, but monitoring is not automated or event-driven.
+
 ## 4. Compare
 
 Use Compare for two-to-five-company side-by-side inspection.
@@ -379,6 +487,9 @@ Feature 7 does not currently determine:
 - portfolio fit;
 - position sizing;
 - personal investing edge.
+
+Feature 8 surfaces scenario valuation, expected return, probabilities and
+variant perception separately on Company; these do not redesign Feature 7 rankings.
 
 A great business can be a poor investment at an extreme price. A temporarily weak business can be a wonderful investment if the weakness is misunderstood and price is attractive.
 
