@@ -20,8 +20,10 @@ logic outside Streamlit. It displays:
   references in a separate expander.
 * Explicit missing evidence, unavailable outputs and monitoring metadata.
 
-An absent record, saved valuation or challenger is reported as absent. The page
-does not create records, run valuation/challenger, or retrieve evidence.
+An absent record, saved valuation or challenger is reported as absent. The saved
+projection does not create records, run valuation/challenger, or retrieve evidence.
+The separate [8F4 authoring flow](feature_08f4_underwriting_authoring.md) now allows
+explicit creation of a new immutable version; existing versions remain read-only.
 FACT, EXPECTATION, ASSUMPTION, JUDGMENT and CALCULATION distinctions remain
 visible. Existing quarterly, EOD and analyst evidence sections stay separate
 from annual screening.
@@ -74,8 +76,8 @@ paths in free text are redacted or omitted. This reduces accidental disclosure,
 but is not a guarantee that arbitrary private content in investor notes is
 shareable. Always review before pasting.
 
-No extra investing logic, editor, agents, instruments or portfolio features
-are added.
+The read/export projection adds no investing logic, agents, instruments or
+portfolio features. Draft authoring is handled separately by Feature 8F4.
 
 A `CAPTURED` underwriting explicitly shows N/A for absent valuation, variant,
 expected-return and saved challenger outputs. An expander offers exact offline

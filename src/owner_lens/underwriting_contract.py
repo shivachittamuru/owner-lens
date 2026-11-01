@@ -131,6 +131,22 @@ def validate_belief_links(snapshot: UnderwritingSnapshot, as_of_date: str) -> No
         raise UnderwritingError(
             "Thesis condition ids must be unique across dependencies and breakers."
         )
+    if snapshot.schema_version == 2:
+        cutoff = _retrieved_at(data["evidence"].get(
+            "cutoff", as_of_date + "T23:59:59.999999+00:00"
+        ))
+        references = [
+            reference
+            for item in (*snapshot.manual.business_drivers,
+                         *snapshot.manual.supporting_evidence,
+                         *snapshot.manual.disconfirming_evidence)
+            for reference in item.references
+        ]
+        references.extend(reference for rationale in snapshot.manual.variant_rationales for reference in rationale.references)
+        references.extend(reference for condition in conditions for reference in condition.sources)
+        for reference in references:
+            if reference.observed_at and _retrieved_at(reference.observed_at) > cutoff:
+                raise UnderwritingError("Evidence reference observation exceeds frozen cutoff.")
     for item in (
         *snapshot.manual.supporting_evidence,
         *snapshot.manual.disconfirming_evidence,
@@ -145,17 +161,6 @@ def validate_belief_links(snapshot: UnderwritingSnapshot, as_of_date: str) -> No
             item.evidence_date
         ) > date.fromisoformat(as_of_date):
             raise UnderwritingError("Evidence date exceeds underwriting as-of date.")
-        if snapshot.schema_version == 2:
-            cutoff = data["evidence"].get(
-                "cutoff", as_of_date + "T23:59:59.999999+00:00"
-            )
-            for reference in item.references:
-                if reference.observed_at and _retrieved_at(
-                    reference.observed_at
-                ) > _retrieved_at(cutoff):
-                    raise UnderwritingError(
-                        "Evidence reference observation exceeds frozen cutoff."
-                    )
         for pointer in item.belief_references:
             prefixes = (
                 "/manual/business_drivers/",

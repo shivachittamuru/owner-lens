@@ -160,6 +160,11 @@ with Markdown/JSON downloads. See
 [Feature 8F2](docs/feature_docs/feature_08f2_company_underwriting.md) for the
 read-only workflow and manual inspection checklist.
 
+Use **Company → Underwriting → Create New Underwriting** to author assumptions
+and judgments without JSON editing. Explicit presets, live probability totals
+and a required review precede immutable save; old versions remain unchanged.
+See [Feature 8F4](docs/feature_docs/feature_08f4_underwriting_authoring.md).
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 

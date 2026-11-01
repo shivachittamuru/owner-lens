@@ -15,6 +15,7 @@ from owner_lens.underwriting import (
     DriverRationale,
     ScenarioName,
     SemanticType,
+    UnderwritingInputs,
     UnderwritingSnapshot,
 )
 from owner_lens.valuation import ScenarioValuation, ValuationError, value_underwriting
@@ -132,8 +133,11 @@ def _timestamp(raw: str) -> datetime:
     )
 
 
-def _revenue_consensus(
-    snapshot: UnderwritingSnapshot, record: UnderwritingRecord
+def revenue_consensus(
+    snapshot: UnderwritingSnapshot | UnderwritingInputs,
+    *,
+    created_at: str,
+    as_of_date: str,
 ) -> Consensus:
     """Annual target CAGR from the frozen starting fact, never five-year extrapolation."""
     evidence = json.loads(snapshot.evidence_json)
@@ -152,8 +156,8 @@ def _revenue_consensus(
     if not candidates:
         return Consensus(None, reason="No annual analyst estimate snapshot captured.")
     cutoff = min(
-        _timestamp(record.created_at),
-        _timestamp(record.as_of_date + "T23:59:59.999999+00:00"),
+        _timestamp(created_at),
+        _timestamp(as_of_date + "T23:59:59.999999+00:00"),
     )
     if evidence.get("cutoff"):
         cutoff = min(cutoff, _timestamp(evidence["cutoff"]))
@@ -343,7 +347,9 @@ def compare_variant(record: UnderwritingRecord) -> VariantReport:
         baseline = value_underwriting(record)
         snapshot = UnderwritingSnapshot.from_json(record.snapshot_json)
         base = _base(baseline.scenarios)
-        consensus_revenue = _revenue_consensus(snapshot, record)
+        consensus_revenue = revenue_consensus(
+            snapshot, created_at=record.created_at, as_of_date=record.as_of_date
+        )
         histories = {item.name: item for item in snapshot.historical_base_rates}
         rationales = {item.driver: item for item in snapshot.manual.variant_rationales}
         drivers: list[DriverComparison] = []

@@ -27,6 +27,11 @@ it as fact. SEC remains authoritative for filings; frozen FMP evidence is isolat
 
 Use the [illustrative ADBE authoring example](../examples/adbe_consolidated_underwriting.sample.json):
 
+The primary human entry point is now
+[Company-page authoring](feature_08f4_underwriting_authoring.md).
+It constructs this same v2 contract; JSON remains available for import/export
+and CLI workflows.
+
 ```text
 authoring_version: 2
 assumptions [ASSUMPTION]

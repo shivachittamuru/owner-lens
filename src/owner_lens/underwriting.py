@@ -826,23 +826,50 @@ def _capture_financials(
     return starting, tuple(rates), latest.fiscal_year
 
 
-def create_underwriting(
+@dataclass(frozen=True)
+class UnderwritingInputs:
+    """Read-only point-in-time inputs; a draft/review is not a persisted version."""
+
+    security_id: int
+    ticker: str
+    as_of_date: str
+    captured_at: str
+    starting_financial_state: tuple[FinancialState, ...]
+    historical_base_rates: tuple[BaseRate, ...]
+    evidence_json: str
+    latest_fiscal_year: int
+
+    def snapshot(self, manual: ManualUnderwriting) -> UnderwritingSnapshot:
+        manual = parse_manual_input(asdict(manual))
+        if manual.as_of_date and manual.as_of_date != self.as_of_date:
+            raise UnderwritingError("Draft as-of date differs from captured inputs.")
+        snapshot = UnderwritingSnapshot(
+            manual, self.starting_financial_state, self.historical_base_rates,
+            self.evidence_json, self.latest_fiscal_year,
+            schema_version=manual.contract_version,
+        )
+        from owner_lens.underwriting_contract import validate_belief_links
+
+        validate_belief_links(snapshot, self.as_of_date)
+        return snapshot
+
+
+def capture_underwriting_inputs(
     source: WorkbenchSource,
     ticker: str,
-    manual: ManualUnderwriting,
     *,
+    as_of_date: str | None = None,
     now: datetime | None = None,
-) -> UnderwritingRecord:
-    """Capture local evidence by retrieval time and append a fully copied snapshot."""
+) -> UnderwritingInputs:
+    """Capture the CLI's exact FACT/EXPECTATION inputs without writing a record."""
     if not isinstance(source.store, SqliteStore):
         raise UnderwritingError("Underwriting requires the SQLite evidence store.")
-    manual = parse_manual_input(asdict(manual))
     created = now or datetime.now(UTC)
     if created.tzinfo is None:
         raise UnderwritingError("Creation time must be timezone-aware.")
     created = created.astimezone(UTC)
     as_of = (
-        date.fromisoformat(manual.as_of_date) if manual.as_of_date else created.date()
+        date.fromisoformat(as_of_date) if as_of_date else created.date()
     )
     if as_of > created.date():
         raise UnderwritingError("as_of_date cannot be in the future.")
@@ -931,24 +958,46 @@ def create_underwriting(
             else "No analyst estimate snapshot persisted by cutoff.",
         },
     }
-    snapshot = UnderwritingSnapshot(
-        manual,
-        starting,
-        rates,
-        json.dumps(copied, sort_keys=True, allow_nan=False),
-        year,
-        schema_version=manual.contract_version,
+    return UnderwritingInputs(
+        security.security_id, symbol, as_of.isoformat(), created.isoformat(),
+        starting, rates, json.dumps(copied, sort_keys=True, allow_nan=False), year,
     )
-    from owner_lens.underwriting_contract import validate_belief_links
 
-    validate_belief_links(snapshot, as_of.isoformat())
+
+def save_underwriting_inputs(
+    source: WorkbenchSource,
+    inputs: UnderwritingInputs,
+    manual: ManualUnderwriting,
+    *,
+    expected_latest_version: int | None = None,
+    now: datetime | None = None,
+) -> UnderwritingRecord:
+    """Validate and append reviewed inputs, never recapture newer evidence at save."""
+    if not isinstance(source.store, SqliteStore):
+        raise UnderwritingError("Underwriting requires the SQLite evidence store.")
+    snapshot = inputs.snapshot(manual)
+    created = now or datetime.now(UTC)
+    if created.tzinfo is None or created < _retrieved_at(inputs.captured_at):
+        raise UnderwritingError("Save time must be timezone-aware and not precede input capture.")
     return source.store.save_underwriting(
-        security_id=security.security_id,
-        ticker=symbol,
-        created_at=created.isoformat(),
-        as_of_date=as_of.isoformat(),
-        snapshot_json=snapshot.to_json(),
+        security_id=inputs.security_id, ticker=inputs.ticker,
+        created_at=created.astimezone(UTC).isoformat(), as_of_date=inputs.as_of_date,
+        snapshot_json=snapshot.to_json(), expected_latest_version=expected_latest_version,
     )
+
+
+def create_underwriting(
+    source: WorkbenchSource,
+    ticker: str,
+    manual: ManualUnderwriting,
+    *,
+    now: datetime | None = None,
+) -> UnderwritingRecord:
+    """CLI/JSON and workbench share capture, validation and immutable persistence."""
+    manual = parse_manual_input(asdict(manual))
+    created = now or datetime.now(UTC)
+    inputs = capture_underwriting_inputs(source, ticker, as_of_date=manual.as_of_date, now=created)
+    return save_underwriting_inputs(source, inputs, manual, now=created)
 
 
 def _retrieved_at(value: str) -> datetime:

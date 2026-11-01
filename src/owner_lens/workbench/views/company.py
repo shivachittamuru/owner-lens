@@ -30,6 +30,7 @@ from owner_lens.workbench.data import (
     format_per_share,
     format_ratio,
 )
+from owner_lens.workbench.views import underwriting_authoring
 from owner_lens.workbench.views._common import (
     BUCKET_LABEL,
     COVERAGE_LABEL,
@@ -43,7 +44,11 @@ from owner_lens.workbench.views._common import (
 __all__ = ["render"]
 
 
-def render(detail: CompanyDetail, underwriting: UnderwritingProjection | None = None) -> None:
+def render(
+    detail: CompanyDetail,
+    underwriting: UnderwritingProjection | None = None,
+    authoring_source: underwriting_authoring.SourceFactory | None = None,
+) -> None:
     """Render one company's research page."""
     _header(detail)
     st.divider()
@@ -70,6 +75,8 @@ def render(detail: CompanyDetail, underwriting: UnderwritingProjection | None = 
         )
     with beliefs:
         _underwriting(underwriting)
+        if underwriting is not None and authoring_source is not None:
+            underwriting_authoring.render(detail.company.ticker, underwriting, authoring_source)
     context = build_research_context(detail, underwriting)
     if st.button("Copy Research Context"):
         st.session_state["research_context_open"] = True

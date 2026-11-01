@@ -580,6 +580,7 @@ class SqliteStore:
     def save_underwriting(
         self, *, security_id: int, ticker: str, created_at: str,
         as_of_date: str, snapshot_json: str,
+        expected_latest_version: int | None = None,
     ) -> UnderwritingRecord:
         """Allocate a version and append atomically, never updating a prior record."""
         if self._in_transaction:
@@ -590,6 +591,11 @@ class SqliteStore:
                 "SELECT COALESCE(MAX(version), 0) + 1 AS version "
                 "FROM underwriting_records WHERE security_id = ?", (security_id,),
             ).fetchone()
+            if expected_latest_version is not None and int(row["version"]) != expected_latest_version + 1:
+                self._conn.rollback()
+                raise StorageWriteError(
+                    "Underwriting history changed since review. Review the latest version before saving."
+                )
             record = UnderwritingRecord(
                 str(uuid4()), security_id, ticker, int(row["version"]),
                 created_at, as_of_date, snapshot_json,

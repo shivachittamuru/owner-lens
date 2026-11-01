@@ -224,7 +224,7 @@ def _company_page(
         except (UnderwritingError, SummaryError, VariantError, PersistenceError, OSError) as exc:
             st.error(f"Underwriting could not be loaded: {exc}")
             return
-        company.render(detail, projection)
+        company.render(detail, projection, authoring_source=open_run_source)
     else:
         st.title(f"Company: {selected.ticker}")
 
