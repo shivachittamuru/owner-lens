@@ -54,6 +54,7 @@ from owner_lens.universe_ingestion import (
     refresh_sp500_universe,
 )
 from owner_lens.valuation import MODEL_VERSION, ValuationError, run_valuation
+from owner_lens.variant import VariantError, compare_variant, format_variant
 
 __all__ = ["format_result", "main"]
 
@@ -185,7 +186,33 @@ def _build_parser() -> argparse.ArgumentParser:
         valuation_command.add_argument("--version", type=int, required=True,
                                        help="Exact immutable underwriting version.")
 
+    variant = sub.add_parser("variant", help="Offline consensus/BASE assumption comparison.")
+    variant_actions = variant.add_subparsers(dest="variant_action", required=True)
+    variant_show = variant_actions.add_parser("show", help="Derive variant perception and local valuation sensitivity.")
+    variant_show.add_argument("ticker")
+    variant_show.add_argument("--version", type=int, required=True)
+    variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
+
     return parser
+
+
+def _cmd_variant(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise VariantError("Variant comparison requires SQLite underwriting records.")
+            record = next((item for item in source.store.list_underwriting(args.ticker.strip().upper())
+                           if item.version == args.version), None)
+            if record is None:
+                raise VariantError(f"Underwriting {args.ticker} version {args.version} not found.")
+            report = compare_variant(record)
+            print(json.dumps(json.loads(report.to_json()), indent=2) if args.json else format_variant(report))
+        return 0
+    except (VariantError, PersistenceError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_valuation(args: argparse.Namespace) -> int:
@@ -711,5 +738,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_underwriting(args)
     if args.command == "valuation":
         return _cmd_valuation(args)
+    if args.command == "variant":
+        return _cmd_variant(args)
     parser.error(f"unknown command: {args.command}")
     return 2

@@ -97,6 +97,14 @@ class ScenarioAssumption:
 
 
 @dataclass(frozen=True)
+class DriverRationale:
+    driver: str
+    text: str
+    category: SemanticType = SemanticType.JUDGMENT
+    references: tuple[Reference, ...] = ()
+
+
+@dataclass(frozen=True)
 class ManualUnderwriting:
     as_of_date: str | None
     business_drivers: tuple[Statement, ...]
@@ -106,6 +114,7 @@ class ManualUnderwriting:
     thesis: Thesis
     decision: Statement | None = None
     scenarios: tuple[ScenarioAssumption, ...] = ()
+    variant_rationales: tuple[DriverRationale, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -156,6 +165,8 @@ class UnderwritingSnapshot:
         data = asdict(self)
         if not self.manual.scenarios:
             data["manual"].pop("scenarios")
+        if not self.manual.variant_rationales:
+            data["manual"].pop("variant_rationales")
         data["evidence"] = json.loads(data.pop("evidence_json"))
         return json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -298,6 +309,7 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         "thesis",
         "decision",
         "scenarios",
+        "variant_rationales",
     }
     root = _object(
         data,
@@ -401,6 +413,24 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
             thesis_data["most_important_variable"], "most_important_variable"
         ),
     )
+    rationales: list[DriverRationale] = []
+    for raw in _list(root.get("variant_rationales", []), "variant_rationales"):
+        item = _object(
+            raw, "variant rationale", {"driver", "text", "category", "references"},
+            {"driver", "text", "category"},
+        )
+        driver = _text(item["driver"], "driver")
+        if driver not in {
+            "revenue_cagr", "fcf_margin_year5", "share_count_cagr", "terminal_fcf_multiple",
+        }:
+            raise UnderwritingError(f"Unknown variant driver: {driver}.")
+        if any(existing.driver == driver for existing in rationales):
+            raise UnderwritingError(f"Duplicate variant rationale: {driver}.")
+        statement = _statement(
+            {key: value for key, value in item.items() if key != "driver"},
+            "variant rationale", SemanticType.JUDGMENT,
+        )
+        rationales.append(DriverRationale(driver, statement.text, references=statement.references))
     return ManualUnderwriting(
         as_of,
         drivers,
@@ -422,6 +452,7 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         if root.get("decision") is not None
         else None,
         scenarios,
+        tuple(rationales),
     )
 
 

@@ -137,6 +137,11 @@ version with `uv run owner-lens valuation run ADBE --version 1`. See
 [Feature 8C](docs/feature_docs/feature_08c_scenario_valuation.md) for the
 Bear/Base/Bull contract, equations, and illustrative manual input.
 
+Compare captured consensus with BASE assumptions offline using
+`uv run owner-lens variant show ADBE --version 1`. See
+[Feature 8D](docs/feature_docs/feature_08d_variant_perception.md) for matched
+revenue horizons, manual disagreement rationales, and deterministic sensitivity.
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 
