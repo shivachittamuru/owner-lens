@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from owner_lens.canonical import CanonicalFinancialHistory
+from owner_lens.challenger import ChallengerError, run_challenger
 from owner_lens.config import (
     OwnerLensSettings,
     build_local_store,
@@ -48,6 +49,12 @@ from owner_lens.underwriting import (
     UnderwritingError,
     create_underwriting,
     load_manual_json,
+)
+from owner_lens.underwriting_summary import (
+    SummaryError,
+    format_summary,
+    saved_valuation,
+    summarize_underwriting,
 )
 from owner_lens.universe_ingestion import (
     UniverseRefreshError,
@@ -175,6 +182,20 @@ def _build_parser() -> argparse.ArgumentParser:
     show_underwriting.add_argument("--version", type=int, help="Version to show (default: latest).")
     history = actions.add_parser("history", help="List preserved versions.")
     history.add_argument("ticker")
+    summary = actions.add_parser("summary", help="Offline probability-weighted terminal return, not a recommendation.")
+    summary.add_argument("ticker")
+    summary.add_argument("--version", type=int, required=True)
+    summary.add_argument("--required-return", type=float, help="Explicit evaluation hurdle; otherwise use saved investor policy.")
+    summary.add_argument("--json", action="store_true")
+
+    challenger = sub.add_parser("challenger", help="Bounded offline advisory review of immutable underwriting.")
+    challenger_actions = challenger.add_subparsers(dest="challenger_action", required=True)
+    for action in ("run", "show"):
+        command = challenger_actions.add_parser(action, help="Append an advisory run." if action == "run" else "Read a saved run.")
+        command.add_argument("ticker")
+        command.add_argument("--version", type=int, required=True)
+        if action == "show":
+            command.add_argument("--run-id", help="Exact run UUID; default latest for this underwriting version.")
 
     valuation = sub.add_parser("valuation", help="Offline deterministic five-year scenario valuation.")
     valuation_actions = valuation.add_subparsers(dest="valuation_action", required=True)
@@ -211,6 +232,60 @@ def _cmd_variant(args: argparse.Namespace) -> int:
             print(json.dumps(json.loads(report.to_json()), indent=2) if args.json else format_variant(report))
         return 0
     except (VariantError, PersistenceError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_summary(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise SummaryError("Underwriting summary requires SQLite.")
+            record = next((item for item in source.store.list_underwriting(args.ticker.strip().upper())
+                           if item.version == args.version), None)
+            if record is None:
+                raise SummaryError(f"Underwriting {args.ticker} version {args.version} not found.")
+            summary = summarize_underwriting(
+                record, saved_valuation(source.store, record), required_return=args.required_return,
+            )
+            print(json.dumps(json.loads(summary.to_json()), indent=2) if args.json else format_summary(summary))
+        return 0
+    except (SummaryError, PersistenceError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_challenger(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise ChallengerError("Challenger requires SQLite.")
+            record = next((item for item in source.store.list_underwriting(args.ticker.strip().upper())
+                           if item.version == args.version), None)
+            if record is None:
+                raise ChallengerError(f"Underwriting {args.ticker} version {args.version} not found.")
+            if args.challenger_action == "run":
+                run = run_challenger(source.store, record)
+            else:
+                runs = source.store.list_challenger_runs(record.underwriting_id)
+                selected_run = next((item for item in reversed(runs) if args.run_id is None or item.run_id == args.run_id), None)
+                if selected_run is None:
+                    raise ChallengerError("No matching saved challenger run. Run 'challenger run' first.")
+                run = selected_run
+            print(json.dumps({
+                "run_id": run.run_id, "underwriting_id": run.underwriting_id,
+                "underwriting_version": run.underwriting_version,
+                "underwriting_content_hash": run.underwriting_content_hash,
+                "challenger_version": run.challenger_version, "model_version": run.model_version,
+                "created_at": run.created_at, "input_content_hash": run.input_content_hash,
+                "output_content_hash": run.output_content_hash, "output": json.loads(run.output_json),
+            }, indent=2))
+        return 0
+    except (ChallengerError, SummaryError, VariantError, PersistenceError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -735,7 +810,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "workbench":
         return _cmd_workbench(args)
     if args.command == "underwriting":
+        if args.underwriting_action == "summary":
+            return _cmd_summary(args)
         return _cmd_underwriting(args)
+    if args.command == "challenger":
+        return _cmd_challenger(args)
     if args.command == "valuation":
         return _cmd_valuation(args)
     if args.command == "variant":

@@ -142,6 +142,13 @@ Compare captured consensus with BASE assumptions offline using
 [Feature 8D](docs/feature_docs/feature_08d_variant_perception.md) for matched
 revenue horizons, manual disagreement rationales, and deterministic sensitivity.
 
+Complete the offline loop with
+`uv run owner-lens underwriting summary ADBE --version 1 --required-return 0.12`
+and `uv run owner-lens challenger run ADBE --version 1`. See
+[Feature 8E](docs/feature_docs/feature_08e_underwriting_loop.md) for manually
+approved probabilities, transparent hurdle bands and the advisory rules-only
+challenger. Neither command is a buy/sell recommendation.
+
 OwnerLens persists its outputs to a **local-first** store (Slice 4A). Two backends implement the storage
 boundary and are composed from configuration:
 

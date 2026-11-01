@@ -105,6 +105,27 @@ class DriverRationale:
 
 
 @dataclass(frozen=True)
+class ScenarioProbability:
+    name: ScenarioName
+    probability: float
+    category: SemanticType = SemanticType.JUDGMENT
+
+
+@dataclass(frozen=True)
+class ProbabilityDistribution:
+    scenarios: tuple[ScenarioProbability, ...]
+    rationale: str | None = None
+    category: SemanticType = SemanticType.JUDGMENT
+
+
+@dataclass(frozen=True)
+class InvestorPolicy:
+    required_return: float
+    rationale: str | None = None
+    category: SemanticType = SemanticType.JUDGMENT
+
+
+@dataclass(frozen=True)
 class ManualUnderwriting:
     as_of_date: str | None
     business_drivers: tuple[Statement, ...]
@@ -115,6 +136,8 @@ class ManualUnderwriting:
     decision: Statement | None = None
     scenarios: tuple[ScenarioAssumption, ...] = ()
     variant_rationales: tuple[DriverRationale, ...] = ()
+    probability_distribution: ProbabilityDistribution | None = None
+    investor_policy: InvestorPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +190,9 @@ class UnderwritingSnapshot:
             data["manual"].pop("scenarios")
         if not self.manual.variant_rationales:
             data["manual"].pop("variant_rationales")
+        for field in ("probability_distribution", "investor_policy"):
+            if getattr(self.manual, field) is None:
+                data["manual"].pop(field)
         data["evidence"] = json.loads(data.pop("evidence_json"))
         return json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -310,6 +336,8 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         "decision",
         "scenarios",
         "variant_rationales",
+        "probability_distribution",
+        "investor_policy",
     }
     root = _object(
         data,
@@ -380,6 +408,8 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         )
     scenario_inputs = _list(root.get("scenarios", []), "scenarios")
     scenarios = parse_scenarios(scenario_inputs) if scenario_inputs else ()
+    if root.get("probability_distribution") is not None and not scenarios:
+        raise UnderwritingError("Probabilities require complete BEAR, BASE and BULL scenario assumptions.")
     if not assumptions and not scenarios:
         raise UnderwritingError("Supply at least one explicit forward assumption.")
     thesis_fields = {
@@ -453,7 +483,68 @@ def parse_manual_input(data: Any) -> ManualUnderwriting:
         else None,
         scenarios,
         tuple(rationales),
+        parse_probabilities(root["probability_distribution"])
+        if root.get("probability_distribution") is not None else None,
+        parse_investor_policy(root["investor_policy"])
+        if root.get("investor_policy") is not None else None,
     )
+
+
+PROBABILITY_TOLERANCE = 1e-9
+
+
+def _policy_number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise UnderwritingError(f"{label} must be a finite number.")
+    try:
+        numeric = float(value)
+    except OverflowError as exc:
+        raise UnderwritingError(f"{label} is outside numeric range.") from exc
+    if not math.isfinite(numeric):
+        raise UnderwritingError(f"{label} must be finite.")
+    return numeric
+
+
+def parse_probabilities(data: Any) -> ProbabilityDistribution:
+    root = _object(data, "probability distribution", {"scenarios", "rationale", "category"},
+                   {"scenarios", "category"})
+    if root["category"] != SemanticType.JUDGMENT:
+        raise UnderwritingError("Probability distribution must be JUDGMENT.")
+    probabilities: dict[ScenarioName, ScenarioProbability] = {}
+    for raw in _list(root["scenarios"], "probability scenarios"):
+        item = _object(raw, "scenario probability", {"name", "probability", "category"},
+                       {"name", "probability", "category"})
+        try:
+            name = ScenarioName(item["name"])
+        except (ValueError, TypeError) as exc:
+            raise UnderwritingError("Probability name must be BEAR, BASE, or BULL.") from exc
+        if name in probabilities:
+            raise UnderwritingError(f"Duplicate scenario probability: {name}.")
+        if item["category"] != SemanticType.JUDGMENT:
+            raise UnderwritingError("Scenario probabilities must be JUDGMENT.")
+        value = _policy_number(item["probability"], str(name))
+        if not 0 <= value <= 1:
+            raise UnderwritingError("Scenario probabilities must be between 0 and 1.")
+        probabilities[name] = ScenarioProbability(name, value)
+    if set(probabilities) != set(ScenarioName):
+        raise UnderwritingError("Supply BEAR, BASE and BULL probabilities; none may be missing.")
+    if abs(math.fsum(item.probability for item in probabilities.values()) - 1) > PROBABILITY_TOLERANCE:
+        raise UnderwritingError("Scenario probabilities must sum to 1 within 1e-9; no normalization.")
+    return ProbabilityDistribution(
+        tuple(probabilities[name] for name in ScenarioName),
+        _optional_text(root.get("rationale"), "probability rationale"),
+    )
+
+
+def parse_investor_policy(data: Any) -> InvestorPolicy:
+    item = _object(data, "investor policy", {"required_return", "rationale", "category"},
+                   {"required_return", "category"})
+    if item["category"] != SemanticType.JUDGMENT:
+        raise UnderwritingError("Investor policy must be JUDGMENT.")
+    hurdle = _policy_number(item["required_return"], "required_return")
+    if hurdle <= -1:
+        raise UnderwritingError("Required return must exceed -1.")
+    return InvestorPolicy(hurdle, _optional_text(item.get("rationale"), "policy rationale"))
 
 
 def parse_scenarios(data: Any) -> tuple[ScenarioAssumption, ...]:

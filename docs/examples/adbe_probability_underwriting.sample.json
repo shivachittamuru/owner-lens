@@ -1,0 +1,68 @@
+{
+  "business_drivers": [
+    {"category": "JUDGMENT", "text": "REPLACE: your first ADBE value-driving dependency."},
+    {"category": "JUDGMENT", "text": "REPLACE: your second ADBE value-driving dependency."},
+    {"category": "JUDGMENT", "text": "REPLACE: your third ADBE value-driving dependency."}
+  ],
+  "forward_assumptions": [],
+  "variant_rationales": [],
+  "probability_distribution": {
+    "category": "JUDGMENT",
+    "rationale": "ILLUSTRATIVE ONLY: 25% Bear, 50% Base, 25% Bull. Replace with your approved rationale.",
+    "scenarios": [
+      {"name": "BEAR", "category": "JUDGMENT", "probability": 0.25},
+      {"name": "BASE", "category": "JUDGMENT", "probability": 0.50},
+      {"name": "BULL", "category": "JUDGMENT", "probability": 0.25}
+    ]
+  },
+  "investor_policy": {
+    "category": "JUDGMENT",
+    "required_return": 0.12,
+    "rationale": "ILLUSTRATIVE ONLY: explicit investor hurdle, not company evidence. Replace with your policy."
+  },
+  "scenarios": [
+    {
+      "name": "BEAR",
+      "category": "ASSUMPTION",
+      "narrative": "ILLUSTRATIVE ONLY: no growth, margin compression, no share shrinkage, lower multiple. Replace with your rationale.",
+      "revenue_cagr": 0.0,
+      "fcf_margin_year5": 0.25,
+      "share_count_cagr": 0.0,
+      "terminal_fcf_multiple": 15.0,
+      "horizon_years": 5,
+      "key_dependency": "REPLACE: principal downside dependency."
+    },
+    {
+      "name": "BASE",
+      "category": "ASSUMPTION",
+      "narrative": "ILLUSTRATIVE ONLY: modest growth and share shrinkage, stable margin and multiple. Replace with your rationale.",
+      "revenue_cagr": 0.05,
+      "fcf_margin_year5": 0.35,
+      "share_count_cagr": -0.01,
+      "terminal_fcf_multiple": 20.0,
+      "horizon_years": 5,
+      "key_dependency": "REPLACE: principal base-case dependency."
+    },
+    {
+      "name": "BULL",
+      "category": "ASSUMPTION",
+      "narrative": "ILLUSTRATIVE ONLY: faster growth and share shrinkage, higher margin and multiple. Replace with your rationale.",
+      "revenue_cagr": 0.10,
+      "fcf_margin_year5": 0.40,
+      "share_count_cagr": -0.02,
+      "terminal_fcf_multiple": 25.0,
+      "horizon_years": 5,
+      "key_dependency": "REPLACE: principal upside dependency."
+    }
+  ],
+  "supporting_evidence": [],
+  "disconfirming_evidence": [],
+  "thesis": {
+    "category": "JUDGMENT",
+    "dependencies": ["REPLACE: observable dependency, source, threshold and monitoring date."],
+    "breakers": ["REPLACE: observable thesis breaker, source, threshold and monitoring date."],
+    "biggest_uncertainty": "REPLACE: biggest uncertainty.",
+    "most_important_variable": "REPLACE: most important variable.",
+    "next_evidence_to_collect": ["REPLACE: next evidence that could change the thesis."]
+  }
+}

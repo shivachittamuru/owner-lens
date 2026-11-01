@@ -33,6 +33,7 @@ from owner_lens.persistence.records import (
     SCHEMA_VERSION,
     AnalysisDriverRecord,
     AnalysisResultRecord,
+    ChallengerRunRecord,
     CompanyRecord,
     CoverageResultRecord,
     DerivedMetricRecord,
@@ -119,6 +120,34 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS challenger_runs (
+    run_id TEXT PRIMARY KEY,
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    underwriting_version INTEGER NOT NULL,
+    underwriting_content_hash TEXT NOT NULL,
+    challenger_version TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    input_content_hash TEXT NOT NULL,
+    context_json TEXT NOT NULL,
+    output_json TEXT NOT NULL,
+    output_content_hash TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS challenger_underwriting ON challenger_runs(underwriting_id, created_at);
+CREATE TRIGGER IF NOT EXISTS challenger_no_update
+BEFORE UPDATE ON challenger_runs BEGIN
+    SELECT RAISE(ABORT, 'Challenger runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS challenger_no_delete
+BEFORE DELETE ON challenger_runs BEGIN
+    SELECT RAISE(ABORT, 'Challenger runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS challenger_no_replace
+BEFORE INSERT ON challenger_runs
+WHEN EXISTS (SELECT 1 FROM challenger_runs WHERE run_id = NEW.run_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Challenger runs are immutable');
+END;
 CREATE TABLE IF NOT EXISTS valuation_results (
     underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
     model_version TEXT NOT NULL,
@@ -502,7 +531,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4):
+        if stored_version in (3, 4, 5):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -613,6 +642,66 @@ class SqliteStore:
         if compute_content_hash(row["result_json"].encode()) != row["content_hash"]:
             raise StorageReadError("Valuation result failed integrity verification.")
         return str(row["result_json"])
+
+    def save_challenger_run(
+        self, record: UnderwritingRecord, *, challenger_version: str, model_version: str,
+        created_at: str, context_json: str, output_json: str,
+    ) -> ChallengerRunRecord:
+        if self._in_transaction:
+            raise StorageWriteError("Challenger persistence requires its own transaction.")
+        try:
+            context = json.loads(context_json)
+            output = json.loads(output_json)
+            identity = context["record"]
+            if (identity["underwriting_id"] != record.underwriting_id
+                    or identity["version"] != record.version
+                    or identity["content_hash"] != record.content_hash
+                    or context["snapshot"] != json.loads(record.snapshot_json)
+                    or output["category"] != "JUDGMENT"):
+                raise StorageWriteError("Challenger context/output does not match immutable underwriting.")
+            self._conn.execute("BEGIN IMMEDIATE")
+            saved = self._conn.execute(
+                "SELECT version, content_hash FROM underwriting_records WHERE underwriting_id=?",
+                (record.underwriting_id,),
+            ).fetchone()
+            if saved is None or (saved["version"], saved["content_hash"]) != (record.version, record.content_hash):
+                raise StorageWriteError("Challenger underwriting identity/hash not found in store.")
+            run = ChallengerRunRecord(
+                str(uuid4()), record.underwriting_id, record.version, record.content_hash,
+                challenger_version, model_version, created_at,
+                compute_content_hash(context_json.encode()), context_json, output_json,
+                compute_content_hash(output_json.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO challenger_runs VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(getattr(run, name) for name in run.__dataclass_fields__),
+            )
+            self._conn.commit()
+            return run
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot persist challenger run: {exc}") from exc
+
+    def list_challenger_runs(self, underwriting_id: str) -> tuple[ChallengerRunRecord, ...]:
+        try:
+            rows = self._conn.execute(
+                "SELECT r.* FROM challenger_runs r WHERE underwriting_id=? ORDER BY julianday(created_at), rowid",
+                (underwriting_id,),
+            ).fetchall()
+            original = self._conn.execute(
+                "SELECT version, content_hash FROM underwriting_records WHERE underwriting_id=?",
+                (underwriting_id,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageReadError(f"Cannot read challenger runs: {exc}") from exc
+        runs = tuple(ChallengerRunRecord(**dict(row)) for row in rows)
+        for run in runs:
+            if (original is None
+                    or (run.underwriting_version, run.underwriting_content_hash) != (original["version"], original["content_hash"])
+                    or compute_content_hash(run.context_json.encode()) != run.input_content_hash
+                    or compute_content_hash(run.output_json.encode()) != run.output_content_hash):
+                raise StorageReadError("Challenger run failed identity/content integrity verification.")
+        return runs
 
     def save_valuation(self, underwriting_id: str, model_version: str, result_json: str) -> str:
         if self._in_transaction:
