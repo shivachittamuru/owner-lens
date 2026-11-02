@@ -1,0 +1,31 @@
+{
+  "observation_date": "2026-11-02",
+  "observed_at": "2026-11-02T00:00:00+00:00",
+  "horizon": "CUSTOM",
+  "horizon_note": "Interim manual observation. Replace dates with actual availability after the selected underwriting; enter only verified values and provenance.",
+  "category": "FACT",
+  "references": [],
+  "verification_note": null,
+  "market": {
+    "price": null,
+    "currency": "USD",
+    "basis": "EOD_CLOSE_SAME_SHARE_BASIS"
+  },
+  "fundamentals": [
+    {
+      "forecast": {
+        "kind": "SCENARIO",
+        "id": "fcf_margin_year5"
+      },
+      "observable": "fcf_margin_year5",
+      "value": null,
+      "unit": "ratio",
+      "basis": "ANNUAL_FISCAL",
+      "fiscal_year": 2026,
+      "start_fiscal_year": null,
+      "period_end": null,
+      "cadence": null,
+      "source_family": null
+    }
+  ]
+}

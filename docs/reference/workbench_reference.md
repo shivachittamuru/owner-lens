@@ -58,6 +58,26 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## Outcomes
+
+Open **Outcomes** to select an exact completed underwriting and review its frozen
+as-of, price, scenarios and thesis variables. Paste manual observation JSON or
+upload a file, then explicitly save an immutable FACT observation with source
+metadata and a verification note. Navigation alone never saves or retrieves data.
+
+The compact table shows dates, declared horizons, market price returns, realized
+fundamentals, comparison states, nearest scenario values and condition results.
+Expand each observation for frozen beliefs, sources and linked Feature 9 context.
+Download reproducible JSON; missing/non-comparable values remain explicit.
+
+Five-year assumptions are compared only with matching fiscal windows or the
+terminal price date. No forecast path is invented for interim observations.
+These are market outcomes, not investor returns or portfolio performance.
+Recording outcomes never creates a change event, updates probabilities, triggers
+re-underwriting, or changes decisions/sizing. See
+[Feature 10A](../feature_docs/feature_10a_forecast_outcomes.md) for definitions,
+tolerance rules, schemas and manual commands.
+
 ## What Changed
 
 Open **What Changed?** to link a new manual evidence event to an exact completed

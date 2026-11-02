@@ -590,7 +590,7 @@ def test_integrity_errors_and_additive_v8_migration(store: SqliteStore) -> None:
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "9"
+        == "10"
     )
     store.save_change_event(canonical_json(event))
     approve_event(store, event["event_id"], "NOISE", "Manual", now=NOW)

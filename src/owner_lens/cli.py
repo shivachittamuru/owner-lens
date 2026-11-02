@@ -213,6 +213,22 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
+    outcome = sub.add_parser("outcome", help="Immutable manual forecast-versus-outcome tracking, offline.")
+    outcome_actions = outcome.add_subparsers(dest="outcome_action", required=True)
+    for action in ("create", "compare"):
+        command = outcome_actions.add_parser(action)
+        command.add_argument("ticker")
+        command.add_argument("--version", type=int, required=True)
+        command.add_argument("--json", action="store_true")
+        if action == "create":
+            command.add_argument("--file", type=Path, required=True)
+    outcome_show = outcome_actions.add_parser("show")
+    outcome_show.add_argument("observation_id")
+    outcome_show.add_argument("--json", action="store_true")
+    outcome_history = outcome_actions.add_parser("history")
+    outcome_history.add_argument("ticker")
+    outcome_history.add_argument("--json", action="store_true")
+
     change = sub.add_parser("change", help="Manual What Changed events and explicit classification approval, offline.")
     change_actions = change.add_subparsers(dest="change_action", required=True)
     change_create = change_actions.add_parser("create")
@@ -327,6 +343,47 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_outcome(args: argparse.Namespace) -> int:
+    from owner_lens.outcomes import (
+        OutcomeError,
+        compare_outcomes,
+        create_observation,
+        format_comparison,
+        format_observation,
+        outcome_history,
+        read_observation,
+    )
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise OutcomeError("Outcome history requires SQLite.")
+            if args.outcome_action == "create":
+                report = create_observation(
+                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    load_decision_json(args.file.read_text(encoding="utf-8-sig")),
+                )
+            elif args.outcome_action == "show":
+                report = read_observation(source.store, args.observation_id)
+            elif args.outcome_action == "history":
+                history = outcome_history(source.store, args.ticker.strip().upper())
+                print(canonical_json(history) if args.json else
+                      "\n\n".join(format_observation(item) for item in history) or "No outcome observations recorded.")
+                return 0
+            else:
+                comparison = compare_outcomes(
+                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                )
+                print(canonical_json(comparison) if args.json else format_comparison(comparison))
+                return 0
+            print(canonical_json(report) if args.json else format_observation(report))
+        return 0
+    except (ValueError, PersistenceError, OSError, UnicodeError, OverflowError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_change(args: argparse.Namespace) -> int:
@@ -1086,5 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_sizing(args)
     if args.command == "change":
         return _cmd_change(args)
+    if args.command == "outcome":
+        return _cmd_outcome(args)
     parser.error(f"unknown command: {args.command}")
     return 2

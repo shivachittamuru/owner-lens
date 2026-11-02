@@ -95,7 +95,7 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with ten
+The workbench is a local Streamlit interface over the persisted store, with eleven
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
@@ -104,7 +104,8 @@ dimensions), **Compare** (2–5 companies side by side), **Opportunity Compariso
 judgments and history), **Shadow Portfolio** (frozen independent counterfactual
 starts), **Portfolio Context / Position Sizing** (explicit downside budgets and
 immutable manual holdings context), **What Changed?** (manual evidence events and
-approved re-underwriting triggers), and **Data Quality**
+approved re-underwriting triggers), **Outcomes** (immutable forecast-versus-outcome
+tracking), and **Data Quality**
 (exactly which metrics are missing and why).
 
 It reads persisted data only — opening or navigating it never calls SEC or FMP.
@@ -219,6 +220,28 @@ explicit investor approval. Approved updates/breaks offer **Start from latest
 underwriting**, opening a draft without saving or changing a decision/sizing
 record. See [Feature 9D](docs/feature_docs/feature_09d_what_changed.md) for literal
 metric/unit matching, approval authority, immutable history and manual commands.
+
+Track realized market and fundamental outcomes separately from belief updates:
+
+```powershell
+uv run owner-lens outcome create ADBE --version 7 --file .\data\outcomes\adbe-outcome.json --json
+# Only after successful creation, use the returned observation ID:
+uv run owner-lens outcome show <observation-id>
+uv run owner-lens outcome history ADBE --json
+uv run owner-lens outcome compare ADBE --version 7 --json
+```
+
+The **Outcomes** view supports manual/imported observations with provenance,
+exact-version forecasts and horizon-aware comparisons. Interim observations
+are not naively compared with year-5 forecasts. Price returns are market outcomes,
+not investor performance. No calibration, decision assessment or automatic change
+event occurs. See [Feature 10A](docs/feature_docs/feature_10a_forecast_outcomes.md)
+and the [CUSTOM/interim manual template](docs/examples/adbe_outcome.sample.json).
+Populate it only with evidence available at recording time. A newly created
+underwriting needs later observations; genuine 1Y/3Y/5Y validation requires time
+to pass. If creation fails, no observation ID exists: do not run `outcome show`.
+The [future 5Y synthetic fixture](docs/examples/adbe_outcome_5y.synthetic.json)
+is for automated testing, not manual validation in 2026.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and

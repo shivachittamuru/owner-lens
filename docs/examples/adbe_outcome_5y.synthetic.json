@@ -1,0 +1,51 @@
+{
+  "observation_date": "2031-06-02",
+  "observed_at": "2031-06-03T11:00:00+00:00",
+  "horizon": "5Y",
+  "category": "FACT",
+  "references": [
+    {
+      "title": "FUTURE 5Y AUTOMATED-TEST/SYNTHETIC FIXTURE ONLY, not an Adobe disclosure",
+      "uri": "fixture://adbe-outcome",
+      "observed_at": "2031-06-03T10:00:00+00:00"
+    }
+  ],
+  "verification_note": "Future synthetic fixture only, for automated tests with an explicit future recording clock. Do not use for manual validation in 2026 or bypass look-ahead safeguards.",
+  "market": {
+    "price": 30.0,
+    "currency": "USD",
+    "basis": "EOD_CLOSE_SAME_SHARE_BASIS"
+  },
+  "fundamentals": [
+    {
+      "forecast": {
+        "kind": "SCENARIO",
+        "id": "revenue_cagr"
+      },
+      "observable": "revenue_cagr",
+      "value": 0.074,
+      "unit": "ratio",
+      "basis": "FISCAL_CAGR",
+      "fiscal_year": 2030,
+      "start_fiscal_year": 2025,
+      "period_end": "2030-12-31",
+      "cadence": null,
+      "source_family": null
+    },
+    {
+      "forecast": {
+        "kind": "SCENARIO",
+        "id": "fcf_margin_year5"
+      },
+      "observable": "fcf_margin_year5",
+      "value": 0.25,
+      "unit": "ratio",
+      "basis": "ANNUAL_FISCAL",
+      "fiscal_year": 2030,
+      "start_fiscal_year": null,
+      "period_end": "2030-12-31",
+      "cadence": null,
+      "source_family": null
+    }
+  ]
+}

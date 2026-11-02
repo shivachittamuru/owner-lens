@@ -46,6 +46,7 @@ from owner_lens.persistence.records import (
     FmpEodPriceRecord,
     FmpEstimateRecord,
     FmpEvidenceSnapshotRecord,
+    OutcomeObservationRecord,
     PortfolioSnapshotRecord,
     ReportedFactRecord,
     SecurityRecord,
@@ -126,6 +127,28 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS outcome_observations (
+    observation_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL REFERENCES securities(security_id),
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    recorded_at TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS outcome_no_update
+BEFORE UPDATE ON outcome_observations BEGIN
+    SELECT RAISE(ABORT, 'Outcome observations are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS outcome_no_delete
+BEFORE DELETE ON outcome_observations BEGIN
+    SELECT RAISE(ABORT, 'Outcome observations are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS outcome_no_replace
+BEFORE INSERT ON outcome_observations WHEN EXISTS (
+    SELECT 1 FROM outcome_observations WHERE observation_id=NEW.observation_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Outcome observations are immutable');
+END;
 CREATE TABLE IF NOT EXISTS change_events (
     event_id TEXT PRIMARY KEY,
     security_id INTEGER NOT NULL REFERENCES securities(security_id),
@@ -680,7 +703,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5, 6, 7, 8):
+        if stored_version in (3, 4, 5, 6, 7, 8, 9):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -725,6 +748,56 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_outcome_observation(self, snapshot_json: str) -> OutcomeObservationRecord:
+        from owner_lens.decisions import load_decision_json
+        from owner_lens.outcomes import validate_observation
+        from owner_lens.position_sizing import canonical_json
+
+        if self._in_transaction:
+            raise StorageWriteError("Outcome creation requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            report = load_decision_json(snapshot_json)
+            validate_observation(self, report)
+            payload = canonical_json(report)
+            record = OutcomeObservationRecord(
+                report["observation_id"], report["security_id"],
+                report["underwriting"]["underwriting_id"], report["recorded_at"],
+                payload, compute_content_hash(payload.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO outcome_observations VALUES (?, ?, ?, ?, ?, ?)",
+                tuple(getattr(record, name) for name in record.__dataclass_fields__),
+            )
+            self._conn.commit()
+            return record
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append outcome observation: {exc}") from exc
+
+    def list_outcome_observations(self) -> tuple[OutcomeObservationRecord, ...]:
+        try:
+            records = tuple(OutcomeObservationRecord(**dict(row)) for row in self._conn.execute(
+                "SELECT * FROM outcome_observations ORDER BY julianday(recorded_at), rowid"
+            ).fetchall())
+            for record in records:
+                report = json.loads(record.snapshot_json)
+                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash or (
+                    record.observation_id, record.security_id, record.underwriting_id, record.recorded_at
+                ) != (report["observation_id"], report["security_id"],
+                      report["underwriting"]["underwriting_id"], report["recorded_at"]):
+                    raise StorageReadError("Outcome observation failed identity/content integrity verification.")
+            return records
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read outcome observations: {exc}") from exc
+
+    def get_outcome_observation(self, observation_id: str) -> OutcomeObservationRecord:
+        record = next((item for item in self.list_outcome_observations()
+                       if item.observation_id == observation_id), None)
+        if record is None:
+            raise StorageReadError(f"Outcome observation {observation_id} not found.")
+        return record
 
     def save_change_event(self, snapshot_json: str) -> ChangeEventRecord:
         from owner_lens.changes import validate_event_sources
