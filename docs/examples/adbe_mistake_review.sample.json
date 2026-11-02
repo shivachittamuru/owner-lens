@@ -1,0 +1,33 @@
+{
+  "review_date": "2026-11-02",
+  "category": "JUDGMENT",
+  "reviewer": "Investor",
+  "rationale": "Manual review template, not an assertion about Adobe. No comparable completed outcomes have been selected, so forecast, process and external causes remain unresolved.",
+  "confidence": "LOW",
+  "evidence_references": [],
+  "links": {
+    "decision_id": null,
+    "observation_ids": [],
+    "calibration_report_id": null,
+    "change_event_ids": [],
+    "sizing_analysis_id": null
+  },
+  "approved_labels": [
+    {
+      "code": "UNRESOLVED",
+      "confidence": "LOW",
+      "rationale": "Investor explicitly leaves attribution unresolved pending relevant evidence. A price outcome alone would not establish a mistake.",
+      "evidence_references": [
+        {
+          "title": "Selected exact immutable underwriting; no completed outcome evidence selected"
+        }
+      ],
+      "investor_approved": true
+    }
+  ],
+  "primary_mistake": null,
+  "unresolved_questions": [
+    "Which comparable outcomes and decision-time evidence should be linked?",
+    "Were evidence verification and challenger questions resolved at the time?"
+  ]
+}

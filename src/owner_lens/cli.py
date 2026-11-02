@@ -19,6 +19,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from owner_lens.canonical import CanonicalFinancialHistory
 from owner_lens.challenger import ChallengerError, run_challenger
@@ -213,6 +214,29 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
+    mistakes = sub.add_parser("mistakes", help="Immutable investor mistake reviews; no skill assessment.")
+    mistake_actions = mistakes.add_subparsers(dest="mistakes_action", required=True)
+    review = mistake_actions.add_parser("review")
+    review_actions = review.add_subparsers(dest="review_action", required=True)
+    for action in ("create", "suggest"):
+        command = review_actions.add_parser(action)
+        command.add_argument("ticker")
+        command.add_argument("--version", type=int, required=True)
+        command.add_argument("--json", action="store_true")
+        if action == "create":
+            command.add_argument("--file", type=Path, required=True)
+        else:
+            command.add_argument("--review-date", help="UTC review date (default: today).")
+            command.add_argument("--decision-id")
+            command.add_argument("--sizing-analysis-id")
+            command.add_argument("--calibration-report-id")
+    for action in ("show", "history"):
+        command = review_actions.add_parser(action)
+        command.add_argument("review_id" if action == "show" else "ticker")
+        command.add_argument("--json", action="store_true")
+    mistake_summary = mistake_actions.add_parser("summary")
+    mistake_summary.add_argument("--json", action="store_true")
+
     calibration = sub.add_parser("calibration", help="Offline, sample-guarded forecast calibration; no skill assessment.")
     calibration_actions = calibration.add_subparsers(dest="calibration_action", required=True)
     for action in ("run", "company"):
@@ -355,6 +379,53 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_mistakes(args: argparse.Namespace) -> int:
+    from owner_lens.mistakes import (
+        MistakeError,
+        create_review,
+        read_review,
+        review_history,
+        review_summary,
+        suggest_review,
+    )
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise MistakeError("Mistake reviews require SQLite.")
+            report: dict[str, Any] | list[dict[str, Any]]
+            if args.mistakes_action == "summary":
+                report = review_summary(source.store)
+            elif args.review_action == "show":
+                report = read_review(source.store, args.review_id)
+            elif args.review_action == "history":
+                report = review_history(source.store, args.ticker.strip().upper())
+            else:
+                selection = UnderwritingSelection(args.ticker.strip().upper(), args.version)
+                if args.review_action == "create":
+                    report = create_review(
+                        source.store, selection,
+                        load_decision_json(args.file.read_text(encoding="utf-8-sig")),
+                    )
+                else:
+                    suggestion = suggest_review(source.store, selection, review_date=args.review_date)
+                    links = {
+                        **suggestion["links"],
+                        "decision_id": args.decision_id,
+                        "sizing_analysis_id": args.sizing_analysis_id,
+                        "calibration_report_id": args.calibration_report_id,
+                    }
+                    report = suggest_review(
+                        source.store, selection, links=links, review_date=args.review_date,
+                    )
+            print(canonical_json(report))
+        return 0
+    except (ValueError, PersistenceError, OSError, OverflowError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_calibration(args: argparse.Namespace) -> int:
@@ -1184,6 +1255,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_change(args)
     if args.command == "outcome":
         return _cmd_outcome(args)
+    if args.command == "mistakes":
+        return _cmd_mistakes(args)
     if args.command == "calibration":
         return _cmd_calibration(args)
     parser.error(f"unknown command: {args.command}")

@@ -200,7 +200,7 @@ def test_initialize_records_schema_version(tmp_path: Path) -> None:
             "SELECT value FROM schema_meta WHERE key = 'schema_version'"
         ).fetchone()
     assert row is not None
-    assert int(row[0]) == 11
+    assert int(row[0]) == 12
 
 
 def test_repeat_initialize_is_a_no_op(tmp_path: Path) -> None:

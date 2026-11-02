@@ -95,7 +95,7 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with twelve
+The workbench is a local Streamlit interface over the persisted store, with thirteen
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
@@ -106,6 +106,7 @@ starts), **Portfolio Context / Position Sizing** (explicit downside budgets and
 immutable manual holdings context), **What Changed?** (manual evidence events and
 approved re-underwriting triggers), **Outcomes** (immutable forecast-versus-outcome
 tracking), **Calibration** (sample-guarded historical forecasts/probabilities),
+**Mistake Review** (investor-approved post-mortems, separate from outcomes),
 and **Data Quality**
 (exactly which metrics are missing and why).
 
@@ -258,6 +259,22 @@ incompatible, ambiguous or missing data are not forced into scoring.
 `INSUFFICIENT_HISTORY_FOR_CALIBRATION` is a valid result for current history.
 No skill, luck or decision-quality inference occurs. See
 [Feature 10B](docs/feature_docs/feature_10b_calibration.md) for rules and commands.
+
+Record an explicit, immutable investor post-mortem without inferring skill:
+
+```powershell
+uv run owner-lens mistakes review suggest ADBE --version 7 --json
+uv run owner-lens mistakes review create ADBE --version 7 --file .\data\reviews\adbe-review.json --json
+uv run owner-lens mistakes review history ADBE --json
+uv run owner-lens mistakes summary --json
+```
+
+Machine candidates are not approved labels. A poor outcome need not mean a
+mistake, and behavioral labels require explicit investor review. The
+**Mistake Review** view separates outcome, forecast and process findings and
+never assesses decision quality. See
+[Feature 10C](docs/feature_docs/feature_10c_mistake_taxonomy.md) for the template,
+approval schema, thresholds and safe manual-validation commands.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and

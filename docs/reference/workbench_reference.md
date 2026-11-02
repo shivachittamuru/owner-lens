@@ -58,6 +58,21 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## Mistake Review
+
+Open **Mistake Review** to choose an exact underwriting version and optional
+decision, outcomes, change events, calibration report and sizing analysis.
+Review copied evidence, independent outcome/forecast/process fields and process
+questions before choosing labels. Candidates are never approved automatically.
+
+Select codes with no defaults, provide matching per-label approval JSON,
+reviewer rationale, confidence and unresolved questions, then explicitly approve
+the append-only review. Behavioral labels require investor judgment, not a data
+diagnosis. Historical reviews and approved-only descriptive summaries remain
+separate from skill, luck and decision-quality assessment.
+See [Feature 10C](../feature_docs/feature_10c_mistake_taxonomy.md) for evidence
+guards, the manual template and commands.
+
 ## Calibration
 
 Open **Calibration** for an offline preview of exact, completed forecast/outcome

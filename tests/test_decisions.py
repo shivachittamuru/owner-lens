@@ -612,7 +612,7 @@ def test_v6_additive_migration_keeps_underwriting(store: SqliteStore) -> None:
             ).fetchone()[0]
         )
         == SCHEMA_VERSION
-        == 11
+        == 12
     )
     assert store.list_underwriting("ADBE") == before
     decision = create_decision(store, selected, input_data(), now=NOW)

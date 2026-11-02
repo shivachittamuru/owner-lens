@@ -127,6 +127,28 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS mistake_reviews (
+    review_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL REFERENCES securities(security_id),
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    recorded_at TEXT NOT NULL,
+    review_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS mistake_review_no_update
+BEFORE UPDATE ON mistake_reviews BEGIN
+    SELECT RAISE(ABORT, 'Mistake reviews are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS mistake_review_no_delete
+BEFORE DELETE ON mistake_reviews BEGIN
+    SELECT RAISE(ABORT, 'Mistake reviews are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS mistake_review_no_replace
+BEFORE INSERT ON mistake_reviews WHEN EXISTS (
+    SELECT 1 FROM mistake_reviews WHERE review_id=NEW.review_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Mistake reviews are immutable');
+END;
 CREATE TABLE IF NOT EXISTS calibration_reports (
     report_id TEXT PRIMARY KEY,
     as_of_date TEXT NOT NULL,
@@ -724,7 +746,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5, 6, 7, 8, 9, 10):
+        if stored_version in (3, 4, 5, 6, 7, 8, 9, 10, 11):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -769,6 +791,62 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_mistake_review(self, review_json: str) -> str:
+        from owner_lens.decisions import load_decision_json
+        from owner_lens.mistakes import build_review
+        from owner_lens.opportunity_comparison import UnderwritingSelection
+        from owner_lens.position_sizing import canonical_json
+
+        if self._in_transaction:
+            raise StorageWriteError("Mistake review requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            report = load_decision_json(review_json)
+            expected = build_review(
+                self, UnderwritingSelection(report["ticker"], report["underwriting"]["version"]),
+                report["judgment"], review_id=report["review_id"], recorded_at=report["recorded_at"],
+            )
+            payload = canonical_json(report)
+            if payload != canonical_json(expected):
+                raise ValueError("Review differs from exact inputs, investor authority or deterministic checks.")
+            self._conn.execute(
+                "INSERT INTO mistake_reviews VALUES (?, ?, ?, ?, ?, ?)",
+                (report["review_id"], report["security_id"], report["underwriting"]["underwriting_id"],
+                 report["recorded_at"], payload, compute_content_hash(payload.encode())),
+            )
+            self._conn.commit()
+            return report["review_id"]
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append mistake review: {exc}") from exc
+
+    def list_mistake_reviews(self) -> tuple[str, ...]:
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM mistake_reviews ORDER BY julianday(recorded_at), rowid"
+            ).fetchall()
+            for row in rows:
+                report = json.loads(row["review_json"])
+                if (
+                    compute_content_hash(row["review_json"].encode()) != row["content_hash"]
+                    or (row["review_id"], row["security_id"], row["underwriting_id"], row["recorded_at"])
+                    != (report["review_id"], report["security_id"],
+                        report["underwriting"]["underwriting_id"], report["recorded_at"])
+                ):
+                    raise StorageReadError("Mistake review failed identity/content integrity verification.")
+            return tuple(row["review_json"] for row in rows)
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read mistake reviews: {exc}") from exc
+
+    def get_mistake_review(self, review_id: str) -> str:
+        selected = next(
+            (payload for payload in self.list_mistake_reviews() if json.loads(payload)["review_id"] == review_id),
+            None,
+        )
+        if selected is None:
+            raise StorageReadError(f"Mistake review {review_id} not found.")
+        return selected
 
     def save_calibration_report(self, report_json: str) -> str:
         from owner_lens.calibration import build_report
