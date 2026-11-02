@@ -15,6 +15,7 @@ from owner_lens.underwriting import (
     UnderwritingError,
     UnderwritingInputs,
     UnderwritingSnapshot,
+    condition_data,
 )
 from owner_lens.underwriting_contract import parse_authoring_input
 from owner_lens.variant import DRIVERS, Consensus, revenue_consensus
@@ -58,7 +59,8 @@ def authoring_from_manual(manual: ManualUnderwriting) -> dict[str, Any]:
     thesis = data["thesis"]
     for field in ("dependencies", "breakers"):
         structured = thesis.pop("monitoring_" + field)
-        thesis[field] = structured or [
+        conditions = getattr(manual.thesis, "monitoring_" + field)
+        thesis[field] = [condition_data(item) for item in conditions] if structured else [
             {"condition_id": f"{field}-{index + 1}", "category": "JUDGMENT", "statement": text}
             for index, text in enumerate(thesis[field])
         ]

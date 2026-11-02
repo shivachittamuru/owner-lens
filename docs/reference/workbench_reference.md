@@ -58,6 +58,38 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## What Changed
+
+Open **What Changed?** to link a new manual evidence event to an exact completed
+underwriting. Select a dependency/breaker or import its ID in event JSON. Review
+the observed metric, condition result, candidate classification and linked
+previous assumptions, probabilities and thesis statements.
+
+Numeric matching requires exact observable, unit, source and cadence compatibility;
+qualitative thresholds remain NOT_COMPARABLE. Recording an event does not approve
+its candidate. Explicitly choose a classification and provide a rationale before
+it enters approved re-underwriting history.
+
+The page shows the frozen latest decision/change rule and historical sizing
+context available at event recording. It never recalculates sizing or changes
+decisions. Its current-state summary counts all relevant approved events and
+shows **Pending approval** and **Pending non-comparable assessment** separately.
+Only approval records authorize classification counters. Pending-only issues
+show `REVIEW_PENDING`, never `REUNDERWRITING_REQUIRED`. A later approved NOISE
+observation cannot erase an earlier approved thesis update/break.
+
+New dependency/breaker authoring supports exact structured predicates: observable,
+operator, numeric threshold, unit, cadence and source family, alongside a separate
+human-readable thesis statement. The authoring form can create/edit these fields,
+and cloning preserves them. Legacy qualitative conditions remain supported and
+NOT_COMPARABLE; no fuzzy matching or automatic historical conversion is performed.
+
+An approved update/break offers **Start from latest underwriting**, initializing
+the existing explicit-save authoring workflow without modifying the event's
+original exact-version link. See
+[Feature 9D](../feature_docs/feature_09d_what_changed.md) for schemas, rules,
+synthetic assessment and manual PowerShell commands.
+
 ## Portfolio Context and Position Sizing
 
 Select **Portfolio Context / Position Sizing** to create or select an immutable

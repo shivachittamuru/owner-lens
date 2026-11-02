@@ -666,7 +666,7 @@ def test_v7_additive_migration_keeps_decision_state(store: SqliteStore) -> None:
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "8"
+        == "9"
     )
     assert store.list_decisions() == before
     assert not store.list_portfolio_snapshots() and not store.list_sizing_analyses()

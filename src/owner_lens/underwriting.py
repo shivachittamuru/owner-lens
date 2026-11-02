@@ -65,11 +65,27 @@ class ThesisCondition:
     condition_id: str
     statement: str
     observable: str | None = None
-    threshold: str | None = None
+    threshold: str | float | None = None
     sources: tuple[Reference, ...] = ()
     monitoring_cadence: str | None = None
     monitoring_date: str | None = None
     category: SemanticType = SemanticType.JUDGMENT
+    operator: str | None = None
+    unit: str | None = None
+    cadence: str | None = None
+    source_family: str | None = None
+
+
+PREDICATE_OPERATORS = ("GT", "GTE", "LT", "LTE", "EQ")
+
+
+def condition_data(condition: ThesisCondition) -> dict[str, Any]:
+    """Keep legacy condition JSON unchanged when no machine predicate was supplied."""
+    data = asdict(condition)
+    if condition.operator is None:
+        for field in ("operator", "unit", "cadence", "source_family"):
+            data.pop(field)
+    return data
 
 
 @dataclass(frozen=True)
@@ -215,6 +231,10 @@ class UnderwritingSnapshot:
         for field in ("monitoring_dependencies", "monitoring_breakers"):
             if not data["manual"]["thesis"][field]:
                 data["manual"]["thesis"].pop(field)
+            else:
+                data["manual"]["thesis"][field] = [
+                    condition_data(item) for item in getattr(self.manual.thesis, field)
+                ]
         if not self.manual.scenarios:
             data["manual"].pop("scenarios")
         if not self.manual.variant_rationales:
@@ -569,20 +589,40 @@ def _conditions(data: Any) -> tuple[ThesisCondition, ...]:
     for raw in _list(data, "thesis conditions"):
         item = _object(raw, "thesis condition",
                        {"condition_id", "statement", "observable", "threshold", "sources",
-                        "monitoring_cadence", "monitoring_date", "category"},
+                        "monitoring_cadence", "monitoring_date", "category",
+                        "operator", "unit", "cadence", "source_family"},
                        {"condition_id", "statement", "category"})
         if item["category"] != SemanticType.JUDGMENT:
             raise UnderwritingError("Thesis conditions must be JUDGMENT.")
         identifier = _text(item["condition_id"], "condition_id")
         if any(existing.condition_id == identifier for existing in result):
             raise UnderwritingError("Duplicate thesis condition id.")
+        predicate_operator = _optional_text(item.get("operator"), "operator")
+        observable = _optional_text(item.get("observable"), "observable")
+        unit = _optional_text(item.get("unit"), "unit")
+        cadence = _optional_text(item.get("cadence"), "cadence")
+        source_family = _optional_text(item.get("source_family"), "source_family")
+        monitoring_cadence = _optional_text(item.get("monitoring_cadence"), "monitoring_cadence")
+        threshold: str | float | None
+        if predicate_operator is not None:
+            if predicate_operator not in PREDICATE_OPERATORS:
+                raise UnderwritingError(f"operator must be one of {PREDICATE_OPERATORS}.")
+            if any(value is None for value in (observable, unit, cadence, source_family)):
+                raise UnderwritingError("Structured predicate requires observable, unit, cadence and source_family.")
+            threshold = _policy_number(item.get("threshold"), "predicate threshold")
+            if monitoring_cadence is not None and monitoring_cadence != cadence:
+                raise UnderwritingError("Structured cadence and monitoring_cadence must agree exactly.")
+        else:
+            if any(value is not None for value in (unit, cadence, source_family)):
+                raise UnderwritingError("Structured predicate metadata requires an explicit operator.")
+            threshold = _optional_text(item.get("threshold"), "threshold")
         result.append(ThesisCondition(
             identifier, _text(item["statement"], "condition statement"),
-            _optional_text(item.get("observable"), "observable"),
-            _optional_text(item.get("threshold"), "threshold"),
+            observable, threshold,
             _references(item.get("sources", [])),
-            _optional_text(item.get("monitoring_cadence"), "monitoring_cadence"),
+            monitoring_cadence,
             _optional_date(item.get("monitoring_date"), "monitoring_date"),
+            operator=predicate_operator, unit=unit, cadence=cadence, source_family=source_family,
         ))
     return tuple(result)
 

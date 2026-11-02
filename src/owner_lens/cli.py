@@ -22,6 +22,17 @@ from pathlib import Path
 
 from owner_lens.canonical import CanonicalFinancialHistory
 from owner_lens.challenger import ChallengerError, run_challenger
+from owner_lens.changes import (
+    ChangeClassification,
+    ChangeError,
+    approve_event,
+    assess_event,
+    change_history,
+    create_event,
+    current_change_state,
+    format_assessment,
+    format_current_state,
+)
 from owner_lens.config import (
     OwnerLensSettings,
     build_local_store,
@@ -202,6 +213,25 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
+    change = sub.add_parser("change", help="Manual What Changed events and explicit classification approval, offline.")
+    change_actions = change.add_subparsers(dest="change_action", required=True)
+    change_create = change_actions.add_parser("create")
+    change_create.add_argument("ticker")
+    change_create.add_argument("--version", type=int, required=True)
+    change_create.add_argument("--file", type=Path, required=True)
+    change_create.add_argument("--json", action="store_true")
+    for action in ("show", "assess", "approve"):
+        command = change_actions.add_parser(action)
+        command.add_argument("event_id")
+        command.add_argument("--json", action="store_true")
+        if action == "approve":
+            command.add_argument("--classification", choices=[item.value for item in ChangeClassification], required=True)
+            command.add_argument("--rationale", required=True, help="Explicit investor approval/override rationale.")
+    for action in ("history", "summary"):
+        command = change_actions.add_parser(action)
+        command.add_argument("ticker")
+        command.add_argument("--json", action="store_true")
+
     decision = sub.add_parser("decision", help="Append or read immutable investor decisions offline.")
     decision_actions = decision.add_subparsers(dest="decision_action", required=True)
     decision_create = decision_actions.add_parser("create", help="Append a decision tied to an exact completed version.")
@@ -297,6 +327,40 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_change(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise ChangeError("Change history requires SQLite.")
+            if args.change_action == "create":
+                event = create_event(
+                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    load_decision_json(args.file.read_text(encoding="utf-8-sig")),
+                )
+                report = assess_event(source.store, event["event_id"])
+            elif args.change_action in ("assess", "show"):
+                report = assess_event(source.store, args.event_id)
+            elif args.change_action == "approve":
+                approve_event(source.store, args.event_id, args.classification, args.rationale)
+                report = assess_event(source.store, args.event_id)
+            elif args.change_action == "history":
+                history = change_history(source.store, args.ticker.strip().upper())
+                print(canonical_json(history) if args.json else
+                      "\n\n".join(format_assessment(item) for item in history) or "No change events recorded.")
+                return 0
+            else:
+                report = current_change_state(source.store, args.ticker.strip().upper())
+                print(canonical_json(report) if args.json else format_current_state(report))
+                return 0
+            print(canonical_json(report) if args.json else format_assessment(report))
+        return 0
+    except (ValueError, PersistenceError, OSError, UnicodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_sizing(args: argparse.Namespace) -> int:
@@ -1020,5 +1084,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_decision(args)
     if args.command in ("portfolio", "position-size", "sizing"):
         return _cmd_sizing(args)
+    if args.command == "change":
+        return _cmd_change(args)
     parser.error(f"unknown command: {args.command}")
     return 2

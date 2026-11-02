@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 # Store-level version awareness.
-SCHEMA_VERSION: Final = 8
+SCHEMA_VERSION: Final = 9
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 
@@ -24,6 +24,8 @@ __all__ = [
     "AnalysisDriverRecord",
     "AnalysisResultRecord",
     "ChallengerRunRecord",
+    "ChangeApprovalRecord",
+    "ChangeEventRecord",
     "CompanyRecord",
     "CoverageResultRecord",
     "DecisionRecord",
@@ -46,6 +48,25 @@ __all__ = [
     "UniverseRefreshRunRecord",
     "UniverseSnapshotRecord",
 ]
+
+
+@dataclass(frozen=True)
+class ChangeEventRecord:
+    event_id: str
+    security_id: int
+    underwriting_id: str
+    recorded_at: str
+    snapshot_json: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class ChangeApprovalRecord:
+    approval_id: str
+    event_id: str
+    approved_at: str
+    snapshot_json: str
+    content_hash: str
 
 
 @dataclass(frozen=True)

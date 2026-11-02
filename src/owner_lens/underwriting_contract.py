@@ -287,9 +287,11 @@ def project_underwriting(
             absent = [
                 name
                 for name in ("observable", "threshold", "sources")
-                if not getattr(condition, name)
+                if getattr(condition, name) in (None, (), "")
             ]
-            if not condition.monitoring_cadence and not condition.monitoring_date:
+            if condition.operator is not None and condition.source_family and "sources" in absent:
+                absent.remove("sources")
+            if not condition.cadence and not condition.monitoring_cadence and not condition.monitoring_date:
                 absent.append("monitoring cadence/date")
             if absent:
                 missing.append(

@@ -13,6 +13,7 @@ from owner_lens.persistence import compute_content_hash
 from owner_lens.persistence.errors import PersistenceError
 from owner_lens.research_context import estimate_window
 from owner_lens.underwriting import (
+    PREDICATE_OPERATORS,
     SemanticType,
     UnderwritingError,
     UnderwritingInputs,
@@ -100,8 +101,24 @@ def _conditions(seed: list[dict[str, Any]], field: str, key: str) -> list[dict[s
                 "category": "JUDGMENT",
                 "statement": _text("Statement", prefix + ".statement", item.get("statement"), area=True),
                 "observable": _text("Metric / observable", prefix + ".observable", item.get("observable")) or None,
-                "threshold": _text("Threshold / condition", prefix + ".threshold", item.get("threshold")) or None,
             }
+            structured = st.checkbox("Use structured predicate", value=item.get("operator") is not None,
+                                     key=prefix + ".structured")
+            if structured:
+                operators = list(PREDICATE_OPERATORS)
+                condition.update({
+                    "operator": st.selectbox("Predicate operator", operators,
+                                             index=operators.index(item["operator"]) if item.get("operator") in operators else None,
+                                             key=prefix + ".operator"),
+                    "threshold": st.number_input("Numeric predicate threshold", value=float(item["threshold"]) if item.get("operator") and item.get("threshold") is not None else None,
+                                                 key=prefix + ".numeric_threshold"),
+                    "unit": _text("Exact predicate unit", prefix + ".unit", item.get("unit")) or None,
+                    "cadence": _text("Exact predicate cadence", prefix + ".predicate_cadence", item.get("cadence")) or None,
+                    "source_family": _text("Exact predicate source family", prefix + ".source_family", item.get("source_family")) or None,
+                })
+            else:
+                condition["threshold"] = _text("Threshold / condition", prefix + ".threshold",
+                                               item.get("threshold") if not item.get("operator") else None) or None
             _required_feedback(condition["statement"], f"{label.title()} statement (v2 contract)")
             with st.expander("Sources / monitoring metadata [Optional]"):
                 condition.update({

@@ -34,6 +34,8 @@ from owner_lens.persistence.records import (
     AnalysisDriverRecord,
     AnalysisResultRecord,
     ChallengerRunRecord,
+    ChangeApprovalRecord,
+    ChangeEventRecord,
     CompanyRecord,
     CoverageResultRecord,
     DecisionRecord,
@@ -124,6 +126,49 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS change_events (
+    event_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL REFERENCES securities(security_id),
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    recorded_at TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS change_approvals (
+    approval_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL UNIQUE REFERENCES change_events(event_id),
+    approved_at TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS change_event_no_update
+BEFORE UPDATE ON change_events BEGIN
+    SELECT RAISE(ABORT, 'Change events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS change_event_no_delete
+BEFORE DELETE ON change_events BEGIN
+    SELECT RAISE(ABORT, 'Change events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS change_event_no_replace
+BEFORE INSERT ON change_events WHEN EXISTS (
+    SELECT 1 FROM change_events WHERE event_id=NEW.event_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Change events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS change_approval_no_update
+BEFORE UPDATE ON change_approvals BEGIN
+    SELECT RAISE(ABORT, 'Change approvals are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS change_approval_no_delete
+BEFORE DELETE ON change_approvals BEGIN
+    SELECT RAISE(ABORT, 'Change approvals are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS change_approval_no_replace
+BEFORE INSERT ON change_approvals WHEN EXISTS (
+    SELECT 1 FROM change_approvals WHERE approval_id=NEW.approval_id OR event_id=NEW.event_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Change approvals are immutable; one approval per event');
+END;
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     snapshot_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -635,7 +680,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5, 6, 7):
+        if stored_version in (3, 4, 5, 6, 7, 8):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -680,6 +725,105 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_change_event(self, snapshot_json: str) -> ChangeEventRecord:
+        from owner_lens.changes import validate_event_sources
+        from owner_lens.decisions import load_decision_json
+        from owner_lens.position_sizing import canonical_json
+
+        if self._in_transaction:
+            raise StorageWriteError("Event creation requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            event = load_decision_json(snapshot_json)
+            validate_event_sources(self, event)
+            payload = canonical_json(event)
+            record = ChangeEventRecord(
+                event["event_id"], event["security_id"], event["underwriting"]["underwriting_id"],
+                event["recorded_at"], payload, compute_content_hash(payload.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO change_events VALUES (?, ?, ?, ?, ?, ?)",
+                tuple(getattr(record, name) for name in record.__dataclass_fields__),
+            )
+            self._conn.commit()
+            return record
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append change event: {exc}") from exc
+
+    def list_change_events(self) -> tuple[ChangeEventRecord, ...]:
+        try:
+            records = tuple(ChangeEventRecord(**dict(row)) for row in self._conn.execute(
+                "SELECT * FROM change_events ORDER BY julianday(recorded_at), rowid"
+            ).fetchall())
+            for record in records:
+                event = json.loads(record.snapshot_json)
+                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash or (
+                    record.event_id, record.security_id, record.underwriting_id, record.recorded_at
+                ) != (event["event_id"], event["security_id"], event["underwriting"]["underwriting_id"], event["recorded_at"]):
+                    raise StorageReadError("Change event failed identity/content integrity verification.")
+            return records
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read change events: {exc}") from exc
+
+    def get_change_event(self, event_id: str) -> ChangeEventRecord:
+        record = next((item for item in self.list_change_events() if item.event_id == event_id), None)
+        if record is None:
+            raise StorageReadError(f"Change event {event_id} not found.")
+        return record
+
+    def save_change_approval(self, snapshot_json: str) -> ChangeApprovalRecord:
+        from owner_lens.changes import MODEL_VERSION, _time, trigger
+        from owner_lens.decisions import load_decision_json
+        from owner_lens.position_sizing import canonical_json
+        from owner_lens.underwriting import _object, _text
+
+        if self._in_transaction:
+            raise StorageWriteError("Approval requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            fields = {"approval_id", "event_id", "approved_at", "approved_classification",
+                      "rationale", "category", "reunderwriting_trigger", "model_version"}
+            approval = _object(load_decision_json(snapshot_json), "approval", fields, fields)
+            for key in ("approval_id", "event_id", "rationale"):
+                _text(approval[key], key)
+            event = self.get_change_event(approval["event_id"])
+            if (
+                approval["category"] != "JUDGMENT" or approval["model_version"] != MODEL_VERSION
+                or approval["reunderwriting_trigger"] != trigger(approval["approved_classification"])
+                or _time(approval["approved_at"], "approved_at") < _time(event.recorded_at, "recorded_at")
+            ):
+                raise ValueError("Invalid classification approval category, trigger, model or timestamp.")
+            payload = canonical_json(approval)
+            record = ChangeApprovalRecord(
+                approval["approval_id"], event.event_id, approval["approved_at"],
+                payload, compute_content_hash(payload.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO change_approvals VALUES (?, ?, ?, ?, ?)",
+                tuple(getattr(record, name) for name in record.__dataclass_fields__),
+            )
+            self._conn.commit()
+            return record
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append approval: {exc}") from exc
+
+    def list_change_approvals(self) -> tuple[ChangeApprovalRecord, ...]:
+        try:
+            records = tuple(ChangeApprovalRecord(**dict(row)) for row in self._conn.execute(
+                "SELECT * FROM change_approvals ORDER BY julianday(approved_at), rowid"
+            ).fetchall())
+            for record in records:
+                approval = json.loads(record.snapshot_json)
+                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash or (
+                    record.approval_id, record.event_id, record.approved_at
+                ) != (approval["approval_id"], approval["event_id"], approval["approved_at"]):
+                    raise StorageReadError("Change approval failed identity/content integrity verification.")
+            return records
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read change approvals: {exc}") from exc
 
     def save_portfolio_snapshot(self, snapshot_json: str) -> PortfolioSnapshotRecord:
         from owner_lens.position_sizing import (

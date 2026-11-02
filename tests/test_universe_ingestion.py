@@ -224,7 +224,7 @@ def test_schema_v1_migrates_additively_and_preserves_sec_company(tmp_path: Path)
     assert store.get_company("0000796343") is not None
     assert store._conn.execute(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-    ).fetchone()[0] == "8"
+    ).fetchone()[0] == "9"
     assert store._conn.execute(
         "SELECT COUNT(*) FROM securities"
     ).fetchone()[0] == 0

@@ -191,8 +191,10 @@ def _underwriting(projection: UnderwritingProjection | None) -> None:
                 for condition in conditions:
                     st.write(condition.statement)
                     st.caption(f"Observable: {condition.observable or NOT_AVAILABLE} | "
-                               f"Condition: {condition.threshold or NOT_AVAILABLE} | "
-                               f"Monitor: {condition.monitoring_cadence or condition.monitoring_date or NOT_AVAILABLE}")
+                               f"Condition: {condition.operator or ''} {condition.threshold if condition.threshold is not None else NOT_AVAILABLE} {condition.unit or ''} | "
+                               f"Monitor: {condition.cadence or condition.monitoring_cadence or condition.monitoring_date or NOT_AVAILABLE}")
+                    if condition.source_family:
+                        st.caption("Source family: " + condition.source_family)
                     st.caption("Sources: " + (", ".join(reference.title or NOT_AVAILABLE for reference in condition.sources) or NOT_AVAILABLE))
             else:
                 for text in texts:

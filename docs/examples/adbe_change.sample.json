@@ -1,0 +1,34 @@
+{
+  "event_date": "2026-06-03",
+  "observed_at": "2026-06-03T11:00:00+00:00",
+  "observation": {
+    "category": "FACT",
+    "statement": "Synthetic fixture: reported constant-currency year-over-year ARR growth is 5.8%. Not an actual Adobe disclosure.",
+    "references": [
+      {
+        "title": "Fixture company report",
+        "uri": "fixture://arr",
+        "observed_at": "2026-06-03T10:00:00+00:00",
+        "note": "Synthetic offline illustration only. Replace with an actual checked reference before personal use."
+      }
+    ],
+    "verification_note": "Investor checked the synthetic fixture. This does not verify a real company fact.",
+    "metric": {
+      "observable": "ARR growth YoY, constant currency",
+      "value": 5.8,
+      "unit": "%",
+      "cadence": "Quarterly"
+    }
+  },
+  "interpretation": {
+    "category": "JUDGMENT",
+    "text": "Revisit whether growth persistence still supports the base-case trajectory. This is not a trade instruction."
+  },
+  "condition_id": "arr-growth",
+  "affected_beliefs": [
+    "/manual/scenarios/1/revenue_cagr",
+    "/manual/probability_distribution/scenarios/1/probability",
+    "/manual/thesis/monitoring_dependencies/0"
+  ],
+  "affected_binding_constraints": []
+}

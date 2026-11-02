@@ -255,6 +255,10 @@ def build_research_context(
                     "condition": item.threshold,
                     "cadence": item.monitoring_cadence,
                     "date": item.monitoring_date,
+                    **({"condition_id": item.condition_id, "operator": item.operator,
+                        "threshold": item.threshold, "unit": item.unit,
+                        "cadence": item.cadence, "source_family": item.source_family}
+                       if item.operator is not None else {}),
                 }
                 for item in (
                     *manual.thesis.monitoring_dependencies,

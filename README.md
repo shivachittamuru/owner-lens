@@ -95,7 +95,7 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with nine
+The workbench is a local Streamlit interface over the persisted store, with ten
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
@@ -103,7 +103,8 @@ dimensions), **Compare** (2–5 companies side by side), **Opportunity Compariso
 (2–5 exact completed underwriting versions), **Decisions** (append-only investor
 judgments and history), **Shadow Portfolio** (frozen independent counterfactual
 starts), **Portfolio Context / Position Sizing** (explicit downside budgets and
-immutable manual holdings context), and **Data Quality**
+immutable manual holdings context), **What Changed?** (manual evidence events and
+approved re-underwriting triggers), and **Data Quality**
 (exactly which metrics are missing and why).
 
 It reads persisted data only — opening or navigating it never calls SEC or FMP.
@@ -200,6 +201,24 @@ automatic decisions or trades. **Portfolio Context / Position Sizing** provides
 the same preview and explicit-save workflow. See
 [Feature 9C](docs/feature_docs/feature_09c_portfolio_sizing.md) for formulas,
 quality caps, missing-data constraints, schemas and manual PowerShell validation.
+
+Record new information without rewriting the underwriting that preceded it:
+
+```powershell
+uv run owner-lens change create ADBE --version 7 --file .\data\changes\adbe-q4.json --json
+uv run owner-lens change assess <event-id>
+uv run owner-lens change approve <event-id> --classification THESIS_UPDATE --rationale "Revisit growth persistence."
+uv run owner-lens change history ADBE
+uv run owner-lens change summary ADBE
+```
+
+Use the [synthetic event example](docs/examples/adbe_change.sample.json) only after
+editing its dates, source, condition ID and affected-belief pointers to match your
+exact snapshot. **What Changed?** reviews deterministic candidates and requires
+explicit investor approval. Approved updates/breaks offer **Start from latest
+underwriting**, opening a draft without saving or changing a decision/sizing
+record. See [Feature 9D](docs/feature_docs/feature_09d_what_changed.md) for literal
+metric/unit matching, approval authority, immutable history and manual commands.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and
