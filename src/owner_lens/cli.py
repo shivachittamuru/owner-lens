@@ -87,6 +87,11 @@ from owner_lens.underwriting import (
     create_underwriting,
     load_manual_json,
 )
+from owner_lens.underwriting_completion import (
+    UnderwritingCompletion,
+    complete_underwriting,
+    complete_underwriting_analysis,
+)
 from owner_lens.underwriting_summary import (
     SummaryError,
     format_summary,
@@ -357,6 +362,16 @@ def _build_parser() -> argparse.ArgumentParser:
     create = actions.add_parser("create", help="Append a new version using persisted FMP evidence.")
     create.add_argument("ticker")
     create.add_argument("--file", required=True, type=Path, help="Explicit manual JSON inputs.")
+    complete = actions.add_parser(
+        "complete", help="Commit Authoring v2 JSON and run deterministic analysis."
+    )
+    complete.add_argument("ticker")
+    complete.add_argument("--file", required=True, type=Path, help="Authoring v2 JSON.")
+    analyze = actions.add_parser(
+        "analyze", help="Retry deterministic analysis for an existing version."
+    )
+    analyze.add_argument("ticker")
+    analyze.add_argument("--version", type=int, required=True)
     show_underwriting = actions.add_parser("show", help="Print a saved snapshot without recomputation.")
     show_underwriting.add_argument("ticker")
     show_underwriting.add_argument("--version", type=int, help="Version to show (default: latest).")
@@ -797,6 +812,32 @@ def _cmd_underwriting(args: argparse.Namespace) -> int:
         with open_source() as source:
             if not isinstance(source.store, SqliteStore):
                 raise UnderwritingError("Underwriting requires SQLite persistence.")
+            if args.underwriting_action == "complete":
+                result = complete_underwriting(
+                    source,
+                    args.ticker,
+                    args.file.read_text(encoding="utf-8-sig"),
+                )
+                _print_underwriting_completion(result, committed=True)
+                return 0 if result.complete else 1
+            if args.underwriting_action == "analyze":
+                record = next(
+                    (
+                        item
+                        for item in source.store.list_underwriting(
+                            args.ticker.strip().upper()
+                        )
+                        if item.version == args.version
+                    ),
+                    None,
+                )
+                if record is None:
+                    raise UnderwritingError(
+                        f"Underwriting {args.ticker} version {args.version} not found."
+                    )
+                result = complete_underwriting_analysis(source.store, record)
+                _print_underwriting_completion(result, committed=False)
+                return 0 if result.complete else 1
             if args.underwriting_action == "create":
                 manual = load_manual_json(args.file.read_text(encoding="utf-8-sig"))
                 record = create_underwriting(source, args.ticker, manual)
@@ -832,6 +873,28 @@ def _cmd_underwriting(args: argparse.Namespace) -> int:
     except (UnderwritingError, PersistenceError, OSError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+
+def _print_underwriting_completion(
+    result: UnderwritingCompletion, *, committed: bool
+) -> None:
+    record = result.record
+    if committed:
+        print(
+            f"Underwriting v{record.version} committed successfully "
+            f"({record.ticker}, {record.underwriting_id})."
+        )
+    else:
+        print(f"Analysis for existing {record.ticker} underwriting v{record.version}.")
+    for stage in result.stages:
+        status = "SUCCESS" if stage.succeeded else "FAILED"
+        print(f"{status} {stage.name}: {stage.detail}")
+    if not result.complete:
+        print(
+            "Retry without creating another underwriting: "
+            f"uv run owner-lens underwriting analyze {record.ticker} "
+            f"--version {record.version}"
+        )
 
 
 def format_result(result: IngestionResult, *, overall: str | None = None) -> str:

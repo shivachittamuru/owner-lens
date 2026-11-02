@@ -20,12 +20,13 @@ from owner_lens.underwriting import (
     parse_manual_input,
 )
 from owner_lens.underwriting_summary import (
+    SummaryError,
     UnderwritingSummary,
     saved_valuation,
     summarize_underwriting,
 )
 from owner_lens.valuation import MODEL_VERSION
-from owner_lens.variant import VariantReport, compare_variant
+from owner_lens.variant import VariantError, VariantReport, compare_variant
 
 AUTHORING_VERSION = 2
 
@@ -309,21 +310,35 @@ def project_underwriting(
             )
         )
     else:
-        valuation_json = saved_valuation(store, selected)
-        variant = compare_variant(selected)
-        for driver in variant.drivers:
-            if driver.consensus.value is None:
-                missing.append(
-                    MissingUnderwritingItem(
-                        driver.driver,
-                        driver.consensus.reason or "Consensus unavailable.",
+        try:
+            valuation_json = saved_valuation(store, selected)
+        except SummaryError as exc:
+            missing.append(MissingUnderwritingItem("valuation", str(exc)))
+        if valuation_json is not None:
+            try:
+                variant = compare_variant(selected)
+            except VariantError as exc:
+                missing.append(MissingUnderwritingItem("variant/sensitivity", str(exc)))
+        if variant is not None:
+            for driver in variant.drivers:
+                if driver.consensus.value is None:
+                    missing.append(
+                        MissingUnderwritingItem(
+                            driver.driver,
+                            driver.consensus.reason or "Consensus unavailable.",
+                        )
                     )
-                )
         if (
-            snapshot.manual.probability_distribution is not None
+            valuation_json is not None
+            and snapshot.manual.probability_distribution is not None
             and snapshot.manual.investor_policy is not None
         ):
-            summary = summarize_underwriting(selected, valuation_json)
+            try:
+                summary = summarize_underwriting(selected, valuation_json)
+            except (SummaryError, VariantError) as exc:
+                missing.append(
+                    MissingUnderwritingItem("expected return", str(exc))
+                )
     for field in ("probability_distribution", "investor_policy"):
         if getattr(snapshot.manual, field) is None:
             missing.append(

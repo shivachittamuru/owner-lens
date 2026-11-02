@@ -176,11 +176,10 @@ def test_export_without_underwriting_or_saved_values(source: WorkbenchSource) ->
     assert "No saved challenger run" in context.markdown
     assert "No saved valuation" in context.markdown
     app = render_page(detail, projection)
-    assert any("Derived outputs are N/A" in item.value for item in app.info)
     assert any(
-        f"valuation run ADBE --version {record.version}" in item.value
-        for item in app.code
+        "Analysis is incomplete for this version" in item.value for item in app.info
     )
+    assert any(item.label == "View Full JSON" for item in app.get("expander"))
     assert (
         source.store.get_valuation(record.underwriting_id, "equity-fcf-multiple-5y-v1")
         is None

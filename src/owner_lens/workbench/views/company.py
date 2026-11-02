@@ -30,7 +30,7 @@ from owner_lens.workbench.data import (
     format_per_share,
     format_ratio,
 )
-from owner_lens.workbench.views import underwriting_authoring
+from owner_lens.workbench.views import underwriting_json
 from owner_lens.workbench.views._common import (
     BUCKET_LABEL,
     COVERAGE_LABEL,
@@ -47,7 +47,7 @@ __all__ = ["render"]
 def render(
     detail: CompanyDetail,
     underwriting: UnderwritingProjection | None = None,
-    authoring_source: underwriting_authoring.SourceFactory | None = None,
+    authoring_source: underwriting_json.SourceFactory | None = None,
 ) -> None:
     """Render one company's research page."""
     _header(detail)
@@ -75,12 +75,10 @@ def render(
         )
     with beliefs:
         if underwriting is not None and authoring_source is not None:
-            underwriting_authoring.render(detail.company.ticker, underwriting, authoring_source)
-        if st.session_state.get("authoring." + detail.company.ticker):
-            with st.expander("Existing underwriting [Read-only]"):
-                _underwriting(underwriting)
-        else:
-            _underwriting(underwriting)
+            underwriting_json.render(
+                detail.company.ticker, underwriting, authoring_source
+            )
+        _underwriting(underwriting)
         if (
             underwriting is not None and underwriting.record is not None
             and st.button("Record decision for this underwriting version")
@@ -114,31 +112,47 @@ def _underwriting(projection: UnderwritingProjection | None) -> None:
         st.info("No immutable underwriting record. No values or assumptions are generated.")
         return
     record, snapshot, summary = projection.record, projection.snapshot, projection.summary
-    st.caption(f"Underwriting v{record.version} | as of {record.as_of_date} | {projection.status} | read-only")
+    is_complete = bool(
+        projection.valuation_json
+        and summary
+        and projection.variant
+        and projection.challenger_runs
+    )
+    status = "ANALYSIS COMPLETE" if is_complete else "ANALYSIS INCOMPLETE"
+    st.caption(f"Underwriting v{record.version} | as of {record.as_of_date} | {status}")
     evidence = json.loads(snapshot.evidence_json)
     st.caption("Underwriting evidence provider: " + str(evidence.get("provider", NOT_AVAILABLE)))
     price = evidence.get("eod_price", {}).get("value")
     st.caption(f"Frozen market price FACT: {format_per_share(price['close'] if price else None)} | "
                f"market date: {price['market_date'] if price else NOT_AVAILABLE}")
     policy = snapshot.manual.investor_policy
-    columns = st.columns(4)
+    columns = st.columns(5)
     columns[0].metric("Classification", summary.classification if summary else NOT_AVAILABLE)
-    columns[1].metric("Expected 5Y CAGR", format_ratio(summary.expected_5y_cagr if summary else None))
-    columns[2].metric("Required return", format_ratio(
+    columns[1].metric(
+        "Expected terminal value/share",
+        format_per_share(
+            summary.expected_terminal_value_per_share if summary else None
+        ),
+    )
+    columns[2].metric("Expected 5Y CAGR", format_ratio(summary.expected_5y_cagr if summary else None))
+    columns[3].metric("Required return", format_ratio(
         summary.investor_policy.required_return if summary else policy.required_return if policy else None))
-    columns[3].metric("Spread vs hurdle", format_ratio(summary.return_spread if summary else None))
+    columns[4].metric("Spread vs hurdle", format_ratio(summary.return_spread if summary else None))
     st.caption("CALCULATION outcomes; JUDGMENT hurdle/probabilities. Conditional assessment, not a buy/sell recommendation.")
     st.caption("Variant view: " + (projection.variant.conclusion if projection.variant else NOT_AVAILABLE))
-    if projection.status == "CAPTURED":
-        st.info("Derived outputs are N/A for this exact version. The page does not generate them.")
-        with st.expander("Offline commands to generate missing artifacts"):
-            st.code(
-                f"uv run owner-lens valuation run {record.ticker} --version {record.version}\n"
-                f"uv run owner-lens variant show {record.ticker} --version {record.version}\n"
-                f"uv run owner-lens underwriting summary {record.ticker} --version {record.version}\n"
-                f"uv run owner-lens challenger run {record.ticker} --version {record.version}",
-                language="powershell",
-            )
+    if projection.variant and projection.variant.drivers:
+        most_sensitive = max(
+            projection.variant.drivers,
+            key=lambda item: abs(item.sensitivity.cagr_delta),
+        )
+        st.caption(
+            "Most sensitive variable: "
+            f"{most_sensitive.driver} "
+            f"({most_sensitive.sensitivity.band}, "
+            f"{format_ratio(most_sensitive.sensitivity.cagr_delta)} CAGR effect)"
+        )
+    if not is_complete:
+        st.info("Analysis is incomplete for this version. Use Retry analysis above to resume it.")
     st.caption("Probability rationale [JUDGMENT]: " + (
         snapshot.manual.probability_distribution.rationale
         if snapshot.manual.probability_distribution and snapshot.manual.probability_distribution.rationale
@@ -225,6 +239,8 @@ def _underwriting(projection: UnderwritingProjection | None) -> None:
             st.caption("No explicit gaps reported; this is not an evidence-quality certification.")
         for missing in projection.missing_evidence:
             st.write(f"{missing.section}: {missing.reason}")
+    with st.expander("View Full JSON"):
+        st.code(record.snapshot_json, language="json")
 
 
 def _fmp_evidence(detail: CompanyDetail) -> None:

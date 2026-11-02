@@ -171,66 +171,34 @@ def _button(app: AppTest, label: str) -> Any:
     return next(item for item in app.button if item.label == label)
 
 
-def _seed_draft(app: AppTest, data: dict[str, Any]) -> None:
-    draft = app.session_state["authoring.ADBE"]
-    draft["seed"] = copy.deepcopy(data)
-    draft["id"] += 1
-    draft.pop("review", None)
-    app.run()
-    assert not app.exception, [item.value for item in app.exception]
+def test_json_first_workbench_commits_and_analyzes_once(source: WorkbenchSource) -> None:
+    from owner_lens.valuation import MODEL_VERSION
 
-
-def test_company_form_blank_errors_live_probabilities_and_explicit_preset(source: WorkbenchSource) -> None:
     app = _app(source)
-    _button(app, "Create New Underwriting").click().run()
-    assert not app.exception
-    assert all(item.value is None for item in app.number_input)
-    assert not any(item.label == "Create Immutable Underwriting Version" for item in app.button)
-    assert any("v1" in item.value and "not be changed" in item.value for item in app.warning)
-    _button(app, "Review Draft").click().run()
-    assert not app.exception
-    assert app.error
+    _button(app, "New Underwriting").click().run()
+    editor = next(
+        item for item in app.text_area
+        if item.label == "Paste OwnerLens Underwriting JSON"
+    )
+    editor.set_value(json.dumps(authoring())).run()
+    _button(app, "Validate + Preview").click().run()
+    assert not app.exception and not app.error
     assert source.store.list_underwriting("ADBE") == ()
-    _seed_draft(app, authoring())
-    probability = next(item for item in app.number_input if item.label == "BEAR probability (%)")
-    probability.set_value(15.0).run()
-    assert any("90.0%" in item.value for item in app.warning)
-    preset = next(item for item in app.selectbox if ".scenario.BASE.fcf_margin_year5.preset" in item.key)
-    preset.select("Historical latest").run()
-    _button_base = next(item for item in app.button if item.key.endswith(".scenario.BASE.fcf_margin_year5.apply"))
-    _button_base.click().run()
-    assert not app.exception
-    inputs = app.session_state["authoring.ADBE"]["inputs"]
-    latest = authoring_context(inputs)[1].latest
-    margin = next(item for item in app.number_input if item.key.endswith(".scenario.BASE.fcf_margin_year5"))
-    assert margin.value == latest * 100
-    assert source.store.list_underwriting("ADBE") == ()
+    assert any(item.value == "Validation and preview" for item in app.subheader)
+    assert any("Initial underwriting" in item.value for item in app.caption)
+    assert any(item.label == "Commit & Analyze" for item in app.button)
 
-
-def test_company_form_review_save_no_automatic_artifacts_and_clone(source: WorkbenchSource, monkeypatch: pytest.MonkeyPatch) -> None:
-    from owner_lens import challenger, valuation
-
-    monkeypatch.setattr(valuation, "run_valuation", lambda *a, **kw: pytest.fail("No automatic valuation"))
-    monkeypatch.setattr(challenger, "run_challenger", lambda *a, **kw: pytest.fail("No automatic challenger"))
-    original = create_underwriting(source, "ADBE", parse_manual_input(authoring()), now=NOW)
-    app = _app(source)
-    _button(app, "Create New Underwriting").click().run()
-    _button(app, "Start from latest underwriting").click().run()
-    assert source.store.list_underwriting("ADBE") == (original,)
-    assert not app.exception
-    _button(app, "Review Draft").click().run()
-    assert not app.exception, [item.value for item in app.exception]
-    assert not app.error, [item.value for item in app.error]
-    assert any("Review new underwriting v2" in item.value for item in app.subheader)
-    assert source.store.list_underwriting("ADBE") == (original,)
-    _button(app, "Create Immutable Underwriting Version").click().run()
-    assert not app.exception
-    assert any("v2" in item.value and "CAPTURED" in item.value for item in app.success)
+    _button(app, "Commit & Analyze").click().run()
+    assert not app.exception and not app.error
     records = source.store.list_underwriting("ADBE")
-    assert len(records) == 2 and records[0] == original
-    assert source.store.get_valuation(records[-1].underwriting_id, valuation.MODEL_VERSION) is None
-    assert source.store.list_challenger_runs(records[-1].underwriting_id) == ()
-    assert UnderwritingSnapshot.from_json(records[-1].snapshot_json).manual == UnderwritingSnapshot.from_json(original.snapshot_json).manual
+    assert len(records) == 1
+    record = records[0]
+    assert source.store.get_valuation(record.underwriting_id, MODEL_VERSION) is not None
+    assert len(source.store.list_challenger_runs(record.underwriting_id)) == 1
+    assert any("Underwriting v1 committed successfully" in item.value for item in app.success)
+    assert any("ANALYSIS COMPLETE" in item.value for item in app.caption)
+    assert not any(item.label == "Review Draft" for item in app.button)
+    assert not any(item.label == "Create Immutable Underwriting Version" for item in app.button)
 
 
 def test_context_presets_absence_readonly_and_ui_has_no_financial_math(source: WorkbenchSource) -> None:
@@ -292,96 +260,61 @@ def test_future_condition_source_is_evidence_not_monitoring_intention(source: Wo
     assert source.store.list_underwriting("ADBE") == ()
 
 
-def test_repeatable_evidence_thesis_widgets_roundtrip_and_invalidate_review(source: WorkbenchSource) -> None:
-    from datetime import date
-
+def test_json_errors_and_latest_history_controls_are_explicit(source: WorkbenchSource) -> None:
     app = _app(source)
-    _button(app, "Create New Underwriting").click().run()
-    _seed_draft(app, authoring())
-    prefix = f"authoring.ADBE.draft.{app.session_state['authoring.ADBE']['id']}"
-    next(item for item in app.button if item.key == prefix + ".supporting_evidence.count.add").click().run()
-    next(item for item in app.text_area if item.key == prefix + ".supporting_evidence.0.text").set_value("Retention observation supports the demand belief.")
-    next(item for item in app.selectbox if item.key == prefix + ".supporting_evidence.0.category").select("JUDGMENT")
-    next(item for item in app.date_input if item.key == prefix + ".supporting_evidence.0.date").set_value(date(2026, 6, 1))
-    next(item for item in app.multiselect if item.key == prefix + ".supporting_evidence.0.links").select("/manual/business_drivers/0")
-    next(item for item in app.button if item.key == prefix + ".supporting_evidence.0.refs.count.add").click().run()
-    next(item for item in app.text_input if item.key == prefix + ".supporting_evidence.0.refs.0.title").set_value("Dated research note")
-    next(item for item in app.text_input if item.key == prefix + ".dependencies.0.observable").set_value("Retention")
-    next(item for item in app.text_input if item.key == prefix + ".dependencies.0.threshold").set_value("At least 90%")
-    _button(app, "Review Draft").click().run()
-    assert not app.exception and not app.error
-    next(item for item in app.number_input if item.key == prefix + ".scenario.BASE.revenue_cagr").set_value(8.0).run()
-    assert not any(item.label == "Create Immutable Underwriting Version" for item in app.button)
-    assert any("Review again" in item.value for item in app.info)
+    _button(app, "New Underwriting").click().run()
+    editor = next(
+        item for item in app.text_area
+        if item.label == "Paste OwnerLens Underwriting JSON"
+    )
+    editor.set_value("{").run()
+    _button(app, "Validate + Preview").click().run()
+    assert any("Invalid JSON syntax" in item.value for item in app.error)
     assert source.store.list_underwriting("ADBE") == ()
-    _button(app, "Review Draft").click().run()
-    _button(app, "Create Immutable Underwriting Version").click().run()
+
+    record = create_underwriting(
+        source, "ADBE", parse_manual_input(authoring()), now=NOW
+    )
+    app = _app(source)
+    assert any(item.label == "New Underwriting" for item in app.button)
+    assert any(item.label == "Copy Research Context" for item in app.button)
+    assert any(item.label == "View Full JSON" for item in app.get("expander"))
+    _button(app, "View History").click().run()
+    assert any(item.label == "Underwriting history" for item in app.get("expander"))
+    assert source.store.list_underwriting("ADBE") == (record,)
+
+
+def test_partial_failure_is_visible_and_retry_keeps_same_version(
+    source: WorkbenchSource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from owner_lens import underwriting_completion
+    from owner_lens.valuation import ValuationError
+
+    original_run_valuation = underwriting_completion.run_valuation
+
+    def fail_valuation(*_args: Any, **_kwargs: Any) -> str:
+        raise ValuationError("fixture valuation failure")
+
+    monkeypatch.setattr(underwriting_completion, "run_valuation", fail_valuation)
+    app = _app(source)
+    _button(app, "New Underwriting").click().run()
+    editor = next(
+        item for item in app.text_area
+        if item.label == "Paste OwnerLens Underwriting JSON"
+    )
+    editor.set_value(json.dumps(authoring())).run()
+    _button(app, "Validate + Preview").click().run()
+    _button(app, "Commit & Analyze").click().run()
+
+    records = source.store.list_underwriting("ADBE")
+    assert len(records) == 1
+    assert any("Valuation: fixture valuation failure" in item.value for item in app.error)
+    assert any(item.label == "Retry analysis" for item in app.button)
+
+    monkeypatch.setattr(
+        underwriting_completion, "run_valuation", original_run_valuation
+    )
+    _button(app, "Retry analysis").click().run()
     assert not app.exception
-    snapshot = UnderwritingSnapshot.from_json(source.store.list_underwriting("ADBE")[0].snapshot_json)
-    item = snapshot.manual.supporting_evidence[0]
-    assert item.text == "Retention observation supports the demand belief."
-    assert item.category == "JUDGMENT"
-    assert item.references[0].title == "Dated research note"
-    assert item.evidence_date == "2026-06-01"
-    assert item.belief_references == ("/manual/business_drivers/0",)
-    assert snapshot.manual.thesis.monitoring_dependencies[0].observable == "Retention"
-    assert snapshot.manual.thesis.monitoring_dependencies[0].threshold == "At least 90%"
-
-
-def test_progressive_disclosure_inputs_first_and_action_feedback(source: WorkbenchSource) -> None:
-    original = create_underwriting(source, "ADBE", parse_manual_input(authoring()), now=NOW)
-    app = _app(source)
-    _button(app, "Create New Underwriting").click().run()
-    assert any("Draft created for ADBE v2" in item.value for item in app.success)
-    assert any("Terminal equity FCF multiple is required" in item.value for item in app.caption)
-    expanders = list(app.get("expander"))
-    context = next(item for item in expanders if item.label == "OwnerLens Context - Facts, History & Consensus")
-    assert not context.proto.expanded
-    assert all(not item.proto.expanded for item in expanders if "Recommended" in item.label or "Optional" in item.label)
-    assert all(item.proto.expanded for item in expanders if item.label in ("BEAR [Required]", "BASE [Required]", "BULL [Required]"))
-    blocks = list(app.main)
-    # Streamlit's recursive iteration follows the visible page order.
-    scenario_position = next(index for index, item in enumerate(blocks)
-                             if item.type == "subheader" and item.value == "1. Scenarios [Required · ASSUMPTION]")
-    context_position = next(index for index, item in enumerate(blocks) if item is context)
-    assert scenario_position < context_position
-    _button(app, "Start from latest underwriting").click().run()
-    assert any("Draft initialized from ADBE v1. Saving will create v2." in item.value for item in app.success)
-    assert source.store.list_underwriting("ADBE") == (original,)
-    _button(app, "Refresh draft evidence context").click().run()
-    assert any("Evidence context refreshed" in item.value for item in app.success)
-    _button(app, "Discard draft").click().run()
-    assert any("Draft discarded" in item.value for item in app.success)
-    assert not any(item.label == "Review Draft" for item in app.button)
-    assert source.store.list_underwriting("ADBE") == (original,)
-
-
-def test_recommended_optional_empty_where_contract_allows_and_contract_exceptions(source: WorkbenchSource) -> None:
-    data = authoring()
-    judgment = data["judgments"]
-    judgment["supporting_evidence"] = []
-    judgment["disconfirming_evidence"] = []
-    judgment["variant_rationales"] = []
-    judgment["investor_policy"]["rationale"] = None
-    for field in ("dependencies", "breakers"):
-        judgment["thesis"][field] = [
-            {"category": "JUDGMENT", "condition_id": field + "-1", "statement": "Investor-authored condition."}
-        ]
-    app = _app(source)
-    _button(app, "Create New Underwriting").click().run()
-    _seed_draft(app, data)
-    assert any("No disconfirming evidence recorded - recommended, not required." in item.value for item in app.caption)
-    _button(app, "Review Draft").click().run()
-    assert not app.exception and not app.error
-    _button(app, "Create Immutable Underwriting Version").click().run()
-    record = source.store.list_underwriting("ADBE")[0]
-    snapshot = UnderwritingSnapshot.from_json(record.snapshot_json)
-    assert not snapshot.manual.supporting_evidence
-    assert not snapshot.manual.variant_rationales
-    assert snapshot.manual.thesis.monitoring_dependencies[0].monitoring_date is None
-    assert snapshot.manual.thesis.monitoring_dependencies[0].sources == ()
-    inputs = capture_underwriting_inputs(source, "ADBE", now=NOW)
-    judgment["business_drivers"] = []
-    with pytest.raises(UnderwritingError, match="3 to 5"):
-        review_authoring(data, inputs)
     assert len(source.store.list_underwriting("ADBE")) == 1
+    assert len(source.store.list_challenger_runs(records[0].underwriting_id)) == 1

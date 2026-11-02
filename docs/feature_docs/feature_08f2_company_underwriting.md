@@ -20,10 +20,12 @@ logic outside Streamlit. It displays:
   references in a separate expander.
 * Explicit missing evidence, unavailable outputs and monitoring metadata.
 
-An absent record, saved valuation or challenger is reported as absent. The saved
-projection does not create records, run valuation/challenger, or retrieve evidence.
-The separate [8F4 authoring flow](feature_08f4_underwriting_authoring.md) now allows
-explicit creation of a new immutable version; existing versions remain read-only.
+An absent record, saved valuation or challenger is reported as absent. Reading
+the saved projection does not retrieve evidence. The separate
+[8F4 authoring flow](feature_08f4_underwriting_authoring.md) validates pasted
+Authoring v2 JSON before one explicit commit action. After commit, that
+application operation runs the existing valuation, expected-return,
+variant/sensitivity and challenger services for the new version.
 FACT, EXPECTATION, ASSUMPTION, JUDGMENT and CALCULATION distinctions remain
 visible. Existing quarterly, EOD and analyst evidence sections stay separate
 from annual screening.
@@ -78,12 +80,10 @@ shareable. Always review before pasting.
 
 The read/export projection adds no investing logic, agents, instruments or
 portfolio features. Draft authoring is handled separately by Feature 8F4.
-
-A `CAPTURED` underwriting explicitly shows N/A for absent valuation, variant,
-expected-return and saved challenger outputs. An expander offers exact offline
-CLI commands for that version, but never executes them. Variant remains a
-deterministic derived report rather than a separately saved artifact; no new
-persistence model is introduced.
+If a derived stage fails after commit, the immutable record remains and the
+page offers a retry for that exact version. Variant remains a deterministic
+derived report rather than a separately saved artifact; no new persistence
+model is introduced.
 
 ## Manual ADBE validation
 
@@ -97,7 +97,7 @@ Choose Company and ADBE, then inspect:
 * Probabilities and Bear/Base/Bull values match the saved version.
 * Expected CAGR, hurdle, spread and classification match the summary.
 * Missing evidence is not converted to zero or invented support.
-* Challenger is the saved advisory run; visiting the page creates no run.
+* Challenger is the saved advisory run; reading the page creates no new run.
 * Structured dependencies/breakers, uncertainty and variant rationale are visible.
 * Copy Research Context includes the relevant sections and distinguishes
   current evidence from frozen underwriting.
