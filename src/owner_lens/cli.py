@@ -213,6 +213,18 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
+    calibration = sub.add_parser("calibration", help="Offline, sample-guarded forecast calibration; no skill assessment.")
+    calibration_actions = calibration.add_subparsers(dest="calibration_action", required=True)
+    for action in ("run", "company"):
+        command = calibration_actions.add_parser(action)
+        if action == "company":
+            command.add_argument("ticker")
+        command.add_argument("--as-of", help="UTC cutoff date YYYY-MM-DD (default: today).")
+        command.add_argument("--json", action="store_true")
+    calibration_show = calibration_actions.add_parser("show")
+    calibration_show.add_argument("report_id")
+    calibration_show.add_argument("--json", action="store_true")
+
     outcome = sub.add_parser("outcome", help="Immutable manual forecast-versus-outcome tracking, offline.")
     outcome_actions = outcome.add_subparsers(dest="outcome_action", required=True)
     for action in ("create", "compare"):
@@ -343,6 +355,33 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_calibration(args: argparse.Namespace) -> int:
+    from owner_lens.calibration import (
+        CalibrationError,
+        format_report,
+        read_report,
+        run_calibration,
+    )
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise CalibrationError("Calibration requires SQLite.")
+            if args.calibration_action == "show":
+                report = read_report(source.store, args.report_id)
+            else:
+                report = run_calibration(
+                    source.store, as_of=args.as_of,
+                    company=args.ticker if args.calibration_action == "company" else None,
+                )
+            print(canonical_json(report) if args.json else format_report(report))
+        return 0
+    except (ValueError, PersistenceError, OSError, OverflowError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_outcome(args: argparse.Namespace) -> int:
@@ -1145,5 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_change(args)
     if args.command == "outcome":
         return _cmd_outcome(args)
+    if args.command == "calibration":
+        return _cmd_calibration(args)
     parser.error(f"unknown command: {args.command}")
     return 2

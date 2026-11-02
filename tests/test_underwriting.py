@@ -490,7 +490,7 @@ def test_additive_v3_migration_preserves_evidence(
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "10"
+        == "11"
     )
     assert (
         store._conn.execute("SELECT COUNT(*) FROM fmp_canonical_facts").fetchone()[0]

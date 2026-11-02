@@ -472,7 +472,7 @@ def test_schema_v2_migration_preserves_refresh_state(tmp_path: Path) -> None:
     assert state.status == "SUCCEEDED"
     assert migrated._conn.execute(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-    ).fetchone()[0] == "10"
+    ).fetchone()[0] == "11"
     migrated.close()
 
 

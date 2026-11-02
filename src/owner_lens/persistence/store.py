@@ -127,6 +127,27 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS calibration_reports (
+    report_id TEXT PRIMARY KEY,
+    as_of_date TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS calibration_no_update
+BEFORE UPDATE ON calibration_reports BEGIN
+    SELECT RAISE(ABORT, 'Calibration reports are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS calibration_no_delete
+BEFORE DELETE ON calibration_reports BEGIN
+    SELECT RAISE(ABORT, 'Calibration reports are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS calibration_no_replace
+BEFORE INSERT ON calibration_reports WHEN EXISTS (
+    SELECT 1 FROM calibration_reports WHERE report_id=NEW.report_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Calibration reports are immutable');
+END;
 CREATE TABLE IF NOT EXISTS outcome_observations (
     observation_id TEXT PRIMARY KEY,
     security_id INTEGER NOT NULL REFERENCES securities(security_id),
@@ -703,7 +724,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5, 6, 7, 8, 9):
+        if stored_version in (3, 4, 5, 6, 7, 8, 9, 10):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -748,6 +769,60 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_calibration_report(self, report_json: str) -> str:
+        from owner_lens.calibration import build_report
+        from owner_lens.decisions import load_decision_json
+        from owner_lens.position_sizing import canonical_json
+
+        if self._in_transaction:
+            raise StorageWriteError("Calibration requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            report = load_decision_json(report_json)
+            expected = build_report(self, as_of=report["as_of_date"], company=report["company"])
+            payload = canonical_json(report)
+            if payload != canonical_json(expected):
+                raise ValueError("Calibration differs from exact inputs and deterministic model.")
+            existing = self._conn.execute(
+                "SELECT report_json FROM calibration_reports WHERE report_id=?", (report["report_id"],),
+            ).fetchone()
+            if existing is not None:
+                if existing["report_json"] != payload:
+                    raise ValueError("Calibration report content collision.")
+            else:
+                self._conn.execute(
+                    "INSERT INTO calibration_reports VALUES (?, ?, ?, ?, ?)",
+                    (report["report_id"], report["as_of_date"], report["model_version"],
+                     payload, compute_content_hash(payload.encode())),
+                )
+            self._conn.commit()
+            return report["report_id"]
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot save calibration report: {exc}") from exc
+
+    def get_calibration_report(self, report_id: str) -> str:
+        from owner_lens.position_sizing import canonical_json
+
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM calibration_reports WHERE report_id=?", (report_id,),
+            ).fetchone()
+            if row is None:
+                raise StorageReadError(f"Calibration report {report_id} not found.")
+            report = json.loads(row["report_json"])
+            identity = report.pop("report_id")
+            if (
+                compute_content_hash(row["report_json"].encode()) != row["content_hash"]
+                or compute_content_hash(canonical_json(report).encode()) != identity
+                or (identity, report["as_of_date"], report["model_version"])
+                != (row["report_id"], row["as_of_date"], row["model_version"])
+            ):
+                raise StorageReadError("Calibration report failed identity/content integrity verification.")
+            return row["report_json"]
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read calibration report: {exc}") from exc
 
     def save_outcome_observation(self, snapshot_json: str) -> OutcomeObservationRecord:
         from owner_lens.decisions import load_decision_json

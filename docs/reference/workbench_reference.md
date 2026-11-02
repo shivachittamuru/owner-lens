@@ -58,6 +58,22 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## Calibration
+
+Open **Calibration** for an offline preview of exact, completed forecast/outcome
+pairs. Choose an as-of date and optional company; review independent sample-size
+statuses, eligibility/exclusions, scenario probabilities, unambiguous Brier
+scores, continuous Base errors, coarse probability buckets and fixed cohorts.
+Sparse summaries are suppressed. Current 2026 data can correctly show
+INSUFFICIENT_HISTORY_FOR_CALIBRATION.
+
+Expand traceable IDs, exclusion reasons and raw errors/scores. Download JSON or
+explicitly save an immutable report; inspect a saved report by its ID.
+Opening the page does not save, fetch or mutate source records.
+Calibration never implies skill, luck, mistake type or decision quality.
+See [Feature 10B](../feature_docs/feature_10b_calibration.md) for exact rules,
+sample thresholds, limitations and manual validation commands.
+
 ## Outcomes
 
 Open **Outcomes** to select an exact completed underwriting and review its frozen
