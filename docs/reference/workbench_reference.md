@@ -58,6 +58,26 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## Portfolio Context and Position Sizing
+
+Select **Portfolio Context / Position Sizing** to create or select an immutable
+manual holdings snapshot, select an exact completed underwriting version, and
+enter an explicit sizing policy. The policy has no prefilled limits. Review the
+current weights, frozen underwriting economics, downside-budget ceilings,
+evidence-quality cap, concentration constraints and incremental room.
+
+The target interval begins at zero: no allocation is mandatory. Missing cash,
+sector coverage or manual tags blocks additional deployment rather than implying
+available room. An above-range holding is flagged without instructing a trim.
+Review is a preview; checking the explicit-save box creates a new immutable
+analysis. Saved analyses are read-only and downloadable.
+
+An optional exact decision includes its frozen comparison/alternatives as context,
+not positions. WATCH/PASS `ACTUAL_CHOICE` shadow entries never establish holdings.
+This page neither creates a decision nor executes a trade. See
+[Feature 9C](../feature_docs/feature_09c_portfolio_sizing.md) for schemas, equations,
+conservative quality caps and manual validation commands.
+
 ## Decisions and Shadow Portfolio
 
 Open **Decisions** directly, use **Company > Underwriting > Record decision for

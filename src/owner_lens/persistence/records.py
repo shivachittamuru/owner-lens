@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 # Store-level version awareness.
-SCHEMA_VERSION: Final = 7
+SCHEMA_VERSION: Final = 8
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 
@@ -34,16 +34,39 @@ __all__ = [
     "FmpEodPriceRecord",
     "FmpEstimateRecord",
     "FmpEvidenceSnapshotRecord",
+    "PortfolioSnapshotRecord",
     "ReportedFactRecord",
     "SecurityRecord",
     "SecurityRefreshStateRecord",
     "ShadowEntryRecord",
+    "SizingAnalysisRecord",
     "SourceSnapshotRecord",
     "UnderwritingRecord",
     "UniverseConstituentRecord",
     "UniverseRefreshRunRecord",
     "UniverseSnapshotRecord",
 ]
+
+
+@dataclass(frozen=True)
+class PortfolioSnapshotRecord:
+    snapshot_id: str
+    created_at: str
+    as_of_date: str
+    snapshot_json: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class SizingAnalysisRecord:
+    analysis_id: str
+    created_at: str
+    underwriting_id: str
+    portfolio_id: str
+    decision_id: str | None
+    model_version: str
+    report_json: str
+    content_hash: str
 
 
 @dataclass(frozen=True)

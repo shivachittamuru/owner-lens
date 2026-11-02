@@ -95,14 +95,15 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with eight
+The workbench is a local Streamlit interface over the persisted store, with nine
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
 dimensions), **Compare** (2–5 companies side by side), **Opportunity Comparison**
 (2–5 exact completed underwriting versions), **Decisions** (append-only investor
 judgments and history), **Shadow Portfolio** (frozen independent counterfactual
-starts), and **Data Quality**
+starts), **Portfolio Context / Position Sizing** (explicit downside budgets and
+immutable manual holdings context), and **Data Quality**
 (exactly which metrics are missing and why).
 
 It reads persisted data only — opening or navigating it never calls SEC or FMP.
@@ -184,6 +185,21 @@ shadow starts retain their decision-time state. Outcomes are not decision
 quality. No trades, sizing, weights or returns are inferred. See
 [Feature 9B](docs/feature_docs/feature_09b_decision_shadow.md) for schemas,
 immutability, benchmark placeholders and manual validation commands.
+
+Evaluate cash-funded position-size bounds over explicit, immutable manual holdings:
+
+```powershell
+uv run owner-lens portfolio snapshot create --file .\data\portfolio\portfolio.json --json
+uv run owner-lens position-size ADBE --version 7 --portfolio <snapshot-id> --policy .\data\portfolio\policy.json --json
+```
+
+Review the synthetic [portfolio](docs/examples/portfolio_context.sample.json) and
+[policy](docs/examples/sizing_policy.sample.json) examples before supplying your
+own inputs. There are no hidden policy defaults, inferred shadow holdings,
+automatic decisions or trades. **Portfolio Context / Position Sizing** provides
+the same preview and explicit-save workflow. See
+[Feature 9C](docs/feature_docs/feature_09c_portfolio_sizing.md) for formulas,
+quality caps, missing-data constraints, schemas and manual PowerShell validation.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and

@@ -1,0 +1,34 @@
+{
+  "as_of_date": "2026-06-03",
+  "basis": "MARKET_VALUE",
+  "currency": "USD",
+  "holdings": [
+    {
+      "ticker": "ADBE",
+      "asset_type": "EQUITY",
+      "market_value": 2000,
+      "sector": "Technology",
+      "industry": "Software",
+      "exposure_tags": ["AI_CAPEX"],
+      "notes": "Synthetic example only; not a real holding or company assessment."
+    },
+    {
+      "ticker": "MSFT",
+      "asset_type": "EQUITY",
+      "market_value": 18000,
+      "sector": "Technology",
+      "industry": "Software",
+      "exposure_tags": ["AI_CAPEX"]
+    },
+    {
+      "ticker": "KO",
+      "asset_type": "EQUITY",
+      "market_value": 40000,
+      "sector": "Consumer",
+      "industry": "Beverages",
+      "exposure_tags": []
+    }
+  ],
+  "cash": 40000,
+  "notes": "Synthetic single-currency, long-only portfolio; replace every input before use."
+}

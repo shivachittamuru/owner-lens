@@ -46,12 +46,13 @@ from owner_lens.workbench.views import (
     decisions,
     opportunity_comparison,
     overview,
+    position_sizing,
     screener,
 )
 
 __all__ = ["main"]
 
-PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison", "Decisions", "Shadow Portfolio", "Data Quality")
+PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing", "Data Quality")
 
 
 def main() -> None:
@@ -90,7 +91,7 @@ def main() -> None:
 
     page = _sidebar(db_path, raw_data_path, companies, usable)
 
-    if page in ("Opportunity Comparison", "Decisions", "Shadow Portfolio"):
+    if page in ("Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing"):
         try:
             with open_run_source() as source:
                 if not isinstance(source.store, SqliteStore):
@@ -100,6 +101,8 @@ def main() -> None:
                     opportunity_comparison.render(source.store)
                 elif page == "Decisions":
                     decisions.render(source.store)
+                elif page == "Portfolio Context / Position Sizing":
+                    position_sizing.render(source.store)
                 else:
                     decisions.render_shadow(source.store)
         except (ComparisonError, DecisionError, PersistenceError, OSError) as exc:

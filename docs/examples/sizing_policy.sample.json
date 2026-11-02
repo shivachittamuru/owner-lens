@@ -1,0 +1,11 @@
+{
+  "category": "JUDGMENT",
+  "max_single_position_weight": 0.1,
+  "max_initial_position_weight": 0.08,
+  "max_portfolio_bear_loss_contribution": 0.03,
+  "max_sector_weight": 0.4,
+  "min_cash_reserve": 0.1,
+  "starter_position_weight": 0.06,
+  "max_thesis_weight": 0.3,
+  "severe_bear_loss_threshold": 0.8
+}

@@ -44,10 +44,12 @@ from owner_lens.persistence.records import (
     FmpEodPriceRecord,
     FmpEstimateRecord,
     FmpEvidenceSnapshotRecord,
+    PortfolioSnapshotRecord,
     ReportedFactRecord,
     SecurityRecord,
     SecurityRefreshStateRecord,
     ShadowEntryRecord,
+    SizingAnalysisRecord,
     SourceSnapshotRecord,
     UnderwritingRecord,
     UniverseConstituentRecord,
@@ -122,6 +124,51 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS portfolio_no_update
+BEFORE UPDATE ON portfolio_snapshots BEGIN
+    SELECT RAISE(ABORT, 'Portfolio snapshots are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS portfolio_no_delete
+BEFORE DELETE ON portfolio_snapshots BEGIN
+    SELECT RAISE(ABORT, 'Portfolio snapshots are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS portfolio_no_replace
+BEFORE INSERT ON portfolio_snapshots
+WHEN EXISTS (SELECT 1 FROM portfolio_snapshots WHERE snapshot_id=NEW.snapshot_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Portfolio snapshots are immutable');
+END;
+CREATE TABLE IF NOT EXISTS sizing_analyses (
+    analysis_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    portfolio_id TEXT NOT NULL REFERENCES portfolio_snapshots(snapshot_id),
+    decision_id TEXT REFERENCES decision_records(decision_id),
+    model_version TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS sizing_no_update
+BEFORE UPDATE ON sizing_analyses BEGIN
+    SELECT RAISE(ABORT, 'Sizing analyses are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS sizing_no_delete
+BEFORE DELETE ON sizing_analyses BEGIN
+    SELECT RAISE(ABORT, 'Sizing analyses are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS sizing_no_replace
+BEFORE INSERT ON sizing_analyses
+WHEN EXISTS (SELECT 1 FROM sizing_analyses WHERE analysis_id=NEW.analysis_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Sizing analyses are immutable');
+END;
 CREATE TABLE IF NOT EXISTS decision_records (
     decision_id TEXT PRIMARY KEY,
     security_id INTEGER NOT NULL REFERENCES securities(security_id),
@@ -588,7 +635,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5, 6):
+        if stored_version in (3, 4, 5, 6, 7):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -633,6 +680,111 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_portfolio_snapshot(self, snapshot_json: str) -> PortfolioSnapshotRecord:
+        from owner_lens.position_sizing import (
+            PortfolioSnapshot,
+            validate_portfolio_sources,
+        )
+
+        if self._in_transaction:
+            raise StorageWriteError("Portfolio creation requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            snapshot = PortfolioSnapshot.from_json(snapshot_json)
+            validate_portfolio_sources(self, snapshot)
+            payload = snapshot.to_json()
+            record = PortfolioSnapshotRecord(
+                snapshot.snapshot_id, snapshot.created_at, snapshot.as_of_date,
+                payload, compute_content_hash(payload.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO portfolio_snapshots VALUES (?, ?, ?, ?, ?)",
+                tuple(getattr(record, name) for name in record.__dataclass_fields__),
+            )
+            self._conn.commit()
+            return record
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append portfolio snapshot: {exc}") from exc
+
+    def list_portfolio_snapshots(self) -> tuple[PortfolioSnapshotRecord, ...]:
+        from owner_lens.position_sizing import PortfolioSnapshot
+
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM portfolio_snapshots ORDER BY julianday(created_at), rowid"
+            ).fetchall()
+            records = tuple(PortfolioSnapshotRecord(**dict(row)) for row in rows)
+            for record in records:
+                snapshot = PortfolioSnapshot.from_json(record.snapshot_json)
+                if (
+                    compute_content_hash(record.snapshot_json.encode()) != record.content_hash
+                    or (snapshot.snapshot_id, snapshot.created_at, snapshot.as_of_date)
+                    != (record.snapshot_id, record.created_at, record.as_of_date)
+                ):
+                    raise StorageReadError("Portfolio failed identity/content integrity verification.")
+            return records
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read portfolios: {exc}") from exc
+
+    def get_portfolio_snapshot(self, snapshot_id: str) -> str:
+        selected = next((item for item in self.list_portfolio_snapshots() if item.snapshot_id == snapshot_id), None)
+        if selected is None:
+            raise StorageReadError(f"Portfolio snapshot {snapshot_id} not found.")
+        return selected.snapshot_json
+
+    def save_sizing_analysis(self, report_json: str, *, created_at: str) -> SizingAnalysisRecord:
+        from owner_lens.decisions import load_decision_json
+        from owner_lens.position_sizing import canonical_json, validate_sizing_sources
+
+        if self._in_transaction:
+            raise StorageWriteError("Sizing persistence requires its own transaction.")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            report = load_decision_json(report_json)
+            validate_sizing_sources(self, report, created_at)
+            payload = canonical_json(report)
+            record = SizingAnalysisRecord(
+                str(uuid4()), created_at, report["underwriting"]["underwriting_id"],
+                report["portfolio"]["snapshot_id"],
+                report["decision_context"]["decision_id"] if report["decision_context"] is not None else None,
+                report["model_version"], payload, compute_content_hash(payload.encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO sizing_analyses VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(getattr(record, name) for name in record.__dataclass_fields__),
+            )
+            self._conn.commit()
+            return record
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append sizing analysis: {exc}") from exc
+
+    def list_sizing_analyses(self) -> tuple[SizingAnalysisRecord, ...]:
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM sizing_analyses ORDER BY julianday(created_at), rowid"
+            ).fetchall()
+            records = tuple(SizingAnalysisRecord(**dict(row)) for row in rows)
+            for record in records:
+                report = json.loads(record.report_json)
+                if (
+                    compute_content_hash(record.report_json.encode()) != record.content_hash
+                    or (record.underwriting_id, record.portfolio_id, record.model_version, record.decision_id)
+                    != (report["underwriting"]["underwriting_id"], report["portfolio"]["snapshot_id"],
+                        report["model_version"], report["decision_context"]["decision_id"] if report["decision_context"] is not None else None)
+                ):
+                    raise StorageReadError("Sizing analysis failed identity/content integrity verification.")
+            return records
+        except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            raise StorageReadError(f"Cannot read sizing analyses: {exc}") from exc
+
+    def get_sizing_analysis(self, analysis_id: str) -> SizingAnalysisRecord:
+        selected = next((item for item in self.list_sizing_analyses() if item.analysis_id == analysis_id), None)
+        if selected is None:
+            raise StorageReadError(f"Sizing analysis {analysis_id} not found.")
+        return selected
 
     def save_decision(self, snapshot_json: str) -> DecisionRecord:
         """Append a validated decision and all shadow starts in one transaction."""

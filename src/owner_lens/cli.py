@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from owner_lens.canonical import CanonicalFinancialHistory
@@ -54,6 +55,13 @@ from owner_lens.persistence import (
     SqliteStore,
 )
 from owner_lens.persistence.errors import PersistenceError, StorageReadError
+from owner_lens.position_sizing import (
+    SizingError,
+    canonical_json,
+    create_portfolio,
+    format_sizing,
+    size_position,
+)
 from owner_lens.screening import (
     format_screening_detail,
     format_screening_table,
@@ -214,6 +222,36 @@ def _build_parser() -> argparse.ArgumentParser:
     shadow_show.add_argument("--decision-id")
     shadow_show.add_argument("--json", action="store_true")
 
+    portfolio = sub.add_parser("portfolio", help="Immutable manually supplied portfolio context.")
+    portfolio_actions = portfolio.add_subparsers(dest="portfolio_action", required=True)
+    snapshots = portfolio_actions.add_parser("snapshot")
+    snapshot_actions = snapshots.add_subparsers(dest="snapshot_action", required=True)
+    portfolio_create = snapshot_actions.add_parser("create")
+    portfolio_create.add_argument("--file", type=Path, required=True)
+    portfolio_create.add_argument("--json", action="store_true")
+    portfolio_show = snapshot_actions.add_parser("show")
+    portfolio_show.add_argument("snapshot_id")
+    portfolio_show.add_argument("--json", action="store_true")
+    portfolio_list = snapshot_actions.add_parser("list")
+    portfolio_list.add_argument("--json", action="store_true")
+    sizing = sub.add_parser("position-size", help="Offline bounded sizing guidance; no trade or decision is created.")
+    sizing.add_argument("ticker")
+    sizing.add_argument("--version", type=int, required=True)
+    sizing.add_argument("--portfolio", required=True, help="Exact immutable portfolio snapshot UUID.")
+    sizing.add_argument("--policy", type=Path, required=True, help="Explicit JUDGMENT limits; no defaults.")
+    sizing.add_argument("--context", type=Path, help="Manual sector/industry/tags for an unheld opportunity.")
+    sizing.add_argument("--increment", type=float, help="Proposed incremental weight as a decimal ratio.")
+    sizing.add_argument("--decision-id", help="Optional exact Feature 9B decision context.")
+    sizing.add_argument("--save", action="store_true", help="Append an immutable analysis; no decision or trade.")
+    sizing.add_argument("--json", action="store_true")
+    sizing_history = sub.add_parser("sizing", help="Read saved sizing analyses without recalculation.")
+    sizing_actions = sizing_history.add_subparsers(dest="sizing_action", required=True)
+    sizing_show = sizing_actions.add_parser("show")
+    sizing_show.add_argument("analysis_id")
+    sizing_show.add_argument("--json", action="store_true")
+    sizing_list = sizing_actions.add_parser("history")
+    sizing_list.add_argument("--json", action="store_true")
+
     underwriting = sub.add_parser(
         "underwriting", help="Create or inspect immutable manual underwriting snapshots (offline)."
     )
@@ -259,6 +297,53 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_sizing(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise SizingError("Portfolio context and sizing require SQLite.")
+            if args.command == "portfolio":
+                if args.snapshot_action == "create":
+                    portfolio = create_portfolio(source.store, load_decision_json(args.file.read_text(encoding="utf-8-sig")))
+                    print(portfolio.to_json() if args.json else f"Created portfolio snapshot {portfolio.snapshot_id}; normalization total {portfolio.normalization_total:g}.")
+                elif args.snapshot_action == "show":
+                    payload = source.store.get_portfolio_snapshot(args.snapshot_id)
+                    print(payload if args.json else json.dumps(json.loads(payload), indent=2))
+                else:
+                    records = source.store.list_portfolio_snapshots()
+                    print("[" + ",".join(record.snapshot_json for record in records) + "]" if args.json else
+                          "\n".join(f"{record.snapshot_id} | {record.as_of_date}" for record in records) or "No portfolio snapshots recorded.")
+            elif args.command == "position-size":
+                report = size_position(
+                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    args.portfolio, load_decision_json(args.policy.read_text(encoding="utf-8-sig")),
+                    context_data=load_decision_json(args.context.read_text(encoding="utf-8-sig")) if args.context else None,
+                    proposed_increment=args.increment, decision_id=args.decision_id,
+                )
+                if args.save:
+                    saved = source.store.save_sizing_analysis(canonical_json(report), created_at=datetime.now(UTC).isoformat())
+                    print(canonical_json({"analysis_id": saved.analysis_id, "created_at": saved.created_at, "report": report}) if args.json else
+                          f"Saved analysis {saved.analysis_id}\n" + format_sizing(report))
+                else:
+                    print(canonical_json(report) if args.json else format_sizing(report))
+            elif args.sizing_action == "show":
+                saved = source.store.get_sizing_analysis(args.analysis_id)
+                print(saved.report_json if args.json else format_sizing(json.loads(saved.report_json)))
+            else:
+                analyses = source.store.list_sizing_analyses()
+                print(canonical_json([{
+                    "analysis_id": item.analysis_id, "created_at": item.created_at,
+                    "report": json.loads(item.report_json),
+                } for item in analyses]) if args.json else
+                    "\n".join(f"{item.analysis_id} | {item.created_at} | {item.underwriting_id} | {item.portfolio_id}" for item in analyses) or "No sizing analyses recorded.")
+        return 0
+    except (SizingError, DecisionError, ComparisonError, PersistenceError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_decision(args: argparse.Namespace) -> int:
@@ -933,5 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_compare_underwriting(args)
     if args.command in ("decision", "shadow"):
         return _cmd_decision(args)
+    if args.command in ("portfolio", "position-size", "sizing"):
+        return _cmd_sizing(args)
     parser.error(f"unknown command: {args.command}")
     return 2
