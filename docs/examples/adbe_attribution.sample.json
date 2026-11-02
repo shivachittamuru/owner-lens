@@ -1,0 +1,41 @@
+{
+  "as_of_date": "2026-06-03",
+  "category": "JUDGMENT",
+  "links": {
+    "decision_id": null,
+    "sizing_analysis_id": null,
+    "observation_ids": [],
+    "change_event_ids": [],
+    "calibration_report_id": null,
+    "mistake_review_id": null
+  },
+  "reviewer": "Investor",
+  "interpretation": "Manual template, not an assertion about Adobe. No comparable outcomes or execution evidence selected. Forecasts, decision consistency and causes remain unresolved.",
+  "confidence": "LOW",
+  "investor_reviewed": true,
+  "evidence_references": [
+    {
+      "title": "Selected exact immutable underwriting; no completed outcomes selected"
+    }
+  ],
+  "process_reviews": [],
+  "decision_framework_review": null,
+  "actual_position": null,
+  "relative_outcomes": [],
+  "external_review": {
+    "status": "UNRESOLVED",
+    "contributors": [],
+    "rationale": "No investor-reviewed external causal evidence selected.",
+    "evidence_references": [
+      {
+        "title": "Attribution evidence remains incomplete"
+      }
+    ],
+    "investor_reviewed": true
+  },
+  "unresolved_questions": [
+    "Which exact decision, outcomes and contemporaneous process evidence should be linked?",
+    "Is there verified actual execution evidence, or only hypothetical sizing?",
+    "Have comparable five-year outcomes matured?"
+  ]
+}

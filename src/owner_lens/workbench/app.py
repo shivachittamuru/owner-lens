@@ -40,6 +40,7 @@ from owner_lens.workbench.data import (
     overview_counts,
 )
 from owner_lens.workbench.views import (
+    attribution,
     calibration,
     changes,
     company,
@@ -56,7 +57,7 @@ from owner_lens.workbench.views import (
 
 __all__ = ["main"]
 
-PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing", "What Changed?", "Outcomes", "Calibration", "Mistake Review", "Data Quality")
+PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing", "What Changed?", "Outcomes", "Calibration", "Mistake Review", "Attribution", "Data Quality")
 
 
 def main() -> None:
@@ -95,7 +96,7 @@ def main() -> None:
 
     page = _sidebar(db_path, raw_data_path, companies, usable)
 
-    if page in ("Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing", "What Changed?", "Outcomes", "Calibration", "Mistake Review"):
+    if page in ("Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing", "What Changed?", "Outcomes", "Calibration", "Mistake Review", "Attribution"):
         try:
             with open_run_source() as source:
                 if not isinstance(source.store, SqliteStore):
@@ -115,6 +116,8 @@ def main() -> None:
                     calibration.render(source.store)
                 elif page == "Mistake Review":
                     mistakes.render(source.store)
+                elif page == "Attribution":
+                    attribution.render(source.store)
                 else:
                     decisions.render_shadow(source.store)
         except (ComparisonError, DecisionError, PersistenceError, OSError) as exc:

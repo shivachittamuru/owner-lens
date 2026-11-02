@@ -614,7 +614,7 @@ def test_v5_migration_preserves_snapshots_valuations_and_installs_challenger(
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "12"
+        == "13"
     )
     assert (
         store.list_underwriting("ADBE") == (record,)

@@ -95,7 +95,7 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with thirteen
+The workbench is a local Streamlit interface over the persisted store, with fourteen
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
@@ -107,6 +107,7 @@ immutable manual holdings context), **What Changed?** (manual evidence events an
 approved re-underwriting triggers), **Outcomes** (immutable forecast-versus-outcome
 tracking), **Calibration** (sample-guarded historical forecasts/probabilities),
 **Mistake Review** (investor-approved post-mortems, separate from outcomes),
+**Attribution** (layered process, forecast, decision and contribution reviews),
 and **Data Quality**
 (exactly which metrics are missing and why).
 
@@ -275,6 +276,20 @@ mistake, and behavioral labels require explicit investor review. The
 never assesses decision quality. See
 [Feature 10C](docs/feature_docs/feature_10c_mistake_taxonomy.md) for the template,
 approval schema, thresholds and safe manual-validation commands.
+
+Separate process, forecasts, decision consistency and transparent contributions:
+
+```powershell
+uv run owner-lens attribution review create ADBE --version 7 --file .\data\attribution\adbe-attribution.json --json
+uv run owner-lens attribution review history ADBE --json
+uv run owner-lens attribution summary --json
+```
+
+The **Attribution** view requires explicit investor review. Shadows and sizing
+proposals never establish execution; external explanations remain judgments.
+Missing or immature layers stay unresolved. See
+[Feature 10D](docs/feature_docs/feature_10d_attribution.md) for the review schema,
+actual-versus-hypothetical rules, sample guards and safe manual commands.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and

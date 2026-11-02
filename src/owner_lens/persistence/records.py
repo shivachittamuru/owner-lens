@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 # Store-level version awareness.
-SCHEMA_VERSION: Final = 12
+SCHEMA_VERSION: Final = 13
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 

@@ -58,6 +58,21 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## Attribution
+
+Open **Attribution** to select an exact underwriting version and import or paste
+review JSON. Links identify the precise decision, sizing, outcomes, calibration
+and mistake review. No latest-version or execution assumptions are made.
+The checkbox requires explicit investor review before an append-only save.
+
+History separates process checks, mature forecast errors, bounded decision
+consistency, actual/hypothetical contributions, investor-reviewed external
+contributors and benchmark/shadow differences. Missing areas remain unresolved;
+unresolved terminal forecasts do not block process review. Download saved JSON
+or inspect sample-guarded fixed-cohort summaries. Navigation never auto-creates
+a review. See [Feature 10D](../feature_docs/feature_10d_attribution.md) for schema,
+evidence guards, the unresolved template and manual commands.
+
 ## Mistake Review
 
 Open **Mistake Review** to choose an exact underwriting version and optional

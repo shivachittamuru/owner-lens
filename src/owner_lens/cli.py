@@ -214,6 +214,22 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
+    attribution = sub.add_parser("attribution", help="Layered immutable attribution, not skill or luck scoring.")
+    attribution_actions = attribution.add_subparsers(dest="attribution_action", required=True)
+    attribution_review = attribution_actions.add_parser("review")
+    attribution_review_actions = attribution_review.add_subparsers(dest="review_action", required=True)
+    attribution_create = attribution_review_actions.add_parser("create")
+    attribution_create.add_argument("ticker")
+    attribution_create.add_argument("--version", type=int, required=True)
+    attribution_create.add_argument("--file", type=Path, required=True)
+    attribution_create.add_argument("--json", action="store_true")
+    for action in ("show", "history"):
+        command = attribution_review_actions.add_parser(action)
+        command.add_argument("review_id" if action == "show" else "ticker")
+        command.add_argument("--json", action="store_true")
+    attribution_summary = attribution_actions.add_parser("summary")
+    attribution_summary.add_argument("--json", action="store_true")
+
     mistakes = sub.add_parser("mistakes", help="Immutable investor mistake reviews; no skill assessment.")
     mistake_actions = mistakes.add_subparsers(dest="mistakes_action", required=True)
     review = mistake_actions.add_parser("review")
@@ -379,6 +395,39 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_attribution(args: argparse.Namespace) -> int:
+    from owner_lens.attribution import (
+        AttributionError,
+        create_review,
+        read_review,
+        review_history,
+        review_summary,
+    )
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise AttributionError("Attribution requires SQLite.")
+            report: dict[str, Any] | list[dict[str, Any]]
+            if args.attribution_action == "summary":
+                report = review_summary(source.store)
+            elif args.review_action == "show":
+                report = read_review(source.store, args.review_id)
+            elif args.review_action == "history":
+                report = review_history(source.store, args.ticker.strip().upper())
+            else:
+                report = create_review(
+                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    load_decision_json(args.file.read_text(encoding="utf-8-sig")),
+                )
+            print(canonical_json(report))
+        return 0
+    except (ValueError, PersistenceError, OSError, OverflowError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_mistakes(args: argparse.Namespace) -> int:
@@ -1255,6 +1304,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_change(args)
     if args.command == "outcome":
         return _cmd_outcome(args)
+    if args.command == "attribution":
+        return _cmd_attribution(args)
     if args.command == "mistakes":
         return _cmd_mistakes(args)
     if args.command == "calibration":
