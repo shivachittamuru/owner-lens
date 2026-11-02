@@ -31,6 +31,12 @@ from owner_lens.coverage import LAYER_ORDER
 from owner_lens.evidence_ingestion import refresh_sp500_evidence
 from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
+from owner_lens.opportunity_comparison import (
+    ComparisonError,
+    UnderwritingSelection,
+    compare_underwritings,
+    format_comparison,
+)
 from owner_lens.persistence import (
     FilesystemRawSnapshotStore,
     OwnerLensStore,
@@ -170,6 +176,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Initially selected evidence provider (default: sec).",
     )
 
+    comparison = sub.add_parser(
+        "compare-underwriting",
+        help="Compare 2-5 exact completed underwriting versions offline (no ranking score).",
+    )
+    comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
+    comparison.add_argument("--json", action="store_true")
+
     underwriting = sub.add_parser(
         "underwriting", help="Create or inspect immutable manual underwriting snapshots (offline)."
     )
@@ -215,6 +228,22 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_compare_underwriting(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        selections = tuple(UnderwritingSelection.parse(value) for value in args.selections)
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise ComparisonError("Opportunity comparison requires SQLite.")
+            report = compare_underwritings(source.store, selections)
+            print(report.to_json() if args.json else format_comparison(report))
+        return 0
+    except (ComparisonError, PersistenceError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_variant(args: argparse.Namespace) -> int:
@@ -819,5 +848,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_valuation(args)
     if args.command == "variant":
         return _cmd_variant(args)
+    if args.command == "compare-underwriting":
+        return _cmd_compare_underwriting(args)
     parser.error(f"unknown command: {args.command}")
     return 2

@@ -95,11 +95,12 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with five
+The workbench is a local Streamlit interface over the persisted store, with six
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
-dimensions), **Compare** (2–5 companies side by side), and **Data Quality**
+dimensions), **Compare** (2–5 companies side by side), **Opportunity Comparison**
+(2–5 exact completed underwriting versions), and **Data Quality**
 (exactly which metrics are missing and why).
 
 It reads persisted data only — opening or navigating it never calls SEC or FMP.
@@ -148,6 +149,21 @@ and `uv run owner-lens challenger run ADBE --version 1`. See
 [Feature 8E](docs/feature_docs/feature_08e_underwriting_loop.md) for manually
 approved probabilities, transparent hurdle bands and the advisory rules-only
 challenger. Neither command is a buy/sell recommendation.
+
+Compare completed immutable underwriting versions without an aggregate score:
+
+```powershell
+uv run owner-lens compare-underwriting ADBE:7 MSFT:3 GOOGL:2
+uv run owner-lens compare-underwriting ADBE:7 MSFT:3 GOOGL:2 --json
+```
+
+Use exact versions present in your store. **Opportunity Comparison** in the
+Workbench provides the same read-only comparison with explicit version selection.
+Research attention is separate from conditional capital economics; missing
+dimensions remain missing. Feature 7 context is reused only when frozen in the
+selected snapshot, never recomputed during comparison. See
+[Feature 9A](docs/feature_docs/feature_09a_opportunity_comparison.md) for flags,
+conservative dominance, reproducibility, examples and manual PowerShell checks.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and

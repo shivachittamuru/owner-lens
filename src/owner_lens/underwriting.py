@@ -17,6 +17,7 @@ from owner_lens.persistence.records import (
     UnderwritingRecord,
 )
 from owner_lens.persistence.store import SqliteStore
+from owner_lens.screening import screen_company_from_history
 from owner_lens.workbench.data import (
     PersistedCompany,
     WorkbenchSource,
@@ -936,6 +937,7 @@ def capture_underwriting_inputs(
             "Annual provenance contains evidence retrieved after the cutoff."
         )
     starting, rates, year = _capture_financials(history)
+    screening = screen_company_from_history(history)
     copied = {
         "provider": "fmp",
         "issuer_cik": security.cik,
@@ -943,6 +945,15 @@ def capture_underwriting_inputs(
         "cutoff": cutoff,
         "canonical_history": asdict(record),
         "annual_sources": evidence["sources"],
+        "feature7_context": {
+            "priority": screening.bucket.value,
+            "setup_type": screening.setup_type.value,
+            "coverage": screening.coverage_class.value,
+            "dimensions": {
+                dimension.value: score.band.value
+                for dimension, score in screening.dimensions.items()
+            },
+        },
         "eod_price": {
             "category": SemanticType.FACT,
             "value": evidence["price"],

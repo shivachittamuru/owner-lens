@@ -41,6 +41,23 @@ uv run owner-lens workbench --provider fmp
 
 Normal navigation reads persisted evidence only. It does not call SEC or FMP.
 
+## Opportunity Comparison
+
+Select **Opportunity Comparison** to compare 2-5 completed immutable Feature 8
+versions. Choose exact `TICKER:VERSION` entries; nothing defaults to latest.
+The read-only table follows return, Bear downside/asymmetry, evidence, variant,
+sensitivity, business quality/setup and unresolved challenger questions.
+Research attention and conditional capital attractiveness are separate outputs.
+Pairwise flags explain tradeoffs or conservative dominance without an aggregate
+score or allocation recommendation.
+
+Missing frozen Feature 7 context remains missing; current screening is not
+substituted. Excluded incomplete versions show explicit reasons. Expand each
+opportunity for research questions and download reproducible JSON. The page
+does not edit underwritings or retrieve new evidence. See
+[Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
+and equivalent offline CLI commands.
+
 # Pages
 
 ## 1. Overview
