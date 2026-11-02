@@ -81,6 +81,15 @@ def render(
                 _underwriting(underwriting)
         else:
             _underwriting(underwriting)
+        if (
+            underwriting is not None and underwriting.record is not None
+            and st.button("Record decision for this underwriting version")
+        ):
+            record = underwriting.record
+            st.session_state["decision_requested_underwriting"] = f"{record.ticker}:{record.version}"
+            st.session_state.pop("decision_comparison_json", None)
+            st.session_state["requested_page"] = "Decisions"
+            st.rerun()
     context = build_research_context(detail, underwriting)
     if st.button("Copy Research Context"):
         st.session_state["research_context_open"] = True

@@ -1,0 +1,40 @@
+{
+  "category": "JUDGMENT",
+  "action": "WATCH",
+  "confidence": "MEDIUM",
+  "rationale": "Expected return is attractive, but evidence verification and the AI-disruption thesis still need validation.",
+  "primary_reason": "Conditional return advantage is not yet sufficiently validated.",
+  "biggest_risk": "AI disruption weakens Adobe's professional workflow economics more than assumed.",
+  "what_would_change_decision": "Verified evidence supporting Adobe's AI monetization thesis or a more favorable entry price.",
+  "alternatives": [
+    {
+      "underwriting": "GOOGL:2",
+      "disposition": "PREFERRED",
+      "reason": "Illustrative investor judgment: preferred alternative for further validation, not an automatic trade."
+    },
+    {
+      "underwriting": "MSFT:2",
+      "disposition": "DEFERRED",
+      "reason": "Illustrative investor judgment: defer while validating the conditional return at its frozen price."
+    },
+    {
+      "underwriting": "NFLX:1",
+      "disposition": "PASSED_OVER",
+      "reason": "Illustrative investor judgment: pass over while uncertainty in the recorded thesis remains unresolved."
+    }
+  ],
+  "comparison": null,
+  "shadow": {
+    "include_benchmark": true,
+    "alternatives": [
+      {
+        "underwriting": "GOOGL:2",
+        "role": "BEST_ALTERNATIVE"
+      },
+      {
+        "underwriting": "NFLX:1",
+        "role": "PASS_CANDIDATE"
+      }
+    ]
+  }
+}

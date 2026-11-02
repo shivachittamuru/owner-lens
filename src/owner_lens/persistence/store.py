@@ -36,6 +36,7 @@ from owner_lens.persistence.records import (
     ChallengerRunRecord,
     CompanyRecord,
     CoverageResultRecord,
+    DecisionRecord,
     DerivedMetricRecord,
     FmpCanonicalCoverageRecord,
     FmpCanonicalFactRecord,
@@ -46,6 +47,7 @@ from owner_lens.persistence.records import (
     ReportedFactRecord,
     SecurityRecord,
     SecurityRefreshStateRecord,
+    ShadowEntryRecord,
     SourceSnapshotRecord,
     UnderwritingRecord,
     UniverseConstituentRecord,
@@ -120,6 +122,61 @@ def _resolve_aggregate_refresh_states(
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS decision_records (
+    decision_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL REFERENCES securities(security_id),
+    ticker TEXT NOT NULL,
+    underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
+    underwriting_version INTEGER NOT NULL CHECK(underwriting_version > 0),
+    decision_at TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS decision_security ON decision_records(security_id, decision_at);
+CREATE TRIGGER IF NOT EXISTS decision_no_update
+BEFORE UPDATE ON decision_records BEGIN
+    SELECT RAISE(ABORT, 'Decision records are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS decision_no_delete
+BEFORE DELETE ON decision_records BEGIN
+    SELECT RAISE(ABORT, 'Decision records are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS decision_no_replace
+BEFORE INSERT ON decision_records
+WHEN EXISTS (SELECT 1 FROM decision_records WHERE decision_id = NEW.decision_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Decision records are immutable');
+END;
+CREATE TABLE IF NOT EXISTS shadow_entries (
+    shadow_id TEXT PRIMARY KEY,
+    decision_id TEXT NOT NULL REFERENCES decision_records(decision_id),
+    underwriting_id TEXT REFERENCES underwriting_records(underwriting_id),
+    role TEXT NOT NULL CHECK(role IN (
+        'ACTUAL_CHOICE', 'BEST_ALTERNATIVE', 'PASS_CANDIDATE', 'BENCHMARK')),
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    UNIQUE(decision_id, underwriting_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shadow_single_role ON shadow_entries(decision_id, role)
+WHERE role IN ('ACTUAL_CHOICE', 'BEST_ALTERNATIVE', 'BENCHMARK');
+CREATE TRIGGER IF NOT EXISTS shadow_no_update
+BEFORE UPDATE ON shadow_entries BEGIN
+    SELECT RAISE(ABORT, 'Shadow entries are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS shadow_no_delete
+BEFORE DELETE ON shadow_entries BEGIN
+    SELECT RAISE(ABORT, 'Shadow entries are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS shadow_no_replace
+BEFORE INSERT ON shadow_entries
+WHEN EXISTS (SELECT 1 FROM shadow_entries WHERE shadow_id = NEW.shadow_id OR
+    (decision_id = NEW.decision_id AND (
+        underwriting_id = NEW.underwriting_id OR
+        (role = NEW.role AND role IN ('ACTUAL_CHOICE', 'BEST_ALTERNATIVE', 'BENCHMARK')))))
+BEGIN
+    SELECT RAISE(ABORT, 'Shadow entries are immutable');
+END;
 CREATE TABLE IF NOT EXISTS challenger_runs (
     run_id TEXT PRIMARY KEY,
     underwriting_id TEXT NOT NULL REFERENCES underwriting_records(underwriting_id),
@@ -531,7 +588,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5):
+        if stored_version in (3, 4, 5, 6):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -576,6 +633,111 @@ class SqliteStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def save_decision(self, snapshot_json: str) -> DecisionRecord:
+        """Append a validated decision and all shadow starts in one transaction."""
+        from owner_lens.decisions import DecisionSnapshot, validate_decision_sources
+
+        if self._in_transaction:
+            raise StorageWriteError("Decision creation requires its own transaction.")
+        try:
+            snapshot = DecisionSnapshot.from_json(snapshot_json)
+            self._conn.execute("BEGIN IMMEDIATE")
+            validate_decision_sources(self, snapshot)
+            underwriting = snapshot.chosen.underwriting
+            record = DecisionRecord(
+                snapshot.decision_id, underwriting.security_id, underwriting.ticker,
+                underwriting.underwriting_id, underwriting.version,
+                snapshot.decision_at, snapshot.as_of_date, snapshot.to_json(),
+                compute_content_hash(snapshot.to_json().encode()),
+            )
+            self._conn.execute(
+                "INSERT INTO decision_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(getattr(record, name) for name in record.__dataclass_fields__),
+            )
+            for entry in snapshot.shadows:
+                self._conn.execute(
+                    "INSERT INTO shadow_entries VALUES (?, ?, ?, ?, ?, ?)",
+                    (entry.shadow_id, entry.decision_id, entry.underwriting_id,
+                     entry.role, entry.to_json(), compute_content_hash(entry.to_json().encode())),
+                )
+            self._conn.commit()
+            return record
+        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+            self._conn.rollback()
+            raise StorageWriteError(f"Cannot append decision/shadow state: {exc}") from exc
+
+    def list_decisions(self, ticker: str | None = None) -> tuple[DecisionRecord, ...]:
+        """Chronological decision history, optionally resolved by stable security."""
+        from owner_lens.decisions import DecisionSnapshot
+
+        try:
+            if ticker is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM decision_records ORDER BY julianday(decision_at), rowid"
+                ).fetchall()
+            else:
+                # This also rejects ambiguous historical aliases.
+                underwritings = self.list_underwriting(ticker.strip().upper())
+                if not underwritings:
+                    return ()
+                rows = self._conn.execute(
+                    "SELECT * FROM decision_records WHERE security_id=? "
+                    "ORDER BY julianday(decision_at), rowid",
+                    (underwritings[0].security_id,),
+                ).fetchall()
+            result = tuple(DecisionRecord(**dict(row)) for row in rows)
+            for record in result:
+                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash:
+                    raise StorageReadError("Decision failed content integrity verification.")
+                snapshot = DecisionSnapshot.from_json(record.snapshot_json)
+                chosen = snapshot.chosen.underwriting
+                if (
+                    (record.decision_id, record.security_id, record.ticker,
+                     record.underwriting_id, record.underwriting_version, record.decision_at, record.as_of_date)
+                    != (snapshot.decision_id, chosen.security_id, chosen.ticker,
+                        chosen.underwriting_id, chosen.version, snapshot.decision_at, snapshot.as_of_date)
+                ):
+                    raise StorageReadError("Decision index differs from immutable snapshot.")
+            return result
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
+            raise StorageReadError(f"Cannot read decisions: {exc}") from exc
+
+    def list_shadow_entries(self, decision_id: str | None = None) -> tuple[ShadowEntryRecord, ...]:
+        """Read verified frozen starts only, never current market observations."""
+        from owner_lens.decisions import read_decision
+
+        try:
+            decisions = {record.decision_id: read_decision(record) for record in self.list_decisions()}
+            if decision_id is not None and decision_id not in decisions:
+                raise StorageReadError(f"Decision {decision_id} not found.")
+            rows = self._conn.execute(
+                "SELECT s.* FROM shadow_entries s JOIN decision_records d "
+                "ON s.decision_id=d.decision_id WHERE (? IS NULL OR s.decision_id=?) "
+                "ORDER BY julianday(d.decision_at), d.rowid, s.rowid",
+                (decision_id, decision_id),
+            ).fetchall()
+            result = tuple(ShadowEntryRecord(**dict(row)) for row in rows)
+            expected = {
+                entry.shadow_id: entry
+                for identifier, snapshot in decisions.items()
+                if decision_id is None or identifier == decision_id
+                for entry in snapshot.shadows
+            }
+            if set(expected) != {record.shadow_id for record in result}:
+                raise StorageReadError("Shadow entries differ from the decision bundle.")
+            for record in result:
+                entry = expected[record.shadow_id]
+                if (
+                    compute_content_hash(record.snapshot_json.encode()) != record.content_hash
+                    or record.snapshot_json != entry.to_json()
+                    or (record.decision_id, record.underwriting_id, record.role)
+                    != (entry.decision_id, entry.underwriting_id, entry.role)
+                ):
+                    raise StorageReadError("Shadow failed identity/content integrity verification.")
+            return result
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
+            raise StorageReadError(f"Cannot read shadow entries: {exc}") from exc
 
     def save_underwriting(
         self, *, security_id: int, ticker: str, created_at: str,

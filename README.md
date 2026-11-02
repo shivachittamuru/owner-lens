@@ -95,12 +95,14 @@ uv run owner-lens workbench
 uv run owner-lens workbench --provider fmp   # persisted S&P 500 evidence and screening
 ```
 
-The workbench is a local Streamlit interface over the persisted store, with six
+The workbench is a local Streamlit interface over the persisted store, with eight
 views: **Overview** (coverage, the opportunity funnel, the research queue),
 **Screener** (the filterable screening table), **Company** (owner economics,
 capital efficiency, capital allocation, Economic Value Lens, screening
 dimensions), **Compare** (2–5 companies side by side), **Opportunity Comparison**
-(2–5 exact completed underwriting versions), and **Data Quality**
+(2–5 exact completed underwriting versions), **Decisions** (append-only investor
+judgments and history), **Shadow Portfolio** (frozen independent counterfactual
+starts), and **Data Quality**
 (exactly which metrics are missing and why).
 
 It reads persisted data only — opening or navigating it never calls SEC or FMP.
@@ -164,6 +166,24 @@ dimensions remain missing. Feature 7 context is reused only when frozen in the
 selected snapshot, never recomputed during comparison. See
 [Feature 9A](docs/feature_docs/feature_09a_opportunity_comparison.md) for flags,
 conservative dominance, reproducibility, examples and manual PowerShell checks.
+
+Record an explicit judgment against an exact completed underwriting version:
+
+```powershell
+uv run owner-lens decision create ADBE --version 7 --file .\data\decisions\ADBE.json --json
+uv run owner-lens decision show ADBE
+uv run owner-lens decision history ADBE --json
+uv run owner-lens shadow show --json
+```
+
+Use the reviewed [decision input example](docs/examples/adbe_decision.sample.json)
+with exact versions present in your store. **Company > Underwriting** and
+**Opportunity Comparison** can open the same explicit-save decision workflow.
+Changed minds create new records; considered alternatives and optional $100
+shadow starts retain their decision-time state. Outcomes are not decision
+quality. No trades, sizing, weights or returns are inferred. See
+[Feature 9B](docs/feature_docs/feature_09b_decision_shadow.md) for schemas,
+immutability, benchmark placeholders and manual validation commands.
 
 For new underwriting, use the consolidated
 [canonical contract](docs/feature_docs/feature_08f1_underwriting_contract.md) and

@@ -28,6 +28,17 @@ from owner_lens.config import (
     require_fmp_api_key,
 )
 from owner_lens.coverage import LAYER_ORDER
+from owner_lens.decisions import (
+    DISCLAIMER as DECISION_DISCLAIMER,
+)
+from owner_lens.decisions import (
+    DecisionError,
+    ShadowEntry,
+    create_decision,
+    format_decision,
+    load_decision_json,
+    read_decision,
+)
 from owner_lens.evidence_ingestion import refresh_sp500_evidence
 from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
@@ -183,6 +194,26 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
+    decision = sub.add_parser("decision", help="Append or read immutable investor decisions offline.")
+    decision_actions = decision.add_subparsers(dest="decision_action", required=True)
+    decision_create = decision_actions.add_parser("create", help="Append a decision tied to an exact completed version.")
+    decision_create.add_argument("ticker")
+    decision_create.add_argument("--version", type=int, required=True)
+    decision_create.add_argument("--file", type=Path, required=True)
+    decision_create.add_argument("--json", action="store_true")
+    decision_show = decision_actions.add_parser("show", help="Show the most recent decision or an exact decision ID.")
+    decision_show.add_argument("ticker")
+    decision_show.add_argument("--decision-id")
+    decision_show.add_argument("--json", action="store_true")
+    decision_history = decision_actions.add_parser("history", help="Show append-only chronological decision history.")
+    decision_history.add_argument("ticker")
+    decision_history.add_argument("--json", action="store_true")
+    shadow = sub.add_parser("shadow", help="Read frozen independent counterfactual starts; no P&L.")
+    shadow_actions = shadow.add_subparsers(dest="shadow_action", required=True)
+    shadow_show = shadow_actions.add_parser("show", help="Show shadow entries from saved decisions.")
+    shadow_show.add_argument("--decision-id")
+    shadow_show.add_argument("--json", action="store_true")
+
     underwriting = sub.add_parser(
         "underwriting", help="Create or inspect immutable manual underwriting snapshots (offline)."
     )
@@ -228,6 +259,56 @@ def _build_parser() -> argparse.ArgumentParser:
     variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
 
     return parser
+
+
+def _cmd_decision(args: argparse.Namespace) -> int:
+    from owner_lens.workbench.data import open_source
+
+    try:
+        with open_source() as source:
+            if not isinstance(source.store, SqliteStore):
+                raise DecisionError("Decision and shadow workflows require SQLite.")
+            if args.command == "shadow":
+                entries = [
+                    ShadowEntry.from_data(json.loads(record.snapshot_json))
+                    for record in source.store.list_shadow_entries(args.decision_id)
+                ]
+                if args.json:
+                    print("[" + ",".join(entry.to_json() for entry in entries) + "]")
+                else:
+                    print("Decision date | Ticker | Role | Frozen price/date | Underwriting | Decision/action")
+                    for entry in entries:
+                        price = (f"${entry.frozen_price:.2f} / {entry.market_date}"
+                                 if entry.frozen_price is not None else "MISSING (benchmark placeholder)")
+                        print(f"{entry.decision_at} | {entry.ticker} | {entry.role} | {price} | "
+                              f"{entry.underwriting_version or 'N/A'} | {entry.decision_id} / {entry.action}")
+                    if not entries:
+                        print("No shadow entries recorded.")
+                    print(DECISION_DISCLAIMER)
+                return 0
+            if args.decision_action == "create":
+                snapshot = create_decision(
+                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    load_decision_json(args.file.read_text(encoding="utf-8-sig")),
+                )
+                print(snapshot.to_json() if args.json else format_decision(snapshot))
+            else:
+                records = source.store.list_decisions(args.ticker)
+                if args.decision_action == "history":
+                    if args.json:
+                        print("[" + ",".join(record.snapshot_json for record in records) + "]")
+                    else:
+                        print("\n\n".join(format_decision(read_decision(record)) for record in records)
+                              or f"No decisions recorded for {args.ticker}.")
+                else:
+                    selected = next((record for record in records if record.decision_id == args.decision_id), None) if args.decision_id else (records[-1] if records else None)
+                    if selected is None:
+                        raise DecisionError(f"Decision {args.decision_id or 'history'} not found for {args.ticker}.")
+                    print(selected.snapshot_json if args.json else format_decision(read_decision(selected)))
+        return 0
+    except (DecisionError, ComparisonError, PersistenceError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_compare_underwriting(args: argparse.Namespace) -> int:
@@ -850,5 +931,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_variant(args)
     if args.command == "compare-underwriting":
         return _cmd_compare_underwriting(args)
+    if args.command in ("decision", "shadow"):
+        return _cmd_decision(args)
     parser.error(f"unknown command: {args.command}")
     return 2

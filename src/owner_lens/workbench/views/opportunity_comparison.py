@@ -90,3 +90,8 @@ def render(store: SqliteStore) -> None:
         file_name="opportunity-comparison.json",
         mime="application/json",
     )
+    if st.button("Record a decision from this comparison"):
+        st.session_state["decision_comparison_json"] = report.to_json()
+        st.session_state.pop("decision_selected_underwriting", None)
+        st.session_state["requested_page"] = "Decisions"
+        st.rerun()

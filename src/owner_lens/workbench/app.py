@@ -15,6 +15,7 @@ import os
 import streamlit as st
 
 from owner_lens.canonical import CanonicalDataError
+from owner_lens.decisions import DecisionError
 from owner_lens.opportunity_comparison import ComparisonError
 from owner_lens.persistence import SqliteStore
 from owner_lens.persistence.errors import PersistenceError
@@ -42,6 +43,7 @@ from owner_lens.workbench.views import (
     company,
     compare,
     data_quality,
+    decisions,
     opportunity_comparison,
     overview,
     screener,
@@ -49,7 +51,7 @@ from owner_lens.workbench.views import (
 
 __all__ = ["main"]
 
-PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison", "Data Quality")
+PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison", "Decisions", "Shadow Portfolio", "Data Quality")
 
 
 def main() -> None:
@@ -88,15 +90,20 @@ def main() -> None:
 
     page = _sidebar(db_path, raw_data_path, companies, usable)
 
-    if page == "Opportunity Comparison":
+    if page in ("Opportunity Comparison", "Decisions", "Shadow Portfolio"):
         try:
             with open_run_source() as source:
                 if not isinstance(source.store, SqliteStore):
-                    st.error("Opportunity comparison requires SQLite.")
+                    st.error("Opportunity comparison, decisions and shadow entries require SQLite.")
                     return
-                opportunity_comparison.render(source.store)
-        except (ComparisonError, PersistenceError, OSError) as exc:
-            st.error(f"Opportunity comparison could not be loaded: {exc}")
+                if page == "Opportunity Comparison":
+                    opportunity_comparison.render(source.store)
+                elif page == "Decisions":
+                    decisions.render(source.store)
+                else:
+                    decisions.render_shadow(source.store)
+        except (ComparisonError, DecisionError, PersistenceError, OSError) as exc:
+            st.error(f"{page} could not be loaded: {exc}")
         return
 
     if not companies:

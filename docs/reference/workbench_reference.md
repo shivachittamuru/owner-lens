@@ -58,6 +58,24 @@ does not edit underwritings or retrieve new evidence. See
 [Feature 9A](../feature_docs/feature_09a_opportunity_comparison.md) for the rules
 and equivalent offline CLI commands.
 
+## Decisions and Shadow Portfolio
+
+Open **Decisions** directly, use **Company > Underwriting > Record decision for
+this underwriting version**, or carry an exact comparison with **Opportunity
+Comparison > Record a decision from this comparison**. Select the exact version,
+enter an action and required investor judgment, explain considered alternatives,
+and explicitly save. Every save appends a new immutable decision; existing
+underwritings and decisions remain unchanged. History and JSON downloads are
+separate and read-only.
+
+Shadow creation is an explicit opt-in. **Shadow Portfolio** shows frozen starts
+for the focal opportunity, selected alternatives and an optional S&P 500
+placeholder. Each is an independent hypothetical $100 comparison, not a
+portfolio weight or execution. No current prices, P&L or outcome-quality
+judgments are shown. Missing benchmark prices remain explicit. See
+[Feature 9B](../feature_docs/feature_09b_decision_shadow.md) for roles, schemas,
+time safeguards and offline PowerShell commands.
+
 # Pages
 
 ## 1. Overview
