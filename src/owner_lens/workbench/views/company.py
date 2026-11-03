@@ -20,8 +20,12 @@ from owner_lens.capital_allocation import CapitalAllocationRow
 from owner_lens.capital_efficiency import CapitalEfficiencyRow
 from owner_lens.compounding import EconomicCompoundingView
 from owner_lens.owner_economics import OwnerEconomicsRow
-from owner_lens.research_context import build_research_context, scenario_rows
+from owner_lens.research_context import build_research_context
 from owner_lens.underwriting_contract import UnderwritingProjection
+from owner_lens.underwriting_investment_view import (
+    build_investment_view,
+    is_analysis_complete,
+)
 from owner_lens.workbench.data import (
     NOT_AVAILABLE,
     CompanyDetail,
@@ -48,6 +52,9 @@ def render(
     detail: CompanyDetail,
     underwriting: UnderwritingProjection | None = None,
     authoring_source: underwriting_json.SourceFactory | None = None,
+    *,
+    authoring_underwriting: UnderwritingProjection | None = None,
+    pending_underwriting: UnderwritingProjection | None = None,
 ) -> None:
     """Render one company's research page."""
     _header(detail)
@@ -74,20 +81,30 @@ def render(
             "bucket and never sets one."
         )
     with beliefs:
-        if underwriting is not None and authoring_source is not None:
+        authoring_projection = authoring_underwriting or underwriting
+        if authoring_projection is not None and authoring_source is not None:
             underwriting_json.render(
-                detail.company.ticker, underwriting, authoring_source
+                detail.company.ticker, authoring_projection, authoring_source
             )
-        _underwriting(underwriting)
+        _underwriting(underwriting, pending_underwriting)
         if (
             underwriting is not None and underwriting.record is not None
-            and st.button("Record decision for this underwriting version")
+            and underwriting.snapshot is not None
         ):
-            record = underwriting.record
-            st.session_state["decision_requested_underwriting"] = f"{record.ticker}:{record.version}"
-            st.session_state.pop("decision_comparison_json", None)
-            st.session_state["requested_page"] = "Decisions"
-            st.rerun()
+            actions = st.columns(2)
+            if actions[0].button(
+                f"Record decision on v{underwriting.record.version}"
+            ):
+                record = underwriting.record
+                st.session_state["decision_requested_underwriting"] = (
+                    f"{record.ticker}:{record.version}"
+                )
+                st.session_state.pop("decision_comparison_json", None)
+                st.session_state["requested_page"] = "Decisions"
+                st.rerun()
+            if actions[1].button("Compare underwriting versions"):
+                st.session_state["requested_page"] = "Opportunity Comparison"
+                st.rerun()
     context = build_research_context(detail, underwriting)
     if st.button("Copy Research Context"):
         st.session_state["research_context_open"] = True
@@ -103,144 +120,251 @@ def render(
         _fmp_evidence(detail)
 
 
-def _underwriting(projection: UnderwritingProjection | None) -> None:
-    st.subheader("Underwriting")
+def _underwriting(
+    projection: UnderwritingProjection | None,
+    pending: UnderwritingProjection | None = None,
+) -> None:
+    st.subheader("Investment View")
     if projection is None:
         st.info("Underwriting unavailable for this store.")
         return
     if projection.record is None or projection.snapshot is None:
         st.info("No immutable underwriting record. No values or assumptions are generated.")
         return
-    record, snapshot, summary = projection.record, projection.snapshot, projection.summary
-    is_complete = bool(
-        projection.valuation_json
-        and summary
-        and projection.variant
-        and projection.challenger_runs
+    investment = build_investment_view(projection)
+    complete = is_analysis_complete(projection)
+    status = "Analysis complete" if complete else "Analysis incomplete"
+    st.caption(
+        f"{investment.ticker} | underwriting v{investment.version} | "
+        f"as of {investment.as_of_date} | {status}"
     )
-    status = "ANALYSIS COMPLETE" if is_complete else "ANALYSIS INCOMPLETE"
-    st.caption(f"Underwriting v{record.version} | as of {record.as_of_date} | {status}")
-    evidence = json.loads(snapshot.evidence_json)
-    st.caption("Underwriting evidence provider: " + str(evidence.get("provider", NOT_AVAILABLE)))
-    price = evidence.get("eod_price", {}).get("value")
-    st.caption(f"Frozen market price FACT: {format_per_share(price['close'] if price else None)} | "
-               f"market date: {price['market_date'] if price else NOT_AVAILABLE}")
-    policy = snapshot.manual.investor_policy
-    columns = st.columns(5)
-    columns[0].metric("Classification", summary.classification if summary else NOT_AVAILABLE)
-    columns[1].metric(
-        "Expected terminal value/share",
+    if pending is not None and pending.record is not None:
+        st.info(
+            f"Newer v{pending.record.version} has incomplete analysis. "
+            f"This view stays on completed v{investment.version}; use its Retry "
+            "analysis action above to resume the newer version."
+        )
+
+    identity = st.columns(5)
+    identity[0].metric("Frozen price", format_per_share(investment.current_price))
+    identity[1].metric("Market date", investment.market_date or NOT_AVAILABLE)
+    identity[2].metric("Frozen priority", investment.frozen_priority or NOT_AVAILABLE)
+    identity[3].metric("Frozen setup", investment.frozen_setup or NOT_AVAILABLE)
+    identity[4].metric("Frozen coverage", investment.frozen_coverage or NOT_AVAILABLE)
+
+    returns = st.columns(5)
+    returns[0].metric("Expected return", format_ratio(investment.expected_cagr))
+    returns[1].metric("Required return", format_ratio(investment.required_return))
+    returns[2].metric("Spread vs hurdle", format_ratio(investment.return_spread))
+    returns[3].metric("Assessment", investment.classification or NOT_AVAILABLE)
+    returns[4].metric(
+        "Expected value/share",
         format_per_share(
-            summary.expected_terminal_value_per_share if summary else None
+            projection.summary.expected_terminal_value_per_share
+            if projection.summary
+            else None
         ),
     )
-    columns[2].metric("Expected 5Y CAGR", format_ratio(summary.expected_5y_cagr if summary else None))
-    columns[3].metric("Required return", format_ratio(
-        summary.investor_policy.required_return if summary else policy.required_return if policy else None))
-    columns[4].metric("Spread vs hurdle", format_ratio(summary.return_spread if summary else None))
-    st.caption("CALCULATION outcomes; JUDGMENT hurdle/probabilities. Conditional assessment, not a buy/sell recommendation.")
-    st.caption("Variant view: " + (projection.variant.conclusion if projection.variant else NOT_AVAILABLE))
-    if projection.variant and projection.variant.drivers:
-        most_sensitive = max(
-            projection.variant.drivers,
-            key=lambda item: abs(item.sensitivity.cagr_delta),
+    st.info(investment.key_takeaway)
+    st.caption(
+        "Frozen market evidence and saved calculations; expected outcomes depend on "
+        "manual assumptions and probabilities. Not a buy/sell recommendation."
+    )
+
+    st.subheader("Scenario setup and outcomes")
+    if investment.scenarios:
+        st.dataframe(
+            frame([
+                {
+                    "Scenario": row.name,
+                    "Probability [JUDGMENT]": format_ratio(row.probability),
+                    "Revenue CAGR [ASSUMPTION]": format_ratio(row.revenue_cagr),
+                    "Year-5 FCF margin [ASSUMPTION]": format_ratio(row.fcf_margin_year5),
+                    "Share-count CAGR [ASSUMPTION]": format_ratio(row.share_count_cagr),
+                    "Terminal FCF multiple [ASSUMPTION]": f"{row.terminal_fcf_multiple:.1f}x",
+                    "Value/share [CALCULATION]": format_per_share(row.value_per_share),
+                    "Implied CAGR [CALCULATION]": format_ratio(row.implied_cagr),
+                }
+                for row in investment.scenarios
+            ]),
+            hide_index=True,
+            width="stretch",
         )
-        st.caption(
-            "Most sensitive variable: "
-            f"{most_sensitive.driver} "
-            f"({most_sensitive.sensitivity.band}, "
-            f"{format_ratio(most_sensitive.sensitivity.cagr_delta)} CAGR effect)"
+    else:
+        st.info("Scenario assumptions are unavailable for this version.")
+    if investment.probability_rationale:
+        st.caption("Probability rationale [JUDGMENT]: " + investment.probability_rationale)
+
+    st.subheader("Why it may work")
+    st.write(f"Key uncertainty: {investment.biggest_uncertainty}")
+    st.write(f"Most important variable: {investment.most_important_variable}")
+    for evidence_item in investment.business_drivers[:2]:
+        st.write(f"Driver: {evidence_item.text}")
+    for evidence_item in investment.supporting_evidence[:2]:
+        st.write(f"Supporting evidence: {evidence_item.text}")
+    if not investment.business_drivers and not investment.supporting_evidence:
+        st.caption("No supporting case recorded; missing information is not inferred.")
+
+    st.subheader("What could break it")
+    st.markdown("**Dependencies — what must be true**")
+    for dependency in investment.dependencies[:3]:
+        st.write(dependency)
+    if not investment.dependencies:
+        st.caption("No dependencies recorded.")
+    st.markdown("**Thesis breakers**")
+    for breaker in investment.breakers[:3]:
+        st.write(breaker)
+    if not investment.breakers:
+        st.caption("No thesis breakers recorded.")
+
+    st.subheader("Market variant and key sensitivity")
+    if investment.variant_conclusion:
+        st.write(investment.variant_conclusion.replace("_", " ").capitalize())
+    else:
+        st.caption("No saved variant comparison is available.")
+    if investment.most_sensitive_driver:
+        driver = investment.most_sensitive_driver
+        st.write(
+            f"Most sensitive variable: {driver.name} "
+            f"({driver.sensitivity_band}; "
+            f"{format_ratio(driver.cagr_delta)} CAGR effect for the saved "
+            f"{_format_driver_perturbation(driver.name, driver.perturbation)})."
         )
-    if not is_complete:
-        st.info("Analysis is incomplete for this version. Use Retry analysis above to resume it.")
-    st.caption("Probability rationale [JUDGMENT]: " + (
-        snapshot.manual.probability_distribution.rationale
-        if snapshot.manual.probability_distribution and snapshot.manual.probability_distribution.rationale
-        else NOT_AVAILABLE))
-    st.subheader("Bear / Base / Bull")
-    rows = scenario_rows(projection)
-    for row in rows:
-        row["Probability [JUDGMENT]"] = format_ratio(row["Probability [JUDGMENT]"])
-        row["Value/share [CALCULATION]"] = format_per_share(row["Value/share [CALCULATION]"])
-        row["Implied CAGR [CALCULATION]"] = format_ratio(row["Implied CAGR [CALCULATION]"])
-    if rows:
-        st.dataframe(frame(rows), width="stretch")
     else:
-        st.info("No approved scenario assumptions.")
-    st.subheader("What drives the result")
-    st.write("Biggest uncertainty [JUDGMENT]: " + snapshot.manual.thesis.biggest_uncertainty)
-    st.write("Most important variable [JUDGMENT]: " + snapshot.manual.thesis.most_important_variable)
-    if projection.variant:
-        st.dataframe(frame([{
-            "Driver": driver.driver, "Sensitivity": driver.sensitivity.band,
-            "Perturbation": driver.sensitivity.perturbation,
-            "CAGR effect": format_ratio(driver.sensitivity.cagr_delta),
-            "Consensus": format_ratio(driver.consensus.value),
-            "Delta": format_ratio(driver.absolute_delta),
-            "Rationale [JUDGMENT]": driver.rationale.text if driver.rationale else NOT_AVAILABLE,
-        } for driver in sorted(projection.variant.drivers, key=lambda item: abs(item.sensitivity.cagr_delta), reverse=True)]),
-            width="stretch")
+        st.caption("No saved sensitivity result is available.")
+
+    st.subheader("Open challenger questions")
+    if investment.challenger is None:
+        st.caption("No saved challenger run; this view does not run one.")
     else:
-        st.info("No projected variant or sensitivity outputs. No valuation is run by this page.")
-    with st.expander("Thesis and evidence"):
-        manual = snapshot.manual
-        for label, statements in (("Key business/value drivers", manual.business_drivers),
-                                  ("Supporting evidence", manual.supporting_evidence),
-                                  ("Disconfirming evidence", manual.disconfirming_evidence)):
-            st.markdown(f"**{label}**")
-            if not statements:
-                st.info("None recorded; evidence is missing, not assumed.")
-            for statement in statements:
-                st.write(f"[{statement.category}] {statement.text}")
-                if statement.evidence_date:
-                    st.caption("Evidence date: " + statement.evidence_date)
-                for reference in statement.references:
-                    st.caption(f"Source: {reference.title or NOT_AVAILABLE} | {reference.observed_at or NOT_AVAILABLE}")
-        for label, texts, conditions in (
-            ("Dependencies / what must be true", manual.thesis.dependencies, manual.thesis.monitoring_dependencies),
-            ("Thesis breakers", manual.thesis.breakers, manual.thesis.monitoring_breakers),
+        if investment.challenger.strongest_argument_against:
+            st.write(investment.challenger.strongest_argument_against)
+        for question in investment.challenger.unresolved_questions[:3]:
+            st.write(f"- {question}")
+        if not investment.challenger.unresolved_questions:
+            st.caption("No unresolved challenger questions were saved.")
+
+    with st.expander("Variant drivers and sensitivity"):
+        if investment.variant_drivers:
+            st.dataframe(
+                frame([
+                    {
+                        "Driver": item.name,
+                        "Direction vs expectations": item.direction,
+                        "Underwriting assumption": (
+                            _format_driver_value(item.name, item.assumption)
+                        ),
+                        "Consensus": (
+                            _format_driver_value(item.name, item.consensus)
+                            if item.consensus is not None
+                            else NOT_AVAILABLE
+                        ),
+                        "Sensitivity": item.sensitivity_band,
+                        "Perturbation": _format_driver_perturbation(
+                            item.name, item.perturbation
+                        ),
+                        "CAGR effect": format_ratio(item.cagr_delta),
+                        "Rationale [JUDGMENT]": item.rationale or NOT_AVAILABLE,
+                    }
+                    for item in sorted(
+                        investment.variant_drivers,
+                        key=lambda item: abs(item.cagr_delta),
+                        reverse=True,
+                    )
+                ]),
+                hide_index=True,
+                width="stretch",
+            )
+        else:
+            st.info("No saved variant or sensitivity outputs.")
+
+    with st.expander("Supporting and disconfirming evidence"):
+        for label, items in (
+            ("Business drivers", investment.business_drivers),
+            ("Supporting evidence", investment.supporting_evidence),
+            ("Disconfirming evidence", investment.disconfirming_evidence),
         ):
-            st.markdown(f"**{label} [JUDGMENT]**")
-            if conditions:
-                for condition in conditions:
-                    st.write(condition.statement)
-                    st.caption(f"Observable: {condition.observable or NOT_AVAILABLE} | "
-                               f"Condition: {condition.operator or ''} {condition.threshold if condition.threshold is not None else NOT_AVAILABLE} {condition.unit or ''} | "
-                               f"Monitor: {condition.cadence or condition.monitoring_cadence or condition.monitoring_date or NOT_AVAILABLE}")
-                    if condition.source_family:
-                        st.caption("Source family: " + condition.source_family)
-                    st.caption("Sources: " + (", ".join(reference.title or NOT_AVAILABLE for reference in condition.sources) or NOT_AVAILABLE))
-            else:
-                for text in texts:
-                    st.write(text)
-        st.markdown("**Next evidence to collect [JUDGMENT]**")
-        for text in manual.thesis.next_evidence_to_collect:
-            st.write(text)
-    with st.expander("Challenger [JUDGMENT]"):
+            st.markdown(f"**{label}**")
+            if not items:
+                st.caption("None recorded.")
+            for item in items:
+                st.write(f"[{item.category}] {item.text}")
+                if item.evidence_date:
+                    st.caption(f"Evidence date: {item.evidence_date}")
+                for reference in item.references:
+                    st.caption("Source: " + reference)
+        st.markdown("**Historical economic context [FACT]**")
+        if investment.historical_metrics:
+            st.dataframe(
+                frame([
+                    {
+                        "Metric": item.name,
+                        "Latest fiscal year": item.fiscal_year or NOT_AVAILABLE,
+                        "Historical value": format_ratio(item.value)
+                        if item.unit == "ratio"
+                        else item.value,
+                    }
+                    for item in investment.historical_metrics
+                ]),
+                hide_index=True,
+                width="stretch",
+            )
+        else:
+            st.caption("No frozen historical base rates are available.")
+
+    with st.expander("Full challenger output"):
         if not projection.challenger_runs:
-            st.info("No saved challenger run. The UI never runs the challenger.")
+            st.info("No saved challenger run.")
         else:
             run = projection.challenger_runs[-1]
-            st.caption(f"Saved advisory run: {run.created_at} | underwriting v{run.underwriting_version}")
+            st.caption(
+                f"Saved advisory run: {run.created_at} | "
+                f"underwriting v{run.underwriting_version}"
+            )
             output = json.loads(run.output_json)
-            for field in ("overall_assessment", "strongest_argument_against", "fragile_assumptions",
-                          "probability_challenges", "missing_evidence", "variant_view_challenge", "questions_to_resolve"):
+            for field, value in output.items():
                 st.markdown(f"**{field.replace('_', ' ').capitalize()}**")
-                values = output[field] if isinstance(output[field], list) else [output[field]]
+                values = value if isinstance(value, list) else [value]
                 if not values:
                     st.caption("None recorded.")
                 for finding in values:
-                    st.write(finding["text"])
-                    if not finding["evidence_available"]:
+                    if not isinstance(finding, dict):
+                        st.write(finding)
+                        continue
+                    st.write(finding.get("text", NOT_AVAILABLE))
+                    if not finding.get("evidence_available", False):
                         st.caption("Evidence unavailable.")
-                    st.caption("References: " + ", ".join(item["path"] for item in finding["references"]))
-    with st.expander("Missing evidence and outputs"):
-        if not projection.missing_evidence:
+                    references = finding.get("references", [])
+                    if references:
+                        st.caption(
+                            "References: "
+                            + ", ".join(item.get("path", NOT_AVAILABLE) for item in references)
+                        )
+
+    with st.expander("Analysis gaps and provenance"):
+        if not investment.missing:
             st.caption("No explicit gaps reported; this is not an evidence-quality certification.")
-        for missing in projection.missing_evidence:
-            st.write(f"{missing.section}: {missing.reason}")
+        for section, reason in investment.missing:
+            st.write(f"{section}: {reason}")
+        st.caption(f"Provider: {investment.provider or NOT_AVAILABLE}")
+        st.caption(f"Record ID: {investment.record_id}")
+        st.caption(f"Content hash: {investment.content_hash}")
+        if projection.snapshot:
+            evidence = json.loads(projection.snapshot.evidence_json)
+            st.json(evidence)
     with st.expander("View Full JSON"):
-        st.code(record.snapshot_json, language="json")
+        st.code(investment.snapshot_json, language="json")
+
+
+def _format_driver_value(name: str, value: float) -> str:
+    return f"{value:.1f}x" if name == "terminal_fcf_multiple" else format_ratio(value)
+
+
+def _format_driver_perturbation(name: str, value: float) -> str:
+    if name == "terminal_fcf_multiple":
+        return f"{value:+g}x"
+    points = value * 100
+    return f"{points:+g} percentage point{'s' if abs(points) != 1 else ''}"
 
 
 def _fmp_evidence(detail: CompanyDetail) -> None:

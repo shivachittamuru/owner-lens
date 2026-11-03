@@ -20,7 +20,7 @@ from owner_lens.opportunity_comparison import ComparisonError
 from owner_lens.persistence import SqliteStore
 from owner_lens.persistence.errors import PersistenceError
 from owner_lens.underwriting import UnderwritingError
-from owner_lens.underwriting_contract import project_underwriting
+from owner_lens.underwriting_investment_view import select_investment_projection
 from owner_lens.underwriting_summary import SummaryError
 from owner_lens.variant import VariantError
 from owner_lens.workbench.cache import (
@@ -257,12 +257,26 @@ def _company_page(
     if detail is not None:
         try:
             with open_run_source() as source:
-                projection = (project_underwriting(source.store, selected.ticker)
-                              if isinstance(source.store, SqliteStore) else None)
+                if isinstance(source.store, SqliteStore):
+                    projection, latest_projection = select_investment_projection(
+                        source.store, selected.ticker
+                    )
+                else:
+                    projection, latest_projection = None, None
         except (UnderwritingError, SummaryError, VariantError, PersistenceError, OSError) as exc:
             st.error(f"Underwriting could not be loaded: {exc}")
             return
-        company.render(detail, projection, authoring_source=open_run_source)
+        company.render(
+            detail,
+            projection,
+            authoring_source=open_run_source,
+            authoring_underwriting=latest_projection,
+            pending_underwriting=latest_projection
+            if latest_projection is not None
+            and projection is not None
+            and latest_projection.record != projection.record
+            else None,
+        )
     else:
         st.title(f"Company: {selected.ticker}")
 

@@ -103,6 +103,25 @@ def test_the_company_page_shows_a_coverage_limited_company_honestly(
     assert app.info, "a partial company must explain what is not evaluable"
 
 
+def test_company_underwriting_view_is_decision_oriented_and_read_only(
+    store_path: Path,
+) -> None:
+    store = SqliteStore(store_path)
+    store.initialize()
+    before = store.list_underwriting("ADBE")
+    store.close()
+
+    app = _run("Company", selected_ticker="ADBE")
+    _assert_clean(app, "Company")
+
+    assert any(item.value == "Investment View" for item in app.subheader)
+    assert any("No immutable underwriting record" in item.value for item in app.info)
+    store = SqliteStore(store_path)
+    after = store.list_underwriting("ADBE")
+    store.close()
+    assert after == before == ()
+
+
 def test_the_compare_page_requires_at_least_two_companies(store_path: Path) -> None:
     app = _run("Compare", compare_tickers=["ADBE"])
     _assert_clean(app, "Compare")

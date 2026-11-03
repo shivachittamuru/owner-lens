@@ -11,8 +11,10 @@ Launch the workbench against your persisted FMP store:
 uv run owner-lens workbench --provider fmp
 ```
 
-Select Company, choose a ticker and open Underwriting. The latest saved
-underwriting is the default view. Select **New Underwriting**, paste an
+Select Company, choose a ticker and open Underwriting. The latest completed
+underwriting is the default Investment View. If a newer version is incomplete,
+it remains available for exact-version retry without displacing that view.
+Select **New Underwriting**, paste an
 Authoring v2 JSON document and choose **Validate + Preview**.
 
 Validation uses the existing Authoring v2 parser, semantic checks and frozen
@@ -77,8 +79,9 @@ the full frozen snapshot remain available from the Underwriting page.
 4. Select **Commit & Analyze** once and confirm one immutable version exists.
 5. Confirm valuation, expected return, variant/sensitivity and challenger
    complete, then review the result on the same page.
-6. Reopen ADBE and confirm the latest completed version is the default.
-7. Verify full JSON and history remain accessible.
+6. Reopen ADBE and confirm the latest completed version is the default, even
+   when a newer incomplete version exists.
+7. Verify full JSON, history and supporting detail remain accessible.
 8. If practical, trigger a downstream failure in a disposable test store and
    confirm retry resumes the same version without creating another record.
 

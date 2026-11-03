@@ -196,7 +196,7 @@ def test_json_first_workbench_commits_and_analyzes_once(source: WorkbenchSource)
     assert source.store.get_valuation(record.underwriting_id, MODEL_VERSION) is not None
     assert len(source.store.list_challenger_runs(record.underwriting_id)) == 1
     assert any("Underwriting v1 committed successfully" in item.value for item in app.success)
-    assert any("ANALYSIS COMPLETE" in item.value for item in app.caption)
+    assert any("Analysis complete" in item.value for item in app.caption)
     assert not any(item.label == "Review Draft" for item in app.button)
     assert not any(item.label == "Create Immutable Underwriting Version" for item in app.button)
 

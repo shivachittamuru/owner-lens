@@ -77,11 +77,11 @@ def test_complete_company_projection_values_without_ui_recomputation(
     before = source.store.list_underwriting("ADBE")
     app = render_page(detail, projection)
     assert (
-        next(item.value for item in app.metric if item.label == "Classification")
+        next(item.value for item in app.metric if item.label == "Assessment")
         == projection.summary.classification
     )
-    assert any("Underwriting v1" in item.value for item in app.caption)
-    assert any("Frozen market price FACT" in item.value for item in app.caption)
+    assert any("underwriting v1" in item.value for item in app.caption)
+    assert any(item.label == "Frozen price" for item in app.metric)
     table = next(
         item.value for item in app.dataframe if "Scenario" in item.value.columns
     )
@@ -108,8 +108,8 @@ def test_company_empty_underwriting_and_no_saved_challenger(
     assert any("No immutable underwriting record" in item.value for item in app.info)
     detail, projection = inputs(source, challenger=False)
     app = render_page(detail, projection)
-    assert any("No saved challenger run" in item.value for item in app.info)
-    assert any("None recorded; evidence is missing" in item.value for item in app.info)
+    assert any("No saved challenger run" in item.value for item in app.caption)
+    assert any("None recorded." in item.value for item in app.caption)
 
 
 def test_deterministic_markdown_json_explicit_semantics_and_sanitization(
@@ -177,7 +177,7 @@ def test_export_without_underwriting_or_saved_values(source: WorkbenchSource) ->
     assert "No saved valuation" in context.markdown
     app = render_page(detail, projection)
     assert any(
-        "Analysis is incomplete for this version" in item.value for item in app.info
+        "Analysis incomplete" in item.value for item in app.caption
     )
     assert any(item.label == "View Full JSON" for item in app.get("expander"))
     assert (
@@ -198,10 +198,10 @@ def test_application_company_route_loads_current_projection(
     app.run()
     assert not app.exception and not app.error
     assert (
-        next(item.value for item in app.metric if item.label == "Classification")
+        next(item.value for item in app.metric if item.label == "Assessment")
         == projection.summary.classification
     )
-    assert any("Underwriting v1" in item.value for item in app.caption)
+    assert any("underwriting v1" in item.value for item in app.caption)
 
 
 @pytest.mark.parametrize("period,limit", [("annual", 5), ("quarterly", 4)])

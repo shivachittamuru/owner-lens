@@ -6,19 +6,26 @@ description: "Read saved underwriting on the Company page and export compact res
 ## Company page
 
 The existing Company page now has Fundamentals, Screening and Underwriting tabs.
-The Underwriting tab uses the latest frozen
-[8F1 domain projection](feature_08f1_underwriting_contract.md), keeping financial
-logic outside Streamlit. It displays:
+The Underwriting tab uses a read-only decision projection over the latest
+completed [8F1 domain projection](feature_08f1_underwriting_contract.md),
+keeping financial logic outside Streamlit. The default hierarchy shows the
+frozen price and screening context, expected return versus the explicit hurdle,
+Bear/Base/Bull assumptions and saved outcomes, the supporting case, key
+uncertainty, dependencies, thesis breakers, variant status and the most
+sensitive variable. The saved challenger's strongest counterargument and
+unresolved questions stay visible.
 
-* Version, as-of, frozen market price/date and conditional classification.
-* Expected five-year CAGR, explicit hurdle, spread and variant-view status.
-* Bear/Base/Bull probabilities, saved terminal value/share and implied CAGR.
-* Local BASE sensitivities, recorded disagreement rationales and uncertainty.
-* Business drivers, supporting/disconfirming evidence, dependencies, breakers
-  and next evidence in an expandable section.
-* The latest saved challenger assessment, challenges, questions and field
-  references in a separate expander.
-* Explicit missing evidence, unavailable outputs and monitoring metadata.
+Supporting and disconfirming evidence, historical base rates, full sensitivity
+detail, full challenger output, missing items, frozen evidence provenance and
+the full snapshot are available in expanders. **Record decision** and
+**Compare underwriting versions** route to the existing workflows.
+
+When a newer version is incomplete, the page keeps the latest completed version
+in the Investment View and exposes the newer version through the existing
+exact-version retry controls. If no completed version exists, the incomplete
+version remains visible with unavailable values left as N/A. Frozen Feature 7
+context is shown when present; older snapshots without it remain N/A rather
+than being recomputed from current screening.
 
 An absent record, saved valuation or challenger is reported as absent. Reading
 the saved projection does not retrieve evidence. The separate
@@ -31,9 +38,10 @@ visible. Existing quarterly, EOD and analyst evidence sections stay separate
 from annual screening.
 
 The projection is loaded for the selected Company page, not for the whole
-universe. It reads current persisted versions/runs so revisions are visible on
-rerun. Domain validation and deterministic derivation reuse the frozen inputs;
-no new financial arithmetic lives in the rendering layer.
+universe. It reads persisted versions and runs without retrieval or writes, so
+opening the view does not create records or analysis. Domain validation and
+deterministic derivation reuse frozen inputs; no new financial arithmetic lives
+in the rendering layer.
 
 ## Copy Research Context
 
@@ -93,12 +101,15 @@ uv run owner-lens workbench --provider fmp
 
 Choose Company and ADBE, then inspect:
 
-* Underwriting version/as-of and frozen price/date match the CLI.
-* Probabilities and Bear/Base/Bull values match the saved version.
-* Expected CAGR, hurdle, spread and classification match the summary.
+* The Investment View displays frozen context and the exact underwriting version.
+* Probabilities, assumptions and Bear/Base/Bull values match the saved version.
+* Expected CAGR, hurdle, spread and classification match the saved summary.
+* Supporting case, uncertainty, dependencies and thesis breakers remain concise.
 * Missing evidence is not converted to zero or invented support.
-* Challenger is the saved advisory run; reading the page creates no new run.
-* Structured dependencies/breakers, uncertainty and variant rationale are visible.
+* Variant status and sensitivity use the saved report; no edge is inferred.
+* Challenger questions are from the saved advisory run; reading creates no run.
+* A newer incomplete version does not replace the latest completed view and can
+  still be retried.
 * Copy Research Context includes the relevant sections and distinguishes
   current evidence from frozen underwriting.
 * Downloaded JSON retains missing values and omits internal paths/raw provenance.
