@@ -307,13 +307,13 @@ def _underwriting(
                 frame([
                     {
                         "Metric": item.name,
-                        "Latest fiscal year": item.fiscal_year or NOT_AVAILABLE,
+                        "Latest fiscal year": item.fiscal_year,
                         "Historical value": format_ratio(item.value)
                         if item.unit == "ratio"
-                        else item.value,
+                        else str(item.value) if item.value is not None else NOT_AVAILABLE,
                     }
                     for item in investment.historical_metrics
-                ]),
+                ]).style.format(na_rep=NOT_AVAILABLE),
                 hide_index=True,
                 width="stretch",
             )
@@ -384,7 +384,10 @@ def _fmp_evidence(detail: CompanyDetail) -> None:
         "Reported FACT evidence only. Not used in annual economics or screening."
     )
     if detail.quarterly_evidence:
-        st.dataframe(frame(list(detail.quarterly_evidence)), width="stretch")
+        st.dataframe(
+            frame(list(detail.quarterly_evidence)).style.format(na_rep=NOT_AVAILABLE),
+            width="stretch",
+        )
     else:
         st.info("No persisted quarterly statement rows.")
     st.subheader("Latest EOD price")
@@ -392,7 +395,10 @@ def _fmp_evidence(detail: CompanyDetail) -> None:
         "Market evidence, not a valuation or screening input. Currency is not inferred."
     )
     if detail.eod_prices:
-        st.dataframe(frame(list(detail.eod_prices)), width="stretch")
+        st.dataframe(
+            frame(list(detail.eod_prices)).style.format(na_rep=NOT_AVAILABLE),
+            width="stretch",
+        )
     else:
         st.info("No reliable persisted EOD close.")
     st.subheader("Market Expectations")
@@ -400,7 +406,10 @@ def _fmp_evidence(detail: CompanyDetail) -> None:
         "EXPECTATION: analyst consensus, not reported facts or OwnerLens assumptions."
     )
     if detail.market_expectations:
-        st.dataframe(frame(list(detail.market_expectations)), width="stretch")
+        st.dataframe(
+            frame(list(detail.market_expectations)).style.format(na_rep=NOT_AVAILABLE),
+            width="stretch",
+        )
     else:
         st.info("No persisted analyst estimates; check entitlement and dataset status.")
     with st.expander("Provider provenance and dataset status"):

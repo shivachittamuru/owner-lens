@@ -18,13 +18,22 @@ It does not retrieve current market prices or calculate returns.
 The shared domain is [`decisions.py`](../../src/owner_lens/decisions.py).
 The CLI and Workbench use the same validation and append-only storage boundary.
 
+Opportunity Comparison also offers an inline **Evaluate Allocation -> Record
+Decision** workflow. It carries the exact comparison and alternatives, calls
+existing 9C calculations, then requires explicit investor judgment and approval.
+When sizing is available, a saved 9C analysis links to the immutable decision;
+intended weight is retained there, not added to the 9B schema. This path creates
+no shadow or actual position. WATCH/PASS do not require portfolio context.
+See the [contextual workflow and manual steps](feature_09c_portfolio_sizing.md#contextual-comparison-to-decision-workflow).
+The standalone decision/shadow controls remain unchanged.
+
 ## Decision-record schema
 
 `DecisionSnapshot` is a frozen domain value serialized as canonical JSON:
 
 | Field                | Meaning                                                         |
 |----------------------|-----------------------------------------------------------------|
-| `decision_id`        | New UUID for every explicit save                                 |
+| `decision_id`        | New UUID per approval; contextual retries reuse the approval UUID |
 | `recorded_at`        | Time this record was actually created, UTC                       |
 | `decision_at`        | Investor-declared decision timestamp, UTC                        |
 | `as_of_date`         | Explicit information cutoff date; defaults to decision UTC date  |

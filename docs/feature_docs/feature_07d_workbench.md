@@ -59,6 +59,13 @@ of the workbench is unit-testable without a browser, and a script or notebook
 can use the same loaders. A test asserts that importing `data.py` with Streamlit
 blocked still succeeds.
 
+Presentation DataFrames retain numeric columns and nullable missing values for
+Arrow serialization. Evidence tables use display styling to show numeric nulls
+as `N/A`, rather than inserting strings into financial columns. Mixed-unit
+historical summaries use an explicit text-only value projection. These rendering
+choices do not alter AVAILABLE, UNSUPPORTED, INVALID or STRUCTURALLY_ABSENT
+coverage states. Malformed financial strings are not coerced into nulls.
+
 ## How to launch
 
 ```powershell

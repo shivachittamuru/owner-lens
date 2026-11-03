@@ -21,6 +21,125 @@ and shadow entries. These are context only: `ACTUAL_CHOICE`, including WATCH,
 PASS and EXIT, never establishes an executed position. Only manually supplied
 holdings establish current weights.
 
+## Contextual comparison-to-decision workflow
+
+The Opportunity Comparison view now connects existing 9A, 9C and 9B services:
+**Compare -> Evaluate Allocation -> Record Decision**. Previously, investors
+changed pages twice, repeated exact-version selections, supplied portfolio IDs
+and policy JSON, then reconstructed alternatives in the decision form. The normal
+path carries those references automatically. Investor judgments are never filled
+from an attractive return classification.
+
+The read-only [workflow service](../../src/owner_lens/allocation_workflow.py)
+discovers snapshots and distinct explicit policies already embedded in saved
+9C analyses. There is no separate policy registry. Snapshot candidates default
+to the latest as-of date, then creation date; policies default to their latest
+saved analysis. Dates, UUIDs, policy source-analysis IDs and content hashes remain
+visible. A saved policy's timestamp is not an inferred effective date.
+
+The existing snapshot schema does not distinguish actual, synthetic or test
+portfolios. Every snapshot therefore requires explicit investor confirmation
+of provenance and date before assessment. Notes and holdings are inspectable.
+Calendar age and an unverified-currentness warning are always shown; no new
+freshness threshold or assertion of live holdings is introduced. Shadow records
+are never a discovery source or evidence of actual execution.
+
+Once confirmed, the existing 9C service calculates current weight, cash,
+exposures, policy ceilings, quality caps, Bear contribution, incremental capacity
+and binding constraints automatically. Missing cash, sector or thesis information
+retains the existing conservative 9C limitations; nothing is invented. Optional
+exposure context uses the existing explicit 9C JSON format. A held company's
+context must agree with its snapshot.
+
+The main view calls the maximum a **Policy ceiling**, not a target or
+recommendation. Intended incremental weight is an optional investor-entered
+decimal ratio, evaluated by 9C rather than by Streamlit. Zero remains valid;
+a non-loss modeled Bear outcome is not a real-world loss guarantee. Frozen
+underwriting price/date and hurdle remain unchanged and are not represented as
+actionable at today's price.
+
+If no portfolio or saved policy exists, allocation is explicitly unavailable.
+The existing portfolio/sizing setup is available in an expander; an explicit
+policy can also be supplied without creating a registry entry. WATCH/PASS and
+other investor decisions remain available without sizing. An intended allocation
+cannot be retained without a usable assessment.
+
+**Record Decision** is the sole approval boundary for decision persistence.
+Action, confidence, rationale, primary reason, risk, change condition and each
+alternative's disposition/reason require investor input. The existing immutable
+9B decision copies exact chosen/alternative identities and comparison context.
+When available, an immutable 9C analysis links back to that decision and retains
+the intended increment, policy, portfolio, constraints and warnings. No decision
+schema, portfolio snapshot or underwriting is rewritten. No shadow or actual
+position, trade or verified execution is created by this workflow.
+
+The existing stores own separate transactions. A locked approval retains a
+stable decision UUID, timestamp, judgment and assessment in Workbench session
+state. If decision creation succeeds but sizing persistence or UI rendering
+fails, **Retry Record Decision** resumes the same approval instead of appending
+another decision. Inputs remain locked until completion. Existing matching
+sizing links are reused and mismatched retries fail explicitly. A complete
+browser-session loss cannot retain an uncommitted sizing attachment: inspect
+the standalone decision/sizing histories before starting a new approval.
+
+After save, the compact view shows judgment, frozen return/hurdle/price,
+alternatives, intended increment versus capacity and binding constraints,
+record timestamp and IDs. JSON and full provenance remain in expanders.
+
+### Manual contextual validation
+
+No live validation was performed. Use existing local records, not sample
+holdings passed off as actual holdings. With Workbench already running:
+
+1. Note the existing underwriting, portfolio, sizing, decision and shadow
+   histories and their identities in the standalone views.
+2. Open **Opportunity Comparison**. Select completed ADBE, NOW, MSFT or GOOGL
+   underwritings that actually exist in your store.
+3. Choose one displayed version under **Opportunity to evaluate in portfolio
+   context**, then choose **Evaluate Allocation**.
+4. Expand **Exact comparison and alternative identities**. Check chosen and
+   alternative UUID/version/hash, frozen price/date, expected CAGR and hurdle
+   against the comparison. No newer version should replace them.
+5. Inspect the default portfolio's as-of date, calendar age, creation date,
+   UUID, notes and holdings. Inspect the policy's source-analysis ID, saved
+   timestamp and hash. Select another saved candidate if appropriate.
+6. Confirm provenance/date only if appropriate for the intended assessment.
+   Check cash, current weight, maximum permitted weight, incremental capacity,
+   binding constraints and warnings. Expand exposures and policy ceilings.
+   Missing cash must not imply deployable cash.
+7. Optionally enter an intended incremental weight, for example `0.01` only
+   if that is your own judgment, not a suggested allocation. Confirm that its
+   assessment and any capacity warning update without saving anything.
+8. Enter your own action, confidence, rationale, primary reason, risk, change
+   condition and disposition/reason for every alternative. Action must initially
+   be unselected, regardless of return classification.
+9. Choose **Record Decision** once. Check the compact receipt and full decision
+   JSON. Confirm the linked sizing analysis retains the intended weight,
+   portfolio, policy and the same decision/alternative identities.
+10. Rerun the view. Decision/sizing counts must not increase. In a controlled
+    persistence failure, **Retry Record Decision** must reuse the same decision
+    ID; it must not silently report successful sizing before the link is saved.
+11. Use **Back to comparison** to recover your selections. Use the receipt's
+    **Open this underwriting in Company Investment View** for the exact version.
+12. Check standalone histories. Only explicitly approved decision/sizing entries
+    should have been added. Underwriting, portfolio and shadow contents must be
+    unchanged. A BUY decision is not evidence that a trade occurred.
+
+For the missing-context path, use an existing local store without portfolio
+snapshots or saved policies, without deleting records from your usual store:
+
+1. Compare existing completed underwritings and choose **Evaluate Allocation**.
+2. Confirm the missing snapshot/policy messages and absence of invented capacity.
+3. Inspect **Existing portfolio and policy setup** without submitting anything.
+4. Leave intended allocation blank, enter your own WATCH or PASS judgments and
+   alternative reasons, then explicitly **Record Decision** if desired.
+5. Confirm the receipt says no allocation assessment was used, and no portfolio,
+   sizing, shadow, actual holding or trade was created.
+
+Follow-up candidates, not implemented: explicit portfolio provenance metadata,
+a dedicated policy lifecycle/effective-date workflow, and a durable cross-session
+approval recovery receipt.
+
 ## Portfolio snapshot schema
 
 Use the [synthetic portfolio example](../examples/portfolio_context.sample.json)

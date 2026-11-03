@@ -1,9 +1,9 @@
 """Shared rendering helpers for the workbench views (Feature 7D).
 
 Presentation only. Nothing here decides a band, a bucket, a classification, or a
-number; it formats what the data layer already resolved. The one rule every
-helper enforces is that an unavailable value renders as an explicit "N/A" or
-"Not evaluable", never as a blank cell and never as a zero.
+number; it formats what the data layer already resolved. Numeric missing values
+stay null for Arrow serialization; views can style them as "N/A". Text labels
+remain explicit, and unavailable values are never replaced with zero.
 """
 
 from __future__ import annotations
@@ -61,11 +61,14 @@ def unavailable(reason: str | None, *, subject: str) -> None:
 
 
 def frame(rows: Sequence[dict[str, Any]], *, index: str | None = None) -> pd.DataFrame:
-    """Build a display frame, keeping missing values as an explicit "N/A" string."""
-    table = pd.DataFrame(list(rows))
+    """Keep numeric/null columns typed; fill only missing display-text cells."""
+    table = pd.DataFrame(list(rows)).convert_dtypes()
     if table.empty:
         return table
-    table = table.astype(object).where(pd.notna(table), NOT_AVAILABLE)
+    for column in table.columns:
+        values = table[column]
+        if not pd.api.types.is_numeric_dtype(values) and values.notna().any():
+            table[column] = values.where(values.notna(), NOT_AVAILABLE)
     if index is not None and index in table.columns:
         table = table.set_index(index)
     return table

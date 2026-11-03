@@ -57,6 +57,44 @@ def _assert_clean(app: AppTest, page: str) -> None:
     assert not app.error, f"{page} reported an error: {[e.value for e in app.error]}"
 
 
+@pytest.mark.parametrize("cli_provider", ["sec", "fmp"])
+def test_provider_uses_session_state_without_duplicate_widget_defaults(
+    store_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_provider: str,
+) -> None:
+    from streamlit.elements.lib import policies
+
+    calls: list[tuple[object, str | None]] = []
+    original = policies.check_session_state_rules
+
+    def checked(
+        default_value: object, key: str | None, writes_allowed: bool = True
+    ) -> None:
+        if key == "provider":
+            calls.append((default_value, key))
+        original(default_value, key, writes_allowed)
+
+    monkeypatch.setattr(policies, "check_session_state_rules", checked)
+    monkeypatch.setenv("OWNER_LENS_WORKBENCH_PROVIDER", cli_provider)
+    app = _run("Overview")
+    assert not app.exception
+    assert app.selectbox(key="provider").value == cli_provider
+
+    other = "sec" if cli_provider == "fmp" else "fmp"
+    app.selectbox(key="provider").set_value(other).run()
+    assert not app.exception
+    assert app.selectbox(key="provider").value == other
+    app.run()
+    assert app.selectbox(key="provider").value == other
+
+    app.session_state["requested_company_provider"] = cli_provider
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="provider").value == cli_provider
+    assert calls and all(default is None for default, _ in calls)
+
+
 @pytest.mark.parametrize("page", _PAGES)
 def test_every_page_renders_without_raising(page: str, store_path: Path) -> None:
     session = {

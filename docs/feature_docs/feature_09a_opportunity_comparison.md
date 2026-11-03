@@ -206,6 +206,15 @@ UUID/version/hash and frozen snapshot provenance. The full report and JSON
 download remain secondary. The existing decision action is unchanged; nothing
 is persisted merely by selecting companies or opening details.
 
+Select an already-compared exact version under **Opportunity to evaluate in
+portfolio context**, then choose **Evaluate Allocation**. The comparison remains
+frozen while you inspect existing portfolio/policy context and explicitly
+**Record Decision** in the same view. All alternatives carry forward without
+re-entering IDs. No newer underwriting or current price is substituted.
+The [portfolio-aware workflow](feature_09c_portfolio_sizing.md#contextual-comparison-to-decision-workflow)
+documents portfolio confirmation, missing-data behavior, retry safety and manual
+validation. Standalone comparison, sizing and decision pages remain available.
+
 Use **Advanced: historical underwriting versions** for exact-version overrides
 or additional versions of one company. The normal default remains **Latest
 eligible**; a historical override stays exact. **Compare this underwriting** in

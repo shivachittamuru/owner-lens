@@ -539,6 +539,7 @@ def create_decision(
     data: Any,
     *,
     now: datetime | None = None,
+    decision_id: str | None = None,
 ) -> DecisionSnapshot:
     """Validate investor input and atomically append one decision and its shadows."""
     try:
@@ -594,7 +595,7 @@ def create_decision(
                     "Supplied comparison does not match these exact underwriting versions and 9A rules."
                 )
             comparison_json = report.to_json()
-        identifier = str(uuid4())
+        identifier = decision_id if decision_id is not None else str(uuid4())
         shadows = []
         if obj.get("shadow") is not None:
             shadow_input = _object(

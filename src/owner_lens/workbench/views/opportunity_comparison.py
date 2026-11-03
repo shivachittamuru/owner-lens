@@ -42,6 +42,18 @@ def _open_company(selection: UnderwritingSelection) -> None:
 
 def render(store: SqliteStore) -> None:
     st.title("Opportunity Comparison")
+    workflow = st.session_state.get("allocation_workflow")
+    if (
+        workflow is not None
+        and "opportunity_requested_underwriting" in st.session_state
+        and (not workflow.get("approved") or workflow.get("decision_id"))
+    ):
+        del st.session_state["allocation_workflow"]
+    if "allocation_workflow" in st.session_state:
+        from owner_lens.workbench.views import allocation
+
+        allocation.render(store, st.session_state["allocation_workflow"])
+        return
     st.caption(
         "Choose 2-5 companies. Each uses its latest fully analyzed, eligible "
         "underwriting, with frozen prices and saved investor hurdles. "
@@ -208,6 +220,29 @@ def render(store: SqliteStore) -> None:
             file_name="opportunity-comparison.json",
             mime="application/json",
         )
+    allocation_selected = st.selectbox(
+        "Opportunity to evaluate in portfolio context",
+        [item.label for item in report.opportunities],
+        index=None,
+        key="comparison_allocation_selected",
+    )
+    if st.button("Evaluate Allocation", disabled=allocation_selected is None):
+        comparison_selections = {
+            key: value for key, value in st.session_state.items()
+            if isinstance(key, str) and (
+                key in ("opportunity_companies", "opportunity_extra_versions")
+                or key.startswith("opportunity_version.")
+            )
+        }
+        for state_key in list(st.session_state):
+            if isinstance(state_key, str) and state_key.startswith("allocation_"):
+                del st.session_state[state_key]
+        st.session_state["allocation_workflow"] = {
+            "selected": allocation_selected,
+            "comparison_json": report.to_json(),
+            "comparison_selections": comparison_selections,
+        }
+        st.rerun()
     if st.button("Record a decision from this comparison"):
         st.session_state["decision_comparison_json"] = report.to_json()
         st.session_state.pop("decision_selected_underwriting", None)
