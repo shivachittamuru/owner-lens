@@ -19,6 +19,8 @@ import streamlit as st
 from owner_lens.capital_allocation import CapitalAllocationRow
 from owner_lens.capital_efficiency import CapitalEfficiencyRow
 from owner_lens.compounding import EconomicCompoundingView
+from owner_lens.opportunity_catalog import ComparisonVersion
+from owner_lens.opportunity_comparison import UnderwritingSelection
 from owner_lens.owner_economics import OwnerEconomicsRow
 from owner_lens.research_context import build_research_context
 from owner_lens.underwriting_contract import UnderwritingProjection
@@ -102,7 +104,13 @@ def render(
                 st.session_state.pop("decision_comparison_json", None)
                 st.session_state["requested_page"] = "Decisions"
                 st.rerun()
-            if actions[1].button("Compare underwriting versions"):
+            if actions[1].button("Compare this underwriting"):
+                record = underwriting.record
+                st.session_state["opportunity_requested_underwriting"] = ComparisonVersion(
+                    UnderwritingSelection(record.ticker, record.version),
+                    record.underwriting_id,
+                    record.content_hash,
+                )
                 st.session_state["requested_page"] = "Opportunity Comparison"
                 st.rerun()
     context = build_research_context(detail, underwriting)

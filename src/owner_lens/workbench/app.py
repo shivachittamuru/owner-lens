@@ -20,7 +20,11 @@ from owner_lens.opportunity_comparison import ComparisonError
 from owner_lens.persistence import SqliteStore
 from owner_lens.persistence.errors import PersistenceError
 from owner_lens.underwriting import UnderwritingError
-from owner_lens.underwriting_investment_view import select_investment_projection
+from owner_lens.underwriting_contract import project_underwriting
+from owner_lens.underwriting_investment_view import (
+    is_analysis_complete,
+    select_investment_projection,
+)
 from owner_lens.underwriting_summary import SummaryError
 from owner_lens.variant import VariantError
 from owner_lens.workbench.cache import (
@@ -63,6 +67,9 @@ PAGES = ("Overview", "Screener", "Company", "Compare", "Opportunity Comparison",
 def main() -> None:
     """Render the workbench."""
     st.set_page_config(page_title="OwnerLens Workbench", page_icon="🔎", layout="wide")
+    requested_provider = st.session_state.pop("requested_company_provider", None)
+    if requested_provider is not None:
+        st.session_state["provider"] = requested_provider
     provider = st.sidebar.selectbox(
         "Evidence provider",
         options=("sec", "fmp"),
@@ -93,8 +100,18 @@ def main() -> None:
 
     usable = tuple(c for c in companies if c.available or provider == "fmp")
     prints = fingerprint(companies)
+    comparison_ticker = st.session_state.pop("comparison_requested_company", None)
+    if comparison_ticker is not None:
+        st.session_state["selected_ticker"] = comparison_ticker
 
     page = _sidebar(db_path, raw_data_path, companies, usable)
+    if comparison_ticker is not None and _find(usable, comparison_ticker) is None:
+        st.error(
+            f"{comparison_ticker}'s frozen underwriting remains available in "
+            "Opportunity Comparison, but its Company page has no persisted "
+            "company data in this provider's universe. No other company was substituted."
+        )
+        return
 
     if page in ("Opportunity Comparison", "Decisions", "Shadow Portfolio", "Portfolio Context / Position Sizing", "What Changed?", "Outcomes", "Calibration", "Mistake Review", "Attribution"):
         try:
@@ -261,6 +278,14 @@ def _company_page(
                     projection, latest_projection = select_investment_projection(
                         source.store, selected.ticker
                     )
+                    requested = st.session_state.get("company_requested_underwriting")
+                    if requested is not None and requested.ticker == selected.ticker:
+                        projection = project_underwriting(
+                            source.store, selected.ticker, version=requested.version
+                        )
+                        latest_projection = project_underwriting(source.store, selected.ticker)
+                    elif requested is not None:
+                        del st.session_state["company_requested_underwriting"]
                 else:
                     projection, latest_projection = None, None
         except (UnderwritingError, SummaryError, VariantError, PersistenceError, OSError) as exc:
@@ -275,6 +300,7 @@ def _company_page(
             if latest_projection is not None
             and projection is not None
             and latest_projection.record != projection.record
+            and not is_analysis_complete(latest_projection)
             else None,
         )
     else:

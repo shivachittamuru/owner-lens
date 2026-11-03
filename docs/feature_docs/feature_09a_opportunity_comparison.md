@@ -179,18 +179,68 @@ bounded challenger questions. These labels make no actual company claims.
 ## Workbench UX
 
 Open **Opportunity Comparison**, independently of the current provider's company
-list or screening. The picker lists only validated completed versions with
-explicit `TICKER:VERSION` labels. There is no default/latest selection.
-Incomplete or invalid versions appear in an exclusion expander with reasons.
+list or screening. Search for companies by ticker or name and select 2-5.
+The table appears automatically, without a calculation button, record lookup,
+version entry or file. Each company resolves to its latest fully analyzed
+version that passes existing 9A validation. Workbench discovery additionally
+requires a saved challenger run, matching the Company Investment View's
+completion boundary. This does not change the CLI's explicit-version rules or
+9A's bounded offline challenger calculation.
 
-The read-only table follows expected return, Bear/asymmetry, evidence,
-variant, sensitivity, business/setup and unresolved challenger context.
-Pairwise conclusions separate capital economics from research attention.
-Expand each opportunity for questions, missing dimensions, uncertainty and
-immutable identity. Download the same deterministic JSON used by the CLI.
-No underwriting fields can be edited here.
+The compared version is shown explicitly. A newer incomplete or ineligible
+version produces a warning and an action to open that exact Company version
+for the existing retry workflow. Excluded versions and reasons remain available
+in an expander. Missing evidence does not make an otherwise eligible
+underwriting disappear or imply that its thesis is safe.
 
-## Manual PowerShell validation
+The compact table shows frozen price/date, underwriting as-of, expected return,
+the saved hurdle/spread/classification, Bear/Base/Bull outcomes, terminal-loss
+probability, frozen business quality, variant status and evidence/challenger
+limitations. Price dates and investor hurdles may differ: they are never
+refreshed, normalized or revalued. Pairwise flags and their explanations come
+directly from 9A, with research attention separate from conditional capital
+attractiveness and no overall winner or numerical score.
+
+Expand a company for questions, missing dimensions, model inputs, immutable
+UUID/version/hash and frozen snapshot provenance. The full report and JSON
+download remain secondary. The existing decision action is unchanged; nothing
+is persisted merely by selecting companies or opening details.
+
+Use **Advanced: historical underwriting versions** for exact-version overrides
+or additional versions of one company. The normal default remains **Latest
+eligible**; a historical override stays exact. **Compare this underwriting** in
+the Company Investment View preselects that exact version, including a
+historical version. An ineligible handoff reports an error instead of silently
+substituting latest. Each comparison detail offers a return action to the exact
+Company Investment View. If the company's persisted data is no longer available
+in the provider universe, the handoff reports that limitation without displaying
+another company's economics.
+
+## Manual Workbench validation
+
+Use your existing underwritings; no live validation was performed for this
+cleanup. With the Workbench already running:
+
+1. Open **Opportunity Comparison**.
+2. Search for ADBE, NOW, MSFT and GOOGL, selecting 2-5 companies that actually
+   have fully analyzed underwritings in your store. Do not enter versions.
+3. Confirm the table appears immediately and displays exact versions, frozen
+   price dates, underwriting as-of dates and each investor hurdle.
+4. Inspect the return/downside/evidence flags and explanations. Research
+   attention must remain distinct from conditional capital attractiveness.
+5. Expand one company's evidence, model inputs and provenance. Review questions,
+   missing Feature 7 context and immutable identity where applicable.
+6. Open that company's exact Investment View, then select **Compare this
+   underwriting** and add other companies. Confirm the original version remains
+   selected even when a newer completed version exists.
+7. If a newer incomplete version exists, confirm the warning shows both
+   versions. Its retry link must open the newer exact version; opening it alone
+   must not run analysis.
+8. Compare saved history, decision history and portfolio snapshots before and
+   after browsing. Counts and contents must be unchanged. Fixture tests also
+   compare the complete database contents before and after the read workflow.
+
+## Optional CLI reproduction
 
 The commands below are for you to run against existing local records.
 Implementation validation used offline fixtures, not your live store.
@@ -214,7 +264,5 @@ if ($first -cne $second) { throw "Comparison output changed" }
 uv run owner-lens workbench --provider fmp
 ```
 
-Replace example version numbers only after checking history. In the Workbench,
-select the same versions and inspect the table, pairwise flags, research
-expanders and downloaded JSON. Confirm an unavailable version errors instead
-of switching to latest.
+Replace example version numbers only after checking history. To reproduce these
+exact versions in the Workbench, use the advanced historical selectors.

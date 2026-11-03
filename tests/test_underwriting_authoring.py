@@ -13,6 +13,7 @@ from test_underwriting import source as source  # noqa: PLC0414
 from test_underwriting_contract import authoring
 
 from owner_lens.config import OwnerLensSettings
+from owner_lens.opportunity_comparison import UnderwritingSelection
 from owner_lens.persistence.errors import StorageWriteError
 from owner_lens.underwriting import (
     UnderwritingError,
@@ -188,8 +189,10 @@ def test_json_first_workbench_commits_and_analyzes_once(source: WorkbenchSource)
     assert any("Initial underwriting" in item.value for item in app.caption)
     assert any(item.label == "Commit & Analyze" for item in app.button)
 
+    app.session_state["company_requested_underwriting"] = UnderwritingSelection("ADBE", 1)
     _button(app, "Commit & Analyze").click().run()
     assert not app.exception and not app.error
+    assert "company_requested_underwriting" not in app.session_state
     records = source.store.list_underwriting("ADBE")
     assert len(records) == 1
     record = records[0]

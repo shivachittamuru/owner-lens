@@ -17,8 +17,9 @@ unresolved questions stay visible.
 
 Supporting and disconfirming evidence, historical base rates, full sensitivity
 detail, full challenger output, missing items, frozen evidence provenance and
-the full snapshot are available in expanders. **Record decision** and
-**Compare underwriting versions** route to the existing workflows.
+the full snapshot are available in expanders. **Record decision** routes to the
+existing decision workflow. **Compare this underwriting** carries the displayed
+exact version into Opportunity Comparison, where other companies can be added.
 
 When a newer version is incomplete, the page keeps the latest completed version
 in the Investment View and exposes the newer version through the existing

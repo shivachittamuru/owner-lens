@@ -733,10 +733,14 @@ def test_workbench_comparison_handoff_freezes_context(store: SqliteStore) -> Non
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
+    from owner_lens.challenger import run_challenger
+
     selections = four_companies(store)
+    for ticker in ("ADBE", "GOOGL"):
+        run_challenger(store, store.list_underwriting(ticker)[-1])
     app = AppTest.from_file(str(APP), default_timeout=120)
     app.session_state["page"] = "Opportunity Comparison"
-    app.session_state["opportunity_versions"] = ["ADBE:1", "GOOGL:1"]
+    app.session_state["opportunity_companies"] = ["ADBE", "GOOGL"]
     app.run()
     next(
         button

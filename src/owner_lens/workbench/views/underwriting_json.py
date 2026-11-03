@@ -377,6 +377,7 @@ def render(
         state["commit_notice"] = (
             f"Underwriting v{completion_result.record.version} committed successfully."
         )
+        st.session_state.pop("company_requested_underwriting", None)
         state.pop("preview", None)
         state.pop("preview_json", None)
         st.rerun()

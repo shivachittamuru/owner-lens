@@ -13,6 +13,7 @@ from test_underwriting import source as source  # noqa: PLC0414
 from test_underwriting_loop import loop_snapshot
 from test_valuation import store as store  # noqa: PLC0414
 
+from owner_lens.challenger import run_challenger
 from owner_lens.cli import main
 from owner_lens.opportunity_comparison import (
     ComparisonError,
@@ -518,18 +519,24 @@ def test_workbench_selects_exact_completed_versions(store: SqliteStore) -> None:
     persist(store, "ADBE", snapshot(price=10))
     persist(store, "MSFT", snapshot(price=25))
     persist(store, "GOOGL", snapshot(), valued=False)
+    for ticker in ("ADBE", "MSFT"):
+        for record in store.list_underwriting(ticker):
+            run_challenger(store, record)
     app_path = Path(__file__).parents[1] / "src" / "owner_lens" / "workbench" / "app.py"
     app = AppTest.from_file(str(app_path), default_timeout=120)
     app.session_state["page"] = "Opportunity Comparison"
     app.run()
     assert not app.exception and not app.error
-    picker = app.multiselect(key="opportunity_versions")
-    assert set(picker.options) == {"ADBE:1", "ADBE:2", "MSFT:1"}
+    picker = app.multiselect(key="opportunity_companies")
+    assert set(picker.options) == {"ADBE — Adobe", "MSFT — MSFT"}
     assert picker.value == []
-    picker.set_value(["ADBE:1", "MSFT:1"]).run()
+    picker.set_value(["ADBE", "MSFT"]).run()
     assert not app.exception and not app.error
     assert app.dataframe
     frame = app.dataframe[0].value
-    assert "ADBE:1" in frame.columns and "ADBE:2" not in frame.columns
-    assert frame.loc["Frozen price / market date", "ADBE:1"].startswith("$20.00")
+    assert "ADBE:2" in frame.columns and "ADBE:1" not in frame.columns
+    assert frame.loc["Frozen price / market date", "ADBE:2"].startswith("$10.00")
+    app.selectbox(key="opportunity_version.ADBE").set_value("ADBE:1").run()
+    assert not app.exception and not app.error
+    assert "ADBE:1" in app.dataframe[0].value.columns
     assert not app.text_input and not app.number_input
