@@ -14,6 +14,184 @@ changes, trade instructions, rebalancing or self-improving loop.
 The shared domain is [`changes.py`](../../src/owner_lens/changes.py).
 The CLI and Workbench use the same event, assessment and approval boundary.
 
+## Company Monitor golden path
+
+Open **Company -> Monitor** for the selected company. The initial monitoring
+baseline is the completed underwriting shown by Company (normally the latest
+completed version). If Company is inspecting an incomplete version, Monitor
+instead discovers the latest fully analyzed version. A review pins the exact
+UUID/version/hash in session state, and subsequent reruns do not substitute a
+newer underwriting. Newer incomplete versions are disclosed without replacing
+the completed thesis. An explicit **Start a new review on latest completed
+underwriting** action changes the baseline when no evidence submission is active.
+
+The compact view shows underwriting as-of, readable dependencies/breakers and
+literal thresholds, authoritative thesis status, pending and non-comparable
+counts, recent approved events, and whether re-underwriting is required.
+Predicates, UUIDs, hashes and full provenance remain in advanced details.
+Opening Monitor, previewing evidence or exporting context creates no records.
+
+The cleanup addresses an occasional but consequential workflow, usually around
+new company developments. Previously the investor left Company, chose an exact
+version again in What Changed?, created a pending event, selected that event
+again, approved separately and initialized a separate draft editor. The primary
+path is now:
+
+1. **Record New Evidence** and paste existing 9D event JSON.
+2. **Validate + Preview** to validate and run the existing deterministic
+   assessment without persistence.
+3. Choose an investor classification and rationale.
+4. **Record & Approve Change** once.
+5. Continue monitoring, or **Prepare Re-underwriting** when the authoritative
+   summary requires it.
+
+The JSON input uses the existing event schema below. Company/security identity
+and the exact underwriting are supplied by the selected context, never typed or
+inferred from source prose. An optional condition picker supplies its exact
+frozen ID; a conflicting JSON condition is rejected. Unknown fields, including
+attempted company/security overrides, are rejected by the existing validator.
+An existing JSON file can be loaded as a secondary input. Editing JSON or
+condition selection invalidates the preview.
+
+Observation/recording timestamps, observed values, source references, metric
+definitions, units, cadence and source family are not manufactured. Source
+verification remains the investor's assertion, not an OwnerLens verification
+claim. The preview separates observed evidence, frozen condition, comparability,
+met/breached result, candidate classification and affected frozen beliefs.
+Structured predicates retain exact matching. Legacy qualitative conditions
+remain explicitly non-comparable when the existing engine cannot assess them.
+
+No classification is preselected, even when the deterministic candidate is
+THESIS_UPDATE or THESIS_BREAK. The investor must supply a classification and a
+nonempty rationale. The existing approval compatibility rules remain unchanged.
+
+### Summary and review scope
+
+Company Monitor applies existing 9D precedence to events observed since the
+pinned completed underwriting's creation, including links to other versions:
+
+1. Approved THESIS_UPDATE or THESIS_BREAK: REUNDERWRITING_REQUIRED.
+2. Otherwise pending events: REVIEW_PENDING.
+3. Otherwise approved EVIDENCE: REVIEW_RECOMMENDED.
+4. Otherwise: NO_REUNDERWRITING_REQUIRED.
+
+The scope and baseline are shown explicitly. A newer incomplete underwriting
+does not reset this cutoff. Later NOISE cannot erase an approved update/break
+within that scope. Pending events never count as approved changes. The full
+company timeline includes events outside the current summary scope and labels
+each event's exact underwriting version, assessment and approval separately.
+Standalone What Changed? and CLI summary defaults retain their existing latest
+record scope; their lower-level commands remain available.
+
+### Immutable recording and retries
+
+The [application workflow](../../src/owner_lens/monitoring_workflow.py) reuses
+9D build/validate/assessment, storage and approval services. Streamlit performs
+no thesis matching or investment calculation. **Record & Approve Change** creates
+an immutable event and a separate immutable approval through the existing
+transactional boundaries; the two records are not collapsed into a new schema.
+
+Before any event write, classification and rationale are validated and the
+submission is frozen in session state with a stable event UUID. If either write
+or its UI receipt fails, the same submission can be retried. The service reuses
+an identical event and an identical existing approval, and rejects conflicting
+retries. A created but unapproved event is shown as pending, not successful
+approval. **Retry Record & Approve Change** finishes that same event. Inputs
+are locked while a submission is pending recovery.
+
+After a session loss, a persisted pending event remains in the timeline and
+can be completed with **Approve Recorded Change**, without recreating evidence.
+A persisted approval also remains visible after a lost receipt. If no event
+was committed before session loss, there is nothing to recover. Do not repaste
+an already recorded event as new evidence.
+
+### Re-underwriting without an automatic thesis revision
+
+After approval the authoritative status is displayed immediately. NOISE or
+EVIDENCE alone does not demand a new underwriting; the investor can leave
+without another action. An earlier approved thesis change can still require
+re-underwriting even when the most recent event is NOISE.
+
+When required, **Prepare Re-underwriting** opens the existing JSON-first
+authoring state in the Company's **Underwriting** tab. It does not generate
+revised assumptions or replace an existing editor's JSON. **Copy Re-underwriting
+Context** displays selectable text with the exact monitored identity, approved
+evidence/rationale, linked conditions and beliefs, prior Bear/Base/Bull scenarios,
+and the existing sanitized research context. It labels pasted content as
+untrusted research data and preserves the no-source-verification caveat.
+Pending events are counted, never exported as approved changes.
+
+Discuss that context in ChatGPT, prepare revised investor-reviewed Authoring v2
+JSON, then use Cleanup 1's **Paste JSON -> Validate + Preview -> Commit & Analyze**.
+No underwriting, probability, decision or sizing is changed by monitoring or
+by preparing/exporting the handoff. A newly committed underwriting remains a
+separate immutable version.
+
+### Manual Company validation
+
+No live validation was performed for this cleanup. Use your existing completed
+ADBE underwriting and evidence you actually reviewed for the ordinary path.
+
+#### A. Ordinary evidence
+
+1. Open Workbench, select the appropriate persisted provider and ADBE Company,
+   then open **Monitor**.
+2. Confirm company, completed version and as-of date. Inspect dependencies,
+   breakers, status and pending counters. Expand advanced identity details.
+3. If a newer incomplete version exists, confirm the warning. It must not
+   replace the monitored completed version.
+4. Choose **Record New Evidence**. Paste your existing valid 9D event JSON.
+   Supply real event/observation dates, provenance and interpretation; do not
+   label unverified pasted text as FACT. Select a frozen condition only when
+   the observation genuinely targets it.
+5. Choose **Validate + Preview**. Compare observable, value, unit, cadence,
+   source family and provenance with the frozen condition. Mismatches must
+   remain NOT_COMPARABLE or INSUFFICIENT_DATA. Candidate is not approval.
+6. Confirm history is unchanged. Choose EVIDENCE or NOISE only if it reflects
+   your judgment, enter a rationale, and choose **Record & Approve Change**.
+7. Check the receipt and timeline: one event, one separate approval, correct
+   exact underwriting and rationale. If there are no other approved thesis
+   changes or pending events in scope, EVIDENCE gives REVIEW_RECOMMENDED and
+   NOISE gives NO_REUNDERWRITING_REQUIRED. Existing events may take precedence.
+8. Rerun or reopen Monitor. Counts must not grow. Underwriting, decision and
+   sizing histories must remain unchanged. No re-underwriting action is needed
+   for ordinary evidence alone.
+
+#### B. Thesis change in an isolated database
+
+1. Use a separate test database already containing a completed fixture ADBE
+   underwriting. Launch Workbench with its explicit `--db` path. Confirm the
+   active database before proceeding; never use the real investment store for
+   synthetic evidence.
+2. Open ADBE **Monitor**. Record baseline history counts and exact identity.
+3. Choose **Record New Evidence** and paste a valid test event with a statement,
+   interpretation and verification note clearly labeled SYNTHETIC TEST. Supply
+   explicit compatible metric/source metadata if exercising a structured
+   predicate. Otherwise leave the condition unlinked and expect insufficient
+   assessment rather than invented numeric matching.
+4. Choose **Validate + Preview**. Confirm that no event has yet been saved.
+   Choose THESIS_UPDATE explicitly and enter a synthetic-test rationale.
+5. Choose **Record & Approve Change**. Confirm REUNDERWRITING_REQUIRED. In this
+   isolated store only, approving a later NOISE event must not erase the update.
+6. Choose **Prepare Re-underwriting**, then **Copy Re-underwriting Context**.
+   Copy the displayed text and confirm exact identity, approved test rationale,
+   linked beliefs/conditions, prior scenarios and research context.
+7. Use the context for a ChatGPT discussion, retaining its synthetic label.
+   Prepare revised Authoring v2 JSON through investor reasoning, not automatic
+   probability or assumption changes in OwnerLens.
+8. Open the same Company's **Underwriting** tab. Paste the revised JSON and use
+   **Validate + Preview**. Only if intentionally testing a new version in the
+   isolated database, choose **Commit & Analyze**. The prior underwriting and
+   change history must remain immutable.
+9. For controlled failure testing in an isolated environment, interrupt approval
+   after event persistence. Confirm REVIEW_PENDING and the same pending event
+   ID, then retry. Event and approval counts must each end at one for that
+   submission. Reopening a lost session permits approval from its timeline.
+
+Follow-up candidates, not implemented: a provenance-aware event template
+generator, durable recovery of entirely uncommitted drafts, and large-history
+monitoring performance profiling. No retrieval or scheduled monitoring is added.
+
 ## Change-event schema
 
 Events require an exact completed Feature 8 underwriting version. The Feature 9A

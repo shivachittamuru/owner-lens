@@ -70,15 +70,22 @@ def main() -> None:
     requested_provider = st.session_state.pop("requested_company_provider", None)
     if requested_provider is not None:
         st.session_state["provider"] = requested_provider
+    elif "provider" not in st.session_state:
+        st.session_state["provider"] = (
+            "fmp" if os.environ.get("OWNER_LENS_WORKBENCH_PROVIDER") == "fmp" else "sec"
+        )
     provider = st.sidebar.selectbox(
         "Evidence provider",
         options=("sec", "fmp"),
-        index=1 if os.environ.get("OWNER_LENS_WORKBENCH_PROVIDER") == "fmp" else 0,
+        index=None,
         format_func=lambda value: (
             "SEC (default)" if value == "sec" else "FMP · S&P 500"
         ),
         key="provider",
     )
+    if provider is None:
+        st.error("Select an evidence provider to continue.")
+        return
 
     # The company list is read fresh every run rather than cached, so a
     # re-ingested company's new content hash takes effect immediately and

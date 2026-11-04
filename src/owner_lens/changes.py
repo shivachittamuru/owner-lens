@@ -616,11 +616,18 @@ def change_history(store: SqliteStore, ticker: str) -> list[dict[str, Any]]:
     ]
 
 
-def current_change_state(store: SqliteStore, ticker: str) -> dict[str, Any]:
+def current_change_state(
+    store: SqliteStore, ticker: str, *, version: int | None = None
+) -> dict[str, Any]:
     records = store.list_underwriting(ticker)
     if not records:
         raise ChangeError(f"No underwriting exists for {ticker}.")
-    latest = records[-1]
+    latest = (
+        records[-1] if version is None
+        else next((item for item in records if item.version == version), None)
+    )
+    if latest is None:
+        raise ChangeError(f"Underwriting {ticker} v{version} not found.")
     history = change_history(store, ticker)
     # Events linked to older versions but observed since this version still matter.
     since = [
@@ -658,7 +665,11 @@ def current_change_state(store: SqliteStore, ticker: str) -> dict[str, Any]:
         else "REVIEW_RECOMMENDED"
         if counts["EVIDENCE"]
         else "NO_REUNDERWRITING_REQUIRED",
-        "scope": "All events observed since latest underwriting creation, including links to older versions; pending events counted separately.",
+        "scope": (
+            "All events observed since latest underwriting creation, including links to older versions; pending events counted separately."
+            if version is None else
+            f"All events observed since monitored underwriting v{version} creation, including other version links; pending events counted separately."
+        ),
     }
 
 

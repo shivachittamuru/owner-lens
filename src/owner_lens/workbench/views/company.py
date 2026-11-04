@@ -36,7 +36,7 @@ from owner_lens.workbench.data import (
     format_per_share,
     format_ratio,
 )
-from owner_lens.workbench.views import underwriting_json
+from owner_lens.workbench.views import monitor, underwriting_json
 from owner_lens.workbench.views._common import (
     BUCKET_LABEL,
     COVERAGE_LABEL,
@@ -64,8 +64,8 @@ def render(
     reason_lists(detail.screening)
     st.divider()
 
-    fundamentals, screening, beliefs = st.tabs(
-        ["Fundamentals", "Screening", "Underwriting"]
+    fundamentals, screening, beliefs, monitoring = st.tabs(
+        ["Fundamentals", "Screening", "Underwriting", "Monitor"]
     )
     with fundamentals:
         _owner_economics(detail.owner_economics)
@@ -82,6 +82,11 @@ def render(
             "Bands are coarse by design. The score orders companies within a "
             "bucket and never sets one."
         )
+    with monitoring:
+        if authoring_source is None:
+            st.info("Open this company in Workbench to review monitoring evidence.")
+        else:
+            monitor.render(detail, authoring_source, underwriting=underwriting)
     with beliefs:
         authoring_projection = authoring_underwriting or underwriting
         if authoring_projection is not None and authoring_source is not None:

@@ -90,6 +90,10 @@ sidebar. SEC remains the default. Quarterly evidence, EOD price, and Market
 Expectations appear separately from annual screening, and missing histories
 remain inspectable.
 
+The provider selector initializes session state once from the CLI default.
+Subsequent reruns retain your selection; exact-company handoffs update it before
+widget creation, without supplying a competing widget default.
+
 Streamlit lives in the `workbench` dependency group, which `uv sync` installs by
 default, so it never becomes a runtime dependency of the `owner_lens` package.
 If it is missing, the command says exactly how to fix it and exits 2.
