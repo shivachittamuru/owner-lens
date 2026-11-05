@@ -265,6 +265,50 @@ def test_fmp_full_universe_preserves_feature_seven(fmp_source: WorkbenchSource) 
     assert sum(counts.by_bucket.values()) == 503
 
 
+def test_review_lane_owner_economics_reuses_persisted_fmp_without_refresh(
+    fmp_source: WorkbenchSource,
+) -> None:
+    companies = load_persisted_companies(fmp_source, "fmp")
+    results = screen_persisted_universe(fmp_source, companies)
+    before = {result.ticker: result for result in results}
+
+    economics = cache.cached_improving_economics_owner_economics(
+        cache.fingerprint(companies),
+        ("ADBE",),
+        db_path=fmp_source.db_path,
+    )
+
+    after = {
+        result.ticker: result
+        for result in screen_persisted_universe(fmp_source, companies)
+    }
+    assert len(economics) == 1
+    assert economics[0][0] == "ADBE"
+    assert len(economics[0][1]) == 3
+    assert after == before
+
+
+def test_review_lane_view_renders_offline_from_short_fixture_history(
+    fmp_source: WorkbenchSource,
+) -> None:
+    app = AppTest.from_file(str(_APP), default_timeout=120)
+    app.session_state["provider"] = "fmp"
+    app.session_state["page"] = "Screener"
+    app.session_state["screener_view_mode"] = "Improving Economics - Review Only"
+    app.run()
+
+    assert not app.exception, [item.value for item in app.exception]
+    assert not app.error, [item.value for item in app.error]
+    assert any(
+        title.value == "Improving Economics — Review Only; Not a Valuation Signal"
+        for title in app.title
+    )
+    assert any(
+        "No company matches the Improving Economics review filter" in item.value
+        for item in app.info
+    )
+
+
 def test_separate_evidence_provenance_and_quality(fmp_source: WorkbenchSource) -> None:
     companies = {c.ticker: c for c in load_persisted_companies(fmp_source, "fmp")}
     detail = company_detail(fmp_source, companies["ADBE"])
@@ -390,6 +434,10 @@ def test_full_universe_pages_offline(page: str, fmp_source: WorkbenchSource) -> 
             )
             == "503"
         )
+    elif page == "Screener":
+        assert app.radio(key="screener_view_mode").value == "Standard Screener"
+        assert any("503 of 503 companies match" in item.value for item in app.caption)
+        assert any("Priority" in table.value.columns for table in app.dataframe)
     elif page == "Company":
         headings = [heading.value for heading in app.subheader]
         assert {"Quarterly evidence", "Latest EOD price", "Market Expectations"} <= set(

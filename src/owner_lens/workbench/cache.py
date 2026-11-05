@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from owner_lens.owner_economics import OwnerEconomicsRow
 from owner_lens.persistence import SqliteStore
 from owner_lens.screening import (
     ScreeningResult,
@@ -54,6 +55,7 @@ __all__ = [
     "cached_comparison",
     "cached_coverage_standings",
     "cached_data_quality",
+    "cached_improving_economics_owner_economics",
     "cached_screening",
     "clear_caches",
     "fingerprint",
@@ -147,6 +149,30 @@ def cached_screening(
         return screen_persisted_universe(
             source, _select(source, companies, provider), max_years=max_years
         )
+
+
+@st.cache_data(show_spinner="Checking recent owner economics…")
+def cached_improving_economics_owner_economics(
+    companies: tuple[tuple[str, str], ...],
+    candidate_tickers: tuple[str, ...],
+    db_path: str,
+    provider: str = "fmp",
+) -> tuple[tuple[str, tuple[OwnerEconomicsRow, ...]], ...]:
+    """Load candidate owner economics from the persisted FMP histories only."""
+    if provider != "fmp":
+        return ()
+    with open_run_source() as source:
+        selected = _select(source, companies, provider)
+        by_ticker = {company.ticker: company for company in selected}
+        results: list[tuple[str, tuple[OwnerEconomicsRow, ...]]] = []
+        for ticker in candidate_tickers:
+            company = by_ticker.get(ticker)
+            if company is None:
+                continue
+            history = load_canonical_history(source, company)
+            evidence = assemble_screening_evidence(history)
+            results.append((ticker, evidence.owner_economics))
+        return tuple(results)
 
 
 @st.cache_data(show_spinner=False)
@@ -257,3 +283,4 @@ def clear_caches() -> None:
     cached_comparison.clear()
     cached_data_quality.clear()
     cached_coverage_standings.clear()
+    cached_improving_economics_owner_economics.clear()

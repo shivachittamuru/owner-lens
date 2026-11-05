@@ -2631,7 +2631,7 @@ class SqliteStore:
         try:
             rows = self._conn.execute(
                 """
-                SELECT m.security_id, m.symbol, m.name, m.cik, u.observed_at,
+                SELECT m.security_id, m.symbol, m.name, m.cik, m.sector, u.observed_at,
                        h.history_id, h.input_hash, h.observed_at AS history_observed_at
                 FROM universe_members m
                 JOIN universe_snapshots u ON u.snapshot_id = m.snapshot_id

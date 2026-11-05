@@ -51,7 +51,13 @@ After separately refreshing evidence, reopen the workbench or choose
 * Overview shows current persisted membership size, provider, observation time,
   coverage counts, bucket counts, and the existing research funnel.
 * Screener includes every current FMP member. Existing sorting, filters,
-  dimensions, and reasons are unchanged.
+  dimensions, and reasons are unchanged. The optional Improving Economics
+  review view selects WATCH and LOW_PRIORITY companies with five usable annual
+  observations, positive FCF and FCF/share in all five, rising FCF and FCF/share
+  in each of the latest two observations, and latest revenue above the oldest.
+  It preserves the original priority, coverage, gate, reasons, and Feature 7
+  ranking. The view also displays diluted shares across those observations so
+  share-count expansion remains visible. It is not a valuation signal.
 * Company retains annual economics and screening. Separate sections show
   quarterly FACT evidence, the latest reliable EOD market close, and Market
   Expectations labeled `EXPECTATION`. None enters annual screening. Prices
@@ -84,4 +90,4 @@ Compare, Data Quality, separate enrichment, and all five Streamlit pages with
 HTTP access prohibited. No live FMP key is needed.
 
 No valuation, scenarios, probabilities, portfolio logic, AI, historical price
-charts, new screening rules, or cloud services are introduced.
+charts, Feature 7 gate or bucket changes, or cloud services are introduced.

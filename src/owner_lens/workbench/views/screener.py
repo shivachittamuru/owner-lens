@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from owner_lens.compounding import cagr
 from owner_lens.screening import (
     BUCKET_ORDER,
     DIMENSION_ORDER,
@@ -16,6 +17,11 @@ from owner_lens.screening import (
 from owner_lens.workbench.data import (
     BAND_LABEL,
     DIMENSION_LABEL,
+    ImprovingEconomicsReviewCandidate,
+    format_count,
+    format_money,
+    format_per_share,
+    format_ratio,
     limiting_factor_label,
 )
 from owner_lens.workbench.views._common import (
@@ -55,6 +61,155 @@ def render(results: tuple[ScreeningResult, ...]) -> None:
 
     st.dataframe(_table(filtered), width="stretch")
     _detail(filtered)
+
+
+def render_improving_economics_review(
+    candidates: tuple[ImprovingEconomicsReviewCandidate, ...],
+) -> None:
+    """Render the additive review lane without changing the standard screener."""
+    st.title("Improving Economics — Review Only; Not a Valuation Signal")
+    st.caption(
+        "These WATCH and LOW_PRIORITY companies meet the recent FCF and "
+        "FCF/share trend filter. Existing priorities, coverage, gates, and "
+        "limiting reasons remain unchanged."
+    )
+    if not candidates:
+        st.info("No company matches the Improving Economics review filter.")
+        return
+    st.caption(f"{len(candidates)} companies match.")
+    st.dataframe(
+        _improving_economics_table(candidates),
+        column_config={
+            "Ticker / company": st.column_config.TextColumn(
+                "Ticker / company", width="medium"
+            ),
+            "Priority": st.column_config.TextColumn("Priority", width="small"),
+            "Coverage": st.column_config.TextColumn("Coverage", width="small"),
+            "FCF/share": st.column_config.TextColumn("FCF/share", width="medium"),
+            "Latest FCF (USD M)": st.column_config.NumberColumn(
+                "Latest FCF (USD M)", format="$%.1f", width="small"
+            ),
+            "Diluted-share CAGR": st.column_config.TextColumn(
+                "Diluted-share CAGR", width="medium"
+            ),
+            "Survival gate": st.column_config.TextColumn(
+                "Survival gate", width="medium"
+            ),
+        },
+        hide_index=True,
+        width="stretch",
+    )
+    company_labels = {
+        candidate.company.ticker: (
+            f"{candidate.company.ticker} — {candidate.company.company_name}"
+        )
+        for candidate in candidates
+    }
+    ticker = st.selectbox(
+        "Company details",
+        options=[candidate.company.ticker for candidate in candidates],
+        format_func=company_labels.__getitem__,
+        key="improving_economics_detail_ticker",
+    )
+    selected = next(
+        candidate for candidate in candidates if candidate.company.ticker == ticker
+    )
+    _improving_economics_detail(selected)
+
+
+def _improving_economics_table(
+    candidates: tuple[ImprovingEconomicsReviewCandidate, ...],
+):  # type: ignore[no-untyped-def]
+    rows = []
+    for candidate in candidates:
+        result = candidate.screening
+        economics = candidate.owner_economics
+        first, third_most_recent, latest = economics[0], economics[-3], economics[-1]
+        first_shares = (
+            first.diluted_shares.value if first.diluted_shares is not None else None
+        )
+        latest_shares = (
+            latest.diluted_shares.value if latest.diluted_shares is not None else None
+        )
+        share_cagr = cagr(
+            first_shares,
+            latest_shares,
+            latest.fiscal_year - first.fiscal_year,
+        )
+        rows.append(
+            {
+                "Ticker / company": (
+                    f"{candidate.company.ticker} — {candidate.company.company_name}"
+                ),
+                "Priority": result.bucket.value,
+                "Coverage": result.coverage_class.value,
+                "FCF/share": (
+                    f"FY{third_most_recent.fiscal_year} "
+                    f"{_format_dollar_per_share(third_most_recent.fcf_per_share)} "
+                    f"→ FY{latest.fiscal_year} "
+                    f"{_format_dollar_per_share(latest.fcf_per_share)}"
+                ),
+                "Latest FCF (USD M)": (
+                    latest.free_cash_flow / 1_000_000
+                    if latest.free_cash_flow is not None
+                    else None
+                ),
+                "Diluted-share CAGR": (
+                    f"FY{first.fiscal_year}–FY{latest.fiscal_year} "
+                    f"{format_ratio(share_cagr, signed=True)}"
+                ),
+                "Survival gate": result.gate.value if result.gate else "None",
+            }
+        )
+    return frame(rows)
+
+
+def _format_dollar_per_share(value: float | None) -> str:
+    return "NOT AVAILABLE" if value is None else f"${format_per_share(value)}"
+
+
+def _improving_economics_detail(
+    candidate: ImprovingEconomicsReviewCandidate,
+) -> None:
+    result = candidate.screening
+    st.markdown(f"**Survival gate:** {result.gate.value if result.gate else 'None'}")
+    if result.limiting_reasons:
+        st.markdown("**Limiting reasons**")
+        for reason in result.limiting_reasons:
+            st.markdown(f"- {reason.value}")
+    else:
+        st.caption("No additional limiting reasons.")
+    if result.coverage_reasons:
+        st.markdown("**Coverage limitations**")
+        for reason in result.coverage_reasons:
+            st.markdown(f"- {reason.value}")
+
+    with st.expander("Five-year financial history", expanded=False):
+        st.dataframe(
+            frame(
+                [
+                    {
+                        "FY": row.fiscal_year,
+                        "FCF (USD)": (
+                            format_money(row.free_cash_flow)
+                            if row.free_cash_flow is not None
+                            else "NOT AVAILABLE"
+                        ),
+                        "FCF/share (USD)": _format_dollar_per_share(
+                            row.fcf_per_share
+                        ),
+                        "Diluted shares": (
+                            f"{format_count(row.diluted_shares.value)} shares"
+                            if row.diluted_shares is not None
+                            else "NOT AVAILABLE"
+                        ),
+                    }
+                    for row in candidate.owner_economics
+                ],
+                index="FY",
+            ),
+            width="stretch",
+        )
 
 
 def _filters(results: tuple[ScreeningResult, ...]) -> list[ScreeningResult]:

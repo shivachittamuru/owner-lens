@@ -19,6 +19,7 @@ from owner_lens.decisions import DecisionError
 from owner_lens.opportunity_comparison import ComparisonError
 from owner_lens.persistence import SqliteStore
 from owner_lens.persistence.errors import PersistenceError
+from owner_lens.screening import ScreeningBucket
 from owner_lens.underwriting import UnderwritingError
 from owner_lens.underwriting_contract import project_underwriting
 from owner_lens.underwriting_investment_view import (
@@ -32,6 +33,7 @@ from owner_lens.workbench.cache import (
     cached_comparison,
     cached_coverage_standings,
     cached_data_quality,
+    cached_improving_economics_owner_economics,
     cached_screening,
     clear_caches,
     fingerprint,
@@ -40,6 +42,7 @@ from owner_lens.workbench.cache import (
 from owner_lens.workbench.data import (
     PersistedCompany,
     WorkbenchError,
+    improving_economics_review_candidates,
     load_persisted_companies,
     overview_counts,
 )
@@ -175,7 +178,41 @@ def main() -> None:
     if page == "Overview":
         overview.render(companies, results, overview_counts(companies, results))
     elif page == "Screener":
-        screener.render(results)
+        screener_modes = (
+            ("Standard Screener", "Improving Economics - Review Only")
+            if provider == "fmp"
+            else ("Standard Screener",)
+        )
+        if st.session_state.get("screener_view_mode") not in screener_modes:
+            st.session_state["screener_view_mode"] = screener_modes[0]
+        screener_mode = st.radio(
+            "Screener view",
+            options=screener_modes,
+            horizontal=True,
+            key="screener_view_mode",
+        )
+        if screener_mode == "Improving Economics - Review Only":
+            eligible = tuple(
+                result
+                for result in results
+                if result.bucket
+                in (ScreeningBucket.WATCH, ScreeningBucket.LOW_PRIORITY)
+            )
+            owner_economics = _guarded(
+                lambda: cached_improving_economics_owner_economics(
+                    prints,
+                    tuple(result.ticker for result in eligible),
+                    db_path=db_path,
+                    provider=provider,
+                )
+            )
+            if owner_economics is not None:
+                candidates = improving_economics_review_candidates(
+                    companies, eligible, dict(owner_economics)
+                )
+                screener.render_improving_economics_review(candidates)
+        else:
+            screener.render(results)
     elif page == "Company":
         _company_page(usable, provider, db_path)
     elif page == "Compare":

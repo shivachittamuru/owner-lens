@@ -24,7 +24,7 @@ Three properties are load bearing:
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -90,6 +90,7 @@ __all__ = [
     "CoverageStanding",
     "DataQualityMetric",
     "DataQualityReport",
+    "ImprovingEconomicsReviewCandidate",
     "OverviewCounts",
     "PersistedCompany",
     "WorkbenchError",
@@ -103,6 +104,7 @@ __all__ = [
     "format_money",
     "format_per_share",
     "format_ratio",
+    "improving_economics_review_candidates",
     "limiting_factor_label",
     "load_canonical_history",
     "load_persisted_companies",
@@ -144,6 +146,7 @@ class PersistedCompany:
     history_id: int | None = None
     universe_observed_at: str | None = None
     history_input_hash: str | None = None
+    sector: str | None = None
 
     @property
     def available(self) -> bool:
@@ -151,6 +154,15 @@ class PersistedCompany:
         if self.provider == "fmp":
             return self.history_id is not None
         return self.content_hash is not None
+
+
+@dataclass(frozen=True)
+class ImprovingEconomicsReviewCandidate:
+    """A persisted company that meets the non-scoring improving-economics filter."""
+
+    company: PersistedCompany
+    screening: ScreeningResult
+    owner_economics: tuple[OwnerEconomicsRow, ...]
 
 
 @dataclass(frozen=True)
@@ -238,6 +250,7 @@ def load_persisted_companies(
                 history_id=row["history_id"],
                 universe_observed_at=row["observed_at"],
                 history_input_hash=row["input_hash"],
+                sector=row["sector"],
             )
             for row in _fmp_store(source).list_fmp_universe_evidence()
         )
@@ -451,6 +464,71 @@ def research_queue(results: Sequence[ScreeningResult]) -> tuple[ScreeningResult,
         if result.bucket
         in (ScreeningBucket.HIGH_PRIORITY, ScreeningBucket.WORTH_UNDERWRITING)
     )
+
+
+def improving_economics_review_candidates(
+    companies: Sequence[PersistedCompany],
+    results: Sequence[ScreeningResult],
+    owner_economics_by_ticker: Mapping[str, Sequence[OwnerEconomicsRow]],
+) -> tuple[ImprovingEconomicsReviewCandidate, ...]:
+    """Select improving-economics cases without changing Feature 7 judgments."""
+    by_ticker = {company.ticker: company for company in companies}
+    candidates: list[ImprovingEconomicsReviewCandidate] = []
+    eligible_buckets = {ScreeningBucket.WATCH, ScreeningBucket.LOW_PRIORITY}
+
+    for result in sorted(results, key=lambda item: item.rank_key):
+        if result.bucket not in eligible_buckets:
+            continue
+        company = by_ticker.get(result.ticker)
+        if company is None:
+            raise WorkbenchError(
+                f"{result.ticker} has a screening result but no persisted company."
+            )
+        if company.provider != "fmp":
+            continue
+        observations = improving_economics_observations(
+            owner_economics_by_ticker.get(result.ticker, ())
+        )
+        if observations is not None:
+            candidates.append(
+                ImprovingEconomicsReviewCandidate(company, result, observations)
+            )
+    return tuple(candidates)
+
+
+def improving_economics_observations(
+    rows: Sequence[OwnerEconomicsRow],
+) -> tuple[OwnerEconomicsRow, ...] | None:
+    """Return the five annual rows meeting the deterministic review criteria."""
+    observations = tuple(sorted(rows, key=lambda row: row.fiscal_year)[-5:])
+    if len(observations) != 5:
+        return None
+    revenue_values: list[int] = []
+    fcf_values: list[int] = []
+    fcf_per_share_values: list[float] = []
+    for row in observations:
+        if (
+            row.revenue is None
+            or row.diluted_shares is None
+            or row.diluted_shares.value <= 0
+            or row.free_cash_flow is None
+            or row.free_cash_flow <= 0
+            or row.fcf_per_share is None
+            or row.fcf_per_share <= 0
+        ):
+            return None
+        revenue_values.append(row.revenue.value)
+        fcf_values.append(row.free_cash_flow)
+        fcf_per_share_values.append(row.fcf_per_share)
+    if not (
+        fcf_values[-3] < fcf_values[-2] < fcf_values[-1]
+        and fcf_per_share_values[-3]
+        < fcf_per_share_values[-2]
+        < fcf_per_share_values[-1]
+        and revenue_values[-1] > revenue_values[0]
+    ):
+        return None
+    return observations
 
 
 def strongest_reason(result: ScreeningResult) -> str | None:

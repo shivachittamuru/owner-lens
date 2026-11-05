@@ -9,16 +9,20 @@ exercise the same persistence path the running application uses.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
+from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 from _fixtures import FakeSecClient
 
-from owner_lens.canonical import MetricStatus
+from owner_lens.canonical import CanonicalFact, MetricStatus, metric_spec
 from owner_lens.cli import main as cli_main
 from owner_lens.config import OwnerLensSettings
 from owner_lens.ingestion import ingest_company
+from owner_lens.owner_economics import OwnerEconomicsRow
 from owner_lens.persistence import FilesystemRawSnapshotStore, SqliteStore
 from owner_lens.persistence.errors import StorageReadError
 from owner_lens.screening import (
@@ -27,10 +31,13 @@ from owner_lens.screening import (
     DimensionBand,
     ScreeningBucket,
     ScreeningDimension,
+    ScreeningReason,
     screen_company_from_facts,
 )
 from owner_lens.sec_adapter import SEC_PROVIDER
 from owner_lens.workbench import data as wb
+from owner_lens.workbench.views import screener as screener_view
+from owner_lens.workbench.views.screener import _improving_economics_table
 
 _TICKERS = ("ADBE", "V", "COST")
 
@@ -74,6 +81,239 @@ def test_persisted_companies_are_discovered_in_ticker_order(
     assert [c.ticker for c in companies] == sorted(_TICKERS)
     assert all(c.available for c in companies)
     assert all(c.content_hash and c.cik and c.company_name for c in companies)
+
+
+def _review_rows(
+    *,
+    fcf: tuple[int | None, ...] = (1, 2, 3, 4, 5),
+    fcf_per_share: tuple[float | None, ...] = (1, 2, 3, 4, 5),
+    revenue: tuple[int | None, ...] = (10, 11, 12, 13, 14),
+    diluted_shares: tuple[int, ...] = (10, 10, 10, 10, 10),
+) -> tuple[OwnerEconomicsRow, ...]:
+    rows = []
+    for index, year in enumerate(range(2021, 2026)):
+        revenue_value = revenue[index]
+        shares_value = diluted_shares[index]
+        rows.append(
+            OwnerEconomicsRow(
+                fiscal_year=year,
+                revenue=(
+                    CanonicalFact(
+                        "revenue",
+                        revenue_value,
+                        metric_spec("revenue").unit,
+                        year,
+                        "FY",
+                        date(year, 12, 31),
+                        None,
+                        "fmp",
+                        "revenue",
+                        None,
+                        None,
+                        None,
+                    )
+                    if revenue_value is not None
+                    else None
+                ),
+                operating_income=None,
+                net_income=None,
+                operating_cash_flow=None,
+                capital_expenditures=None,
+                diluted_shares=CanonicalFact(
+                    "diluted_shares",
+                    shares_value,
+                    metric_spec("diluted_shares").unit,
+                    year,
+                    "FY",
+                    date(year, 12, 31),
+                    None,
+                    "fmp",
+                    "weightedAverageShsOutDil",
+                    None,
+                    None,
+                    None,
+                ),
+                operating_margin=None,
+                net_margin=None,
+                free_cash_flow=fcf[index],
+                fcf_margin=None,
+                fcf_per_share=fcf_per_share[index],
+                fcf_growth=None,
+                fcf_per_share_growth=None,
+                diluted_share_growth=None,
+            )
+        )
+    return tuple(rows)
+
+
+def test_improving_economics_filter_requires_all_five_usable_positive_years() -> None:
+    rows = _review_rows()
+
+    assert wb.improving_economics_observations(rows) == rows
+    assert wb.improving_economics_observations(rows[:4]) is None
+    assert wb.improving_economics_observations(
+        _review_rows(fcf=(1, 2, None, 4, 5))
+    ) is None
+    assert wb.improving_economics_observations(
+        _review_rows(fcf_per_share=(1, 2, None, 4, 5))
+    ) is None
+    assert wb.improving_economics_observations(
+        _review_rows(revenue=(10, 11, None, 13, 14))
+    ) is None
+    assert wb.improving_economics_observations(
+        _review_rows(fcf=(1, 2, 0, 4, 5))
+    ) is None
+    assert wb.improving_economics_observations(
+        _review_rows(fcf_per_share=(1, 2, -1, 4, 5))
+    ) is None
+    missing_shares = list(_review_rows())
+    missing_shares[2] = replace(missing_shares[2], diluted_shares=None)
+    assert wb.improving_economics_observations(missing_shares) is None
+
+
+@pytest.mark.parametrize(
+    ("fcf", "fcf_per_share", "revenue"),
+    [
+        ((1, 2, 4, 3, 5), (1, 2, 3, 4, 5), (10, 11, 12, 13, 14)),
+        ((1, 2, 3, 4, 5), (1, 2, 4, 3, 5), (10, 11, 12, 13, 14)),
+        ((1, 2, 3, 4, 5), (1, 2, 3, 4, 5), (14, 13, 12, 11, 10)),
+    ],
+)
+def test_improving_economics_filter_requires_both_recent_trends_and_revenue_growth(
+    fcf: tuple[int | None, ...],
+    fcf_per_share: tuple[float | None, ...],
+    revenue: tuple[int | None, ...],
+) -> None:
+    assert (
+        wb.improving_economics_observations(
+            _review_rows(fcf=fcf, fcf_per_share=fcf_per_share, revenue=revenue)
+        )
+        is None
+    )
+
+
+def test_review_candidates_keep_existing_classifications_and_rank_order(
+    source: wb.WorkbenchSource,
+) -> None:
+    companies = wb.load_persisted_companies(source)
+    original = wb.screen_persisted_universe(source, companies)
+    by_ticker = {company.ticker: company for company in companies}
+    chosen = (
+        replace(original[0], bucket=ScreeningBucket.LOW_PRIORITY, screening_score=12),
+        replace(original[1], bucket=ScreeningBucket.WATCH, screening_score=9),
+        replace(original[2], bucket=ScreeningBucket.WATCH, screening_score=15),
+    )
+    classifications_before = tuple(
+        (
+            result.ticker,
+            result.bucket,
+            result.coverage_class,
+            result.setup_type,
+            result.gate,
+            result.screening_score,
+        )
+        for result in chosen
+    )
+    fmp_companies = tuple(
+        replace(by_ticker[result.ticker], provider="fmp", history_id=1)
+        for result in chosen
+    )
+    rows_by_ticker = {result.ticker: _review_rows() for result in chosen}
+
+    candidates = wb.improving_economics_review_candidates(
+        fmp_companies, chosen, rows_by_ticker
+    )
+
+    assert [candidate.screening.ticker for candidate in candidates] == [
+        result.ticker for result in sorted(chosen, key=lambda item: item.rank_key)
+    ]
+    assert all(
+        candidate.screening
+        == next(result for result in chosen if result.ticker == candidate.company.ticker)
+        for candidate in candidates
+    )
+    assert tuple(
+        (
+            result.ticker,
+            result.bucket,
+            result.coverage_class,
+            result.setup_type,
+            result.gate,
+            result.screening_score,
+        )
+        for result in chosen
+    ) == classifications_before
+
+
+def test_review_lane_table_uses_compact_financial_summaries(
+    source: wb.WorkbenchSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    companies = wb.load_persisted_companies(source)
+    original = wb.screen_persisted_universe(source, companies)
+    reason = ScreeningReason.PERSISTENT_MATERIAL_DILUTION
+    result = replace(
+        original[0],
+        bucket=ScreeningBucket.WATCH,
+        gate=reason,
+        limiting_reasons=(reason,),
+    )
+    company = replace(
+        next(item for item in companies if item.ticker == result.ticker),
+        provider="fmp",
+        history_id=1,
+    )
+    rows = _review_rows(
+        diluted_shares=(83_000_000, 83_000_000, 82_000_000, 171_000_000, 194_000_000)
+    )
+    candidates = wb.improving_economics_review_candidates(
+        (company,), (result,), {result.ticker: rows}
+    )
+
+    table = _improving_economics_table(candidates)
+
+    assert list(table.columns) == [
+        "Ticker / company",
+        "Priority",
+        "Coverage",
+        "FCF/share",
+        "Latest FCF (USD M)",
+        "Diluted-share CAGR",
+        "Survival gate",
+    ]
+    row = table.iloc[0]
+    assert row["Ticker / company"] == f"{result.ticker} — {company.company_name}"
+    assert row["FCF/share"] == "FY2023 $3.00 → FY2025 $5.00"
+    assert row["Latest FCF (USD M)"] == pytest.approx(0.000005)
+    assert row["Diluted-share CAGR"] == "FY2021–FY2025 +23.6%"
+    assert row["Survival gate"] == reason.value
+
+    markdown: list[str] = []
+    tables: list[tuple[Any, dict[str, Any]]] = []
+    monkeypatch.setattr(screener_view.st, "markdown", markdown.append)
+    monkeypatch.setattr(screener_view.st, "caption", markdown.append)
+    monkeypatch.setattr(screener_view.st, "title", lambda _text: None)
+    monkeypatch.setattr(
+        screener_view.st,
+        "selectbox",
+        lambda _label, *, options, **_kwargs: options[0],
+    )
+    monkeypatch.setattr(
+        screener_view.st, "expander", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        screener_view.st,
+        "dataframe",
+        lambda table, **kwargs: tables.append((table, kwargs)),
+    )
+    screener_view.render_improving_economics_review(candidates)
+
+    assert any(reason.value in text for text in markdown)
+    assert len(tables) == 2
+    assert tables[0][1]["hide_index"] is True
+    assert tables[0][1]["column_config"]["Latest FCF (USD M)"]
+    assert list(tables[1][0].index) == [2021, 2022, 2023, 2024, 2025]
+    assert tables[1][0].loc[2025, "Diluted shares"] == "194,000,000 shares"
 
 
 def test_a_company_without_a_readable_snapshot_is_listed_not_dropped(
