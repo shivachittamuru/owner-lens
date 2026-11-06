@@ -14,6 +14,7 @@ from owner_lens.screening import (
     ScreeningResult,
     SetupType,
 )
+from owner_lens.uncertainty_fragility import UncertaintyFragilityReview
 from owner_lens.workbench.data import (
     BAND_LABEL,
     DIMENSION_LABEL,
@@ -39,6 +40,106 @@ _SORTS = {
     "Screening score": lambda r: (-r.screening_score, r.ticker),
     "Ticker": lambda r: r.ticker,
 }
+
+
+def render_uncertainty_fragility(
+    reviews: tuple[UncertaintyFragilityReview, ...],
+    results: tuple[ScreeningResult, ...],
+) -> None:
+    """Compact independent evidence review, retaining all original gates."""
+    st.subheader("Uncertainty & Fragility review")
+    columns = st.columns(3)
+    columns[0].markdown("Business uncertainty")
+    columns[0].caption("Historical prompts, not HIGH_UNCERTAINTY or predictions.")
+    columns[1].markdown("Financial fragility evidence")
+    columns[1].caption(
+        "Evidence states, not measured risk levels. No gate is not safety."
+    )
+    columns[2].markdown("Evidence uncertainty")
+    columns[2].caption(
+        "Missingness and incompatible definitions, not financial distress."
+    )
+    flagged_only = st.checkbox(
+        "Flagged evidence only",
+        value=True,
+        key="uf_flagged_only",
+        help="Includes business prompts, financial warnings, existing gates, and evidence limitations.",
+    )
+    visible = tuple(review for review in reviews if not flagged_only or review.flagged)
+    st.caption(
+        f"{len(visible)} of {len(reviews)} companies in review; original Feature 7 order, no new score."
+    )
+    if not visible:
+        st.info(
+            "No flags from these checks. Qualitative uncertainty still requires research."
+        )
+        return
+    ticker = st.selectbox(
+        "Review company", [review.ticker for review in visible], key="uf_ticker"
+    )
+    selected = next(review for review in visible if review.ticker == ticker)
+    st.caption(
+        f"{selected.ticker} | Existing priority: {selected.priority} | Existing gate: {selected.existing_gate or 'None (not safety)'}"
+    )
+    if selected.existing_gate:
+        st.warning(f"Existing gate retained: {selected.existing_gate}")
+    table = [
+        {
+            "Business indicators": ", ".join(item.code for item in selected.business)
+            or "No indicator from current checks; qualitative research required",
+            "Financial evidence": selected.financial_state,
+            "Evidence limitations": ", ".join(
+                dict.fromkeys(item.code for item in selected.limitations)
+            )
+            or "No flag from these checks; not complete evidence",
+        }
+    ]
+    st.dataframe(
+        frame(table),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Business indicators": st.column_config.TextColumn(
+                help="Historical direction, margin changes, growth deceleration and normalization sensitivity."
+            ),
+            "Financial evidence": st.column_config.TextColumn(
+                help="ACTIVATED_EXISTING_GATE, OBSERVED_FINANCIAL_WARNING, NO_FLAG_FROM_CURRENT_CHECKS, INSUFFICIENT_EVIDENCE. Independent evidence states."
+            ),
+            "Evidence limitations": st.column_config.TextColumn(
+                help="Unsupported observations and unverified accounting definitions do not imply distress."
+            ),
+        },
+    )
+    st.info(selected.research_direction)
+    with st.expander("Observations, rules and source evidence", expanded=False):
+        for title, items in (
+            ("Business uncertainty indicators", selected.business),
+            ("Financial fragility evidence", selected.financial),
+            ("Evidence limitations", selected.limitations),
+        ):
+            st.markdown(f"#### {title}")
+            if not items:
+                st.caption("No flag from the current checks, not proof of absence.")
+            for item in items:
+                st.markdown(f"- {item.code}: {item.explanation}")
+        st.caption(
+            "Qualitative research: competition, brand relevance, regulation and technology disruption are not classified by these checks."
+        )
+        st.dataframe(frame(list(selected.annual)), hide_index=True, width="stretch")
+        if selected.sources:
+            st.dataframe(
+                frame(list(selected.sources)), hide_index=True, width="stretch"
+            )
+        original = next(result for result in results if result.ticker == ticker)
+        st.caption("Unchanged Feature 7 measurements supporting gates and warnings")
+        for dimension, score in original.dimensions.items():
+            st.markdown(
+                f"- {dimension.value}: {'; '.join(score.evidence) or 'Not evaluable'}"
+            )
+    if st.button("Open research / underwriting in Company view", key="uf_open_company"):
+        st.session_state["selected_ticker"] = ticker
+        st.session_state["requested_page"] = "Company"
+        st.rerun()
 
 
 def render(results: tuple[ScreeningResult, ...]) -> None:

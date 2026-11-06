@@ -31,6 +31,10 @@ from owner_lens.screening import (
     assemble_screening_evidence,
     screen_company,
 )
+from owner_lens.uncertainty_fragility import (
+    UncertaintyFragilityReview,
+    load_uncertainty_fragility,
+)
 from owner_lens.workbench.data import (
     DEFAULT_MAX_YEARS,
     CompanyDetail,
@@ -187,6 +191,45 @@ def cached_screening_result(
     return screen_company(assemble_screening_evidence(history))
 
 
+@st.cache_data(show_spinner="Reviewing uncertainty and fragility evidence…")
+def cached_uncertainty_fragility(
+    company: PersistedCompany,
+    result: ScreeningResult,
+    db_path: str,
+    *,
+    _source: WorkbenchSource,
+) -> UncertaintyFragilityReview:
+    """Cache plain independent review evidence; retain no live source."""
+    return load_uncertainty_fragility(_source, company, result)
+
+
+def uncertainty_fragility_reviews(
+    companies: tuple[PersistedCompany, ...],
+    results: tuple[ScreeningResult, ...],
+    db_path: str,
+) -> tuple[UncertaintyFragilityReview, ...]:
+    """Open one short-lived source for independent per-company cache misses."""
+    if not companies:
+        return ()
+    with open_run_source() as source:
+        by_ticker = {
+            company.ticker: company
+            for company in load_persisted_companies(source, companies[0].provider)
+        }
+        for company in companies:
+            current = by_ticker.get(company.ticker)
+            if current is None or current != company:
+                raise WorkbenchError(
+                    f"{company.ticker} changed; reload persisted data."
+                )
+        return tuple(
+            cached_uncertainty_fragility(
+                by_ticker[result.ticker], result, db_path, _source=source
+            )
+            for result in sorted(results, key=lambda item: item.rank_key)
+        )
+
+
 @st.cache_data(show_spinner="Building company detail…")
 def cached_company_detail(
     ticker: str,
@@ -284,3 +327,4 @@ def clear_caches() -> None:
     cached_data_quality.clear()
     cached_coverage_standings.clear()
     cached_improving_economics_owner_economics.clear()
+    cached_uncertainty_fragility.clear()

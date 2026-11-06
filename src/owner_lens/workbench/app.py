@@ -213,6 +213,18 @@ def main() -> None:
                 screener.render_improving_economics_review(candidates)
         else:
             screener.render(results)
+        if st.checkbox(
+            "Show Uncertainty & Fragility review",
+            key="show_uncertainty_fragility",
+            help="Offline historical research prompts, existing financial warnings, and evidence limitations. No risk score.",
+        ):
+            from owner_lens.workbench.cache import uncertainty_fragility_reviews
+
+            reviews = _guarded(
+                lambda: uncertainty_fragility_reviews(companies, results, db_path)
+            )
+            if reviews is not None:
+                screener.render_uncertainty_fragility(reviews, results)
     elif page == "Company":
         _company_page(usable, provider, db_path)
     elif page == "Compare":
