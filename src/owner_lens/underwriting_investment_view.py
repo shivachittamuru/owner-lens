@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -99,6 +100,10 @@ class UnderwritingInvestmentView:
     record_id: str
     content_hash: str
     snapshot_json: str
+    expected_terminal_value_per_share: float | None
+    horizon_years: int | None
+    hurdle_entry_price: float | None
+    quote_comparison_status: str
 
 
 def is_analysis_complete(projection: UnderwritingProjection) -> bool:
@@ -204,6 +209,39 @@ def _takeaway(summary: UnderwritingSummary | None) -> str:
     )
 
 
+def _conditional_hurdle_entry_price(
+    expected_terminal_value: Any,
+    required_return: Any,
+    horizon_years: Any,
+) -> float | None:
+    if (
+        isinstance(expected_terminal_value, bool)
+        or not isinstance(expected_terminal_value, (int, float))
+        or isinstance(required_return, bool)
+        or not isinstance(required_return, (int, float))
+        or type(horizon_years) is not int
+        or horizon_years <= 0
+    ):
+        return None
+    try:
+        expected_terminal_value = float(expected_terminal_value)
+        required_return = float(required_return)
+    except OverflowError:
+        return None
+    if (
+        not math.isfinite(expected_terminal_value)
+        or expected_terminal_value <= 0
+        or not math.isfinite(required_return)
+        or required_return <= -1
+    ):
+        return None
+    try:
+        hurdle = expected_terminal_value / (1 + required_return) ** horizon_years
+    except (OverflowError, ZeroDivisionError):
+        return None
+    return hurdle if math.isfinite(hurdle) and hurdle > 0 else None
+
+
 def build_investment_view(
     projection: UnderwritingProjection,
 ) -> UnderwritingInvestmentView:
@@ -220,6 +258,9 @@ def build_investment_view(
     saved_valuation = (
         json.loads(projection.valuation_json) if projection.valuation_json else {}
     )
+    horizon_years = saved_valuation.get("horizon_years")
+    if type(horizon_years) is not int or horizon_years <= 0:
+        horizon_years = None
     saved_scenarios = {
         row["assumptions"]["name"]: row
         for row in saved_valuation.get("scenarios", [])
@@ -273,6 +314,19 @@ def build_investment_view(
         item.statement for item in manual.thesis.monitoring_breakers
     ) or manual.thesis.breakers
     price_value = price.get("close") if isinstance(price, dict) else None
+    expected_terminal_value = (
+        summary.expected_terminal_value_per_share if summary else None
+    )
+    required_return = (
+        summary.investor_policy.required_return
+        if summary
+        else manual.investor_policy.required_return
+        if manual.investor_policy
+        else None
+    )
+    quote_comparison_status = (
+        "NOT_VERIFIED" if price_value is not None else "UNAVAILABLE"
+    )
 
     return UnderwritingInvestmentView(
         record.ticker,
@@ -284,11 +338,7 @@ def build_investment_view(
         feature7.get("coverage"),
         price_value,
         price.get("market_date") if isinstance(price, dict) else None,
-        summary.investor_policy.required_return
-        if summary
-        else manual.investor_policy.required_return
-        if manual.investor_policy
-        else None,
+        required_return,
         summary.expected_5y_cagr if summary else None,
         summary.return_spread if summary else None,
         summary.classification if summary else None,
@@ -314,4 +364,10 @@ def build_investment_view(
         record.underwriting_id,
         record.content_hash,
         record.snapshot_json,
+        expected_terminal_value,
+        horizon_years,
+        _conditional_hurdle_entry_price(
+            expected_terminal_value, required_return, horizon_years
+        ),
+        quote_comparison_status,
     )

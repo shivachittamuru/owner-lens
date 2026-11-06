@@ -525,6 +525,10 @@ Expected return
   hurdle and conditional classification. Expected CAGR comes from the
   probability-weighted terminal value and frozen price, not averaged scenario
   CAGRs. Classification is an underwriting assessment, not a buy/sell recommendation.
+* The conditional hurdle entry price uses the saved expected terminal
+  value/share, required return and valuation horizon. It is a model-derived
+  threshold, not independently verified intrinsic value. Quote comparison stays
+  `NOT_VERIFIED` when currency or share-price adjustment basis is unverified.
 * Inspect Bear/Base/Bull assumptions, manually approved probabilities, terminal
   value/share and implied scenario CAGR. These expose the beliefs behind the result.
 * Check Base-case sensitivities and the recorded variant view: which inputs

@@ -20,6 +20,7 @@ from owner_lens import underwriting_completion as completion
 from owner_lens.underwriting_completion import complete_underwriting
 from owner_lens.underwriting_contract import project_underwriting
 from owner_lens.underwriting_investment_view import (
+    _conditional_hurdle_entry_price,
     build_investment_view,
     select_investment_projection,
 )
@@ -55,8 +56,70 @@ def test_investment_view_projects_saved_inputs_and_outputs_without_writes(
     assert view.most_sensitive_driver is not None
     assert view.challenger is not None
     assert view.challenger.unresolved_questions
+    assert view.hurdle_entry_price is not None
+    assert view.horizon_years == 5
+    assert view.quote_comparison_status == "NOT_VERIFIED"
     assert source.store.list_underwriting("ADBE") == before_records
     assert source.store.list_challenger_runs(completed.record.underwriting_id) == before_runs
+
+
+def test_hurdle_uses_saved_value_required_return_and_horizon_without_writes(
+    source: WorkbenchSource,
+) -> None:
+    completed = complete_underwriting(source, "ADBE", _raw(), now=NOW)
+    projection = project_underwriting(source.store, "ADBE")
+    assert projection.summary is not None
+    assert projection.valuation_json is not None
+    before_records = source.store.list_underwriting("ADBE")
+    saved_valuation = json.loads(projection.valuation_json)
+    saved_valuation["horizon_years"] = 3
+    policy = replace(projection.summary.investor_policy, required_return=0.08)
+    summary = replace(
+        projection.summary,
+        expected_terminal_value_per_share=500.0,
+        investor_policy=policy,
+    )
+
+    view = build_investment_view(
+        replace(
+            projection,
+            summary=summary,
+            valuation_json=json.dumps(saved_valuation),
+        )
+    )
+
+    assert view.hurdle_entry_price == pytest.approx(500 / 1.08**3)
+    assert view.expected_terminal_value_per_share == 500
+    assert view.required_return == 0.08
+    assert view.horizon_years == 3
+    assert view.record_id == completed.record.underwriting_id
+    assert view.content_hash == completed.record.content_hash
+    assert view.snapshot_json == completed.record.snapshot_json
+    assert source.store.list_underwriting("ADBE") == before_records
+
+
+@pytest.mark.parametrize(
+    ("expected_terminal_value", "required_return", "horizon_years"),
+    (
+        (None, 0.12, 5),
+        (100.0, None, 5),
+        (100.0, -1.0, 5),
+        (100.0, 0.12, None),
+        (0.0, 0.12, 5),
+        (100.0, 0.12, 0),
+    ),
+)
+def test_hurdle_is_unavailable_for_missing_or_invalid_inputs(
+    expected_terminal_value: float | None,
+    required_return: float | None,
+    horizon_years: int | None,
+) -> None:
+    assert (
+        _conditional_hurdle_entry_price(
+            expected_terminal_value, required_return, horizon_years
+        )
+        is None
+    )
 
 
 def test_completed_version_remains_visible_while_newer_version_is_retryable(
@@ -130,5 +193,11 @@ def test_completed_investment_view_renders_decision_metrics(
         "Required return",
         "Assessment",
         "Expected value/share",
+        "Conditional hurdle entry price",
+        "Saved horizon",
+        "Quote comparison",
     }.issubset(labels)
+    assert next(
+        metric.value for metric in app.metric if metric.label == "Quote comparison"
+    ) == "NOT_VERIFIED"
     assert any(item.value == "Scenario setup and outcomes" for item in app.subheader)

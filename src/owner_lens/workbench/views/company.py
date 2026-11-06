@@ -172,16 +172,31 @@ def _underwriting(
     returns[3].metric("Assessment", investment.classification or NOT_AVAILABLE)
     returns[4].metric(
         "Expected value/share",
-        format_per_share(
-            projection.summary.expected_terminal_value_per_share
-            if projection.summary
-            else None
-        ),
+        format_per_share(investment.expected_terminal_value_per_share),
     )
+    hurdle = st.columns(3)
+    hurdle[0].metric(
+        "Conditional hurdle entry price",
+        format_per_share(investment.hurdle_entry_price),
+    )
+    hurdle[1].metric(
+        "Saved horizon",
+        f"{investment.horizon_years} years"
+        if investment.horizon_years is not None
+        else NOT_AVAILABLE,
+    )
+    hurdle[2].metric("Quote comparison", investment.quote_comparison_status)
     st.info(investment.key_takeaway)
     st.caption(
         "Frozen market evidence and saved calculations; expected outcomes depend on "
         "manual assumptions and probabilities. Not a buy/sell recommendation."
+    )
+    st.caption(
+        "The hurdle entry price is a conditional model-derived threshold using the "
+        "saved expected terminal value, required return, and horizon. It is not "
+        "independently verified intrinsic value. Quote comparison is NOT_VERIFIED "
+        "because currency and share-price adjustment basis are not established; "
+        "no cheap/expensive label is produced."
     )
 
     st.subheader("Scenario setup and outcomes")
