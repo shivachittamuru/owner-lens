@@ -509,7 +509,7 @@ def test_schema10_additive_migration_preserves_sources(store: SqliteStore) -> No
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "13"
+        == "14"
     )
     assert run_calibration(store, as_of=AS_OF)["eligible_sample_count"] == 1
 

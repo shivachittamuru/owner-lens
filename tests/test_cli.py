@@ -111,6 +111,27 @@ def test_ingest_retrieval_failure_exits_one(
     assert "FAILED (retrieval)" in out
 
 
+def test_historical_price_pilot_requires_existing_disposable_copies(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(
+        [
+            "historical-price-pilot",
+            "--db",
+            str(tmp_path / "missing.sqlite"),
+            "--raw-data",
+            str(tmp_path / "missing-raw"),
+            "--from",
+            "2023-10-30",
+            "--to",
+            "2026-10-30",
+            "--confirm-disposable-store",
+        ]
+    )
+    assert code == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
 def test_unchanged_reingest_exits_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -310,9 +331,7 @@ def test_refresh_sp500_cli_persists_bounded_membership_without_live_fmp(
         ),
     )
 
-    assert cli.main(
-        ["refresh-sp500", "--tickers", "ADBE", "GOOG", "GOOGL"]
-    ) == 0
+    assert cli.main(["refresh-sp500", "--tickers", "ADBE", "GOOG", "GOOGL"]) == 0
     output = capsys.readouterr().out
     assert "S&P 500 refresh completed" in output
     assert "4 securities" in output
@@ -324,7 +343,9 @@ def test_refresh_sp500_cli_persists_bounded_membership_without_live_fmp(
     store.close()
 
     monkeypatch.setattr(
-        cli, "FmpClient", lambda _api_key: pytest.fail("evidence-status must be offline")
+        cli,
+        "FmpClient",
+        lambda _api_key: pytest.fail("evidence-status must be offline"),
     )
     assert cli.main(["evidence-status", "--tickers", "ADBE"]) == 0
     status_output = capsys.readouterr().out

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,9 @@ def _client(
     cache: FmpResponseCache | None = None,
 ) -> FmpClient:
     return FmpClient(
-        KEY, http_client=httpx.Client(transport=httpx.MockTransport(handler)), cache=cache
+        KEY,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        cache=cache,
     )
 
 
@@ -40,7 +43,9 @@ def _ok(payloads: dict[str, Any], seen: list[httpx.Request] | None = None):
     def handler(request: httpx.Request) -> httpx.Response:
         if seen is not None:
             seen.append(request)
-        endpoint = request.url.path.rsplit("/", 1)[-1]
+        endpoint = request.url.path.removeprefix("/stable/")
+        if endpoint not in payloads:
+            endpoint = endpoint.rsplit("/", 1)[-1]
         return httpx.Response(200, json=payloads[endpoint])
 
     return handler
@@ -48,7 +53,9 @@ def _ok(payloads: dict[str, Any], seen: list[httpx.Request] | None = None):
 
 def test_retrieves_three_annual_statements_with_expected_parameters() -> None:
     seen: list[httpx.Request] = []
-    statements = _client(_ok(fmp_payloads(), seen)).retrieve_annual_statements(" adbe ", limit=3)
+    statements = _client(_ok(fmp_payloads(), seen)).retrieve_annual_statements(
+        " adbe ", limit=3
+    )
 
     assert statements.symbol == "ADBE"
     assert [r["fiscalYear"] for r in statements.income] == ["2025", "2024", "2023"]
@@ -64,7 +71,9 @@ def test_retrieves_three_annual_statements_with_expected_parameters() -> None:
         assert request.url.params["period"] == "annual"
         assert request.url.params["limit"] == "3"
         assert request.url.params["apikey"] == KEY
-    assert all(KEY not in url and "apikey=<redacted>" in url for url in statements.source_urls)
+    assert all(
+        KEY not in url and "apikey=<redacted>" in url for url in statements.source_urls
+    )
 
 
 @pytest.mark.parametrize("key", ["", "   "])
@@ -87,7 +96,9 @@ def test_api_key_is_not_in_repr() -> None:
         (500, "server error", FmpResponseError),
     ],
 )
-def test_http_failures_are_typed_and_redacted(status: int, body: Any, error: type) -> None:
+def test_http_failures_are_typed_and_redacted(
+    status: int, body: Any, error: type
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         content = body if isinstance(body, str) else json.dumps(body)
         return httpx.Response(status, text=content)
@@ -172,12 +183,8 @@ def test_premium_evidence_endpoints_preserve_raw_payload_and_parameters() -> Non
         return httpx.Response(200, json=responses[request.url.path])
 
     client = _client(handler)
-    annual = client.get_statement_evidence(
-        "income", "ADBE", period="annual", limit=15
-    )
-    estimate = client.get_analyst_estimates_evidence(
-        "ADBE", period="quarter", limit=4
-    )
+    annual = client.get_statement_evidence("income", "ADBE", period="annual", limit=15)
+    estimate = client.get_analyst_estimates_evidence("ADBE", period="quarter", limit=4)
     eod = client.get_eod_price_evidence("ADBE")
 
     assert annual.rows[0]["period"] == "FY"
@@ -190,6 +197,116 @@ def test_premium_evidence_endpoints_preserve_raw_payload_and_parameters() -> Non
     assert seen[2].url.path == "/stable/historical-price-eod/light"
     assert eod.rows[0]["price"] == 123.45
     assert estimate.endpoint == "analyst-estimates"
+
+
+def test_historical_price_profile_and_splits_evidence_preserve_raw_responses() -> None:
+    seen: list[httpx.Request] = []
+    responses: dict[str, Any] = {
+        "historical-price-eod/full": [
+            {"symbol": "NVDA", "date": "2024-06-10", "close": 121.79}
+        ],
+        "profile": [
+            {"symbol": "NVDA", "currency": "USD", "exchangeShortName": "NASDAQ"}
+        ],
+        "splits": [
+            {
+                "symbol": "NVDA",
+                "date": "2024-06-10",
+                "numerator": 10,
+                "denominator": 1,
+            }
+        ],
+    }
+    client = _client(_ok(responses, seen))
+    start_date, end_date = date(2024, 6, 1), date(2024, 6, 30)
+
+    history = client.get_historical_price_evidence(
+        "nvda", start_date=start_date, end_date=end_date
+    )
+    profile = client.get_profile_evidence("NVDA")
+    splits = client.get_splits_evidence(
+        "NVDA", start_date=start_date, end_date=end_date
+    )
+
+    assert [request.url.path for request in seen] == [
+        "/stable/historical-price-eod/full",
+        "/stable/profile",
+        "/stable/splits",
+    ]
+    assert seen[0].url.params["from"] == "2024-06-01"
+    assert seen[0].url.params["to"] == "2024-06-30"
+    assert history.rows[0]["close"] == 121.79
+    assert history.raw_payload.startswith(b"[")
+    assert profile.rows[0]["currency"] == "USD"
+    assert splits.rows[0]["numerator"] == 10
+    assert all(KEY not in payload.source_url for payload in (history, profile, splits))
+    assert all(payload.request_parameters for payload in (history, profile, splits))
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"symbol": "OTHER", "date": "2024-06-10", "close": 10.0},
+        {"symbol": "NVDA", "date": "2024-06-31", "close": 10.0},
+        {"symbol": "NVDA", "date": "2024-06-10", "close": float("nan")},
+        {"symbol": "NVDA", "date": "2024-06-10", "close": -1.0},
+    ],
+)
+def test_historical_prices_reject_identity_date_and_price_errors(
+    row: dict[str, Any],
+) -> None:
+    client = _client(
+        lambda _request: httpx.Response(
+            200, content=json.dumps([row], allow_nan=True).encode()
+        )
+    )
+    with pytest.raises(MalformedFmpResponseError):
+        client.get_historical_price_evidence(
+            "NVDA", start_date=date(2024, 6, 1), end_date=date(2024, 6, 30)
+        )
+
+
+def test_profile_and_split_evidence_reject_identity_and_invalid_split() -> None:
+    profile_client = _client(
+        lambda _request: httpx.Response(
+            200, json=[{"symbol": "OTHER", "currency": "USD"}]
+        )
+    )
+    with pytest.raises(MalformedFmpResponseError, match="not NVDA"):
+        profile_client.get_profile_evidence("NVDA")
+
+    split_client = _client(
+        lambda _request: httpx.Response(
+            200,
+            json=[
+                {
+                    "symbol": "NVDA",
+                    "date": "2024-06-10",
+                    "numerator": 10,
+                    "denominator": 0,
+                }
+            ],
+        )
+    )
+    with pytest.raises(MalformedFmpResponseError, match="denominator"):
+        split_client.get_splits_evidence(
+            "NVDA", start_date=date(2024, 6, 1), end_date=date(2024, 6, 30)
+        )
+
+
+def test_historical_price_range_is_bounded_and_not_future() -> None:
+    client = _client(lambda _request: httpx.Response(200, json=[]))
+    with pytest.raises(ValueError, match="limited to three years"):
+        client.get_historical_price_evidence(
+            "NVDA", start_date=date(2020, 1, 1), end_date=date(2024, 1, 2)
+        )
+    with pytest.raises(ValueError, match="future"):
+        tomorrow = datetime.now(UTC).date() + timedelta(days=1)
+        client.get_historical_price_evidence(
+            "NVDA",
+            start_date=tomorrow,
+            end_date=tomorrow,
+        )
 
 
 def test_quarterly_statement_request_uses_fmp_period_label() -> None:
@@ -293,7 +410,9 @@ def test_cache_miss_calls_fmp_and_writes_raw_json(tmp_path: Path) -> None:
 def test_cache_hit_makes_no_network_call(tmp_path: Path) -> None:
     calls: list[str] = []
     cache = FmpResponseCache(tmp_path)
-    first = _client(_counting(fmp_payloads(), calls), cache).retrieve_annual_statements("ADBE")
+    first = _client(_counting(fmp_payloads(), calls), cache).retrieve_annual_statements(
+        "ADBE"
+    )
 
     def offline(request: httpx.Request) -> httpx.Response:
         raise AssertionError("cache hit must not call FMP")
@@ -349,9 +468,15 @@ def test_failed_responses_are_not_cached(
 
 @pytest.mark.parametrize(
     "corrupt",
-    ["{not json", '{"rows": []}', '[{"symbol": "MSFT", "period": "FY", "date": "2025-11-30"}]'],
+    [
+        "{not json",
+        '{"rows": []}',
+        '[{"symbol": "MSFT", "period": "FY", "date": "2025-11-30"}]',
+    ],
 )
-def test_invalid_cache_entry_is_refetched_and_overwritten(tmp_path: Path, corrupt: str) -> None:
+def test_invalid_cache_entry_is_refetched_and_overwritten(
+    tmp_path: Path, corrupt: str
+) -> None:
     cache = FmpResponseCache(tmp_path)
     path = cache.path("income-statement", "ADBE", period="annual", limit=5)
     assert path is not None

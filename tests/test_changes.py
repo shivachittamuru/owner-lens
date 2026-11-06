@@ -590,7 +590,7 @@ def test_integrity_errors_and_additive_v8_migration(store: SqliteStore) -> None:
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "13"
+        == "14"
     )
     store.save_change_event(canonical_json(event))
     approve_event(store, event["event_id"], "NOISE", "Manual", now=NOW)
@@ -1008,9 +1008,12 @@ def test_workbench_approval_is_not_carried_between_events(store: SqliteStore) ->
     assert not store.list_change_approvals()
 
 
-@pytest.mark.parametrize("classification", [None, "NOISE", "EVIDENCE", "THESIS_UPDATE", "THESIS_BREAK"])
+@pytest.mark.parametrize(
+    "classification", [None, "NOISE", "EVIDENCE", "THESIS_UPDATE", "THESIS_BREAK"]
+)
 def test_summary_approval_authority_and_separate_noncomparable_pending(
-    store: SqliteStore, classification: str | None,
+    store: SqliteStore,
+    classification: str | None,
 ) -> None:
     selected = persist(store, "ADBE", monitored_snapshot())
     data = event_input()
@@ -1020,15 +1023,20 @@ def test_summary_approval_authority_and_separate_noncomparable_pending(
     assert pending["assessment"]["candidate_classification"] is None
     if classification:
         event = create_event(store, selected, event_input(), now=NOW)
-        approve_event(store, event["event_id"], classification, "Explicit approval", now=NOW)
+        approve_event(
+            store, event["event_id"], classification, "Explicit approval", now=NOW
+        )
     state = current_change_state(store, "ADBE")
     assert state["since_underwriting"] == {
-        name: int(name == classification) for name in ("NOISE", "EVIDENCE", "THESIS_UPDATE", "THESIS_BREAK")
+        name: int(name == classification)
+        for name in ("NOISE", "EVIDENCE", "THESIS_UPDATE", "THESIS_BREAK")
     }
     assert state["pending_approval"] == 1
     assert state["pending_non_comparable"] == 1
     assert state["status"] == (
-        "REUNDERWRITING_REQUIRED" if classification in ("THESIS_UPDATE", "THESIS_BREAK") else "REVIEW_PENDING"
+        "REUNDERWRITING_REQUIRED"
+        if classification in ("THESIS_UPDATE", "THESIS_BREAK")
+        else "REVIEW_PENDING"
     )
     assert "Pending non-comparable assessment: 1" in format_current_state(state)
 
@@ -1039,47 +1047,86 @@ def predicate_condition(**changes: Any) -> dict[str, Any]:
         "statement": "Total Adobe ARR growth must remain at least 6%.",
         "category": "JUDGMENT",
         "observable": "Total Adobe ARR growth",
-        "operator": "GTE", "threshold": 6.0, "unit": "percent_yoy",
-        "cadence": "quarterly", "source_family": "adobe_earnings",
+        "operator": "GTE",
+        "threshold": 6.0,
+        "unit": "percent_yoy",
+        "cadence": "quarterly",
+        "source_family": "adobe_earnings",
         **changes,
     }
 
 
-def predicate_snapshot(*, breaker: bool = False, **changes: Any) -> UnderwritingSnapshot:
+def predicate_snapshot(
+    *, breaker: bool = False, **changes: Any
+) -> UnderwritingSnapshot:
     original = monitored_snapshot()
     condition = _conditions([predicate_condition(**changes)])[0]
-    return replace(original, manual=replace(original.manual, thesis=replace(
-        original.manual.thesis,
-        monitoring_breakers=(condition,) if breaker else original.manual.thesis.monitoring_breakers,
-        monitoring_dependencies=original.manual.thesis.monitoring_dependencies if breaker else (condition,),
-        breakers=(condition.statement,) if breaker else original.manual.thesis.breakers,
-        dependencies=original.manual.thesis.dependencies if breaker else (condition.statement,),
-    )))
+    return replace(
+        original,
+        manual=replace(
+            original.manual,
+            thesis=replace(
+                original.manual.thesis,
+                monitoring_breakers=(condition,)
+                if breaker
+                else original.manual.thesis.monitoring_breakers,
+                monitoring_dependencies=original.manual.thesis.monitoring_dependencies
+                if breaker
+                else (condition,),
+                breakers=(condition.statement,)
+                if breaker
+                else original.manual.thesis.breakers,
+                dependencies=original.manual.thesis.dependencies
+                if breaker
+                else (condition.statement,),
+            ),
+        ),
+    )
 
 
 def predicate_event(value: float = 5.8) -> dict[str, Any]:
-    data = event_input(value, condition_id="total_adobe_arr_growth", affected_beliefs=[])
+    data = event_input(
+        value, condition_id="total_adobe_arr_growth", affected_beliefs=[]
+    )
     data["observation"]["metric"] = {
-        "observable": "Total Adobe ARR growth", "value": value,
-        "unit": "percent_yoy", "cadence": "quarterly", "source_family": "adobe_earnings",
+        "observable": "Total Adobe ARR growth",
+        "value": value,
+        "unit": "percent_yoy",
+        "cadence": "quarterly",
+        "source_family": "adobe_earnings",
     }
     return data
 
 
-@pytest.mark.parametrize("op,value,met", [
-    ("GTE", 6.0, True), ("GTE", 5.8, False), ("GT", 6.0, False),
-    ("GT", 6.1, True), ("LTE", 6.0, True), ("LTE", 6.1, False),
-    ("LT", 6.0, False), ("LT", 5.8, True), ("EQ", 6.0, True), ("EQ", 6.000001, False),
-])
+@pytest.mark.parametrize(
+    "op,value,met",
+    [
+        ("GTE", 6.0, True),
+        ("GTE", 5.8, False),
+        ("GT", 6.0, False),
+        ("GT", 6.1, True),
+        ("LTE", 6.0, True),
+        ("LTE", 6.1, False),
+        ("LT", 6.0, False),
+        ("LT", 5.8, True),
+        ("EQ", 6.0, True),
+        ("EQ", 6.000001, False),
+    ],
+)
 def test_structured_predicate_exact_numeric_operators(
-    store: SqliteStore, op: str, value: float, met: bool,
+    store: SqliteStore,
+    op: str,
+    value: float,
+    met: bool,
 ) -> None:
     selected = persist(store, "ADBE", predicate_snapshot(operator=op))
     event = create_event(store, selected, predicate_event(value), now=NOW)
     assessment = event["assessment"]
     assert assessment["predicate_satisfied"] is met
     assert assessment["result"] == ("CONDITION_MET" if met else "CONDITION_BREACHED")
-    assert assessment["candidate_classification"] == ("EVIDENCE" if met else "THESIS_UPDATE")
+    assert assessment["candidate_classification"] == (
+        "EVIDENCE" if met else "THESIS_UPDATE"
+    )
     assert assessment["condition"]["operator"] == op
     assert assessment["condition"]["threshold"] == 6.0
     assert assessment["condition"]["statement"] == predicate_condition()["statement"]
@@ -1098,15 +1145,25 @@ def test_structured_breaker_uses_invalidating_predicate(store: SqliteStore) -> N
     assert current_change_state(store, "ADBE")["status"] == "REUNDERWRITING_REQUIRED"
 
 
-@pytest.mark.parametrize("field,value", [
-    ("observable", "Total adobe ARR growth"), ("observable", " Total Adobe ARR growth "),
-    ("observable", "Total Adobe ARR Growth"), ("observable", "Adobe ARR growth"),
-    ("unit", "percent"), ("unit", "%"), ("unit", "ratio"),
-    ("cadence", "Quarterly"), ("source_family", "Adobe_Earnings"),
-    ("source_family", "adobe_earnings_release"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("observable", "Total adobe ARR growth"),
+        ("observable", " Total Adobe ARR growth "),
+        ("observable", "Total Adobe ARR Growth"),
+        ("observable", "Adobe ARR growth"),
+        ("unit", "percent"),
+        ("unit", "%"),
+        ("unit", "ratio"),
+        ("cadence", "Quarterly"),
+        ("source_family", "Adobe_Earnings"),
+        ("source_family", "adobe_earnings_release"),
+    ],
+)
 def test_structured_predicate_metadata_never_fuzzy_matches(
-    store: SqliteStore, field: str, value: str,
+    store: SqliteStore,
+    field: str,
+    value: str,
 ) -> None:
     selected = persist(store, "ADBE", predicate_snapshot())
     data = predicate_event()
@@ -1119,9 +1176,12 @@ def test_structured_predicate_metadata_never_fuzzy_matches(
     assert state["status"] == "REVIEW_PENDING"
 
 
-@pytest.mark.parametrize("field", ["observable", "value", "unit", "cadence", "source_family"])
+@pytest.mark.parametrize(
+    "field", ["observable", "value", "unit", "cadence", "source_family"]
+)
 def test_structured_predicate_missing_event_metadata_is_insufficient(
-    store: SqliteStore, field: str,
+    store: SqliteStore,
+    field: str,
 ) -> None:
     selected = persist(store, "ADBE", predicate_snapshot())
     data = predicate_event()
@@ -1133,43 +1193,81 @@ def test_structured_predicate_missing_event_metadata_is_insufficient(
     assert state["status"] == "REVIEW_PENDING"
 
 
-@pytest.mark.parametrize("changes", [
-    {"operator": "GTE_APPROX"}, {"operator": "gte"}, {"operator": None},
-    {"threshold": "6.0"}, {"threshold": True}, {"threshold": float("inf")},
-    {"threshold": float("nan")}, {"threshold": None},
-    {"observable": None}, {"unit": None}, {"cadence": None}, {"source_family": None},
-    {"monitoring_cadence": "Quarterly"},
-])
-def test_invalid_partial_or_conflicting_structured_predicate_rejected(changes: dict[str, Any]) -> None:
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"operator": "GTE_APPROX"},
+        {"operator": "gte"},
+        {"operator": None},
+        {"threshold": "6.0"},
+        {"threshold": True},
+        {"threshold": float("inf")},
+        {"threshold": float("nan")},
+        {"threshold": None},
+        {"observable": None},
+        {"unit": None},
+        {"cadence": None},
+        {"source_family": None},
+        {"monitoring_cadence": "Quarterly"},
+    ],
+)
+def test_invalid_partial_or_conflicting_structured_predicate_rejected(
+    changes: dict[str, Any],
+) -> None:
     with pytest.raises(UnderwritingError):
         _conditions([predicate_condition(**changes)])
 
 
-def test_legacy_bytes_and_frozen_records_survive_structured_predicates(store: SqliteStore) -> None:
+def test_legacy_bytes_and_frozen_records_survive_structured_predicates(
+    store: SqliteStore,
+) -> None:
     legacy = monitored_snapshot()
     payload = legacy.to_json()
     data = json.loads(payload)
     for field in ("monitoring_dependencies", "monitoring_breakers"):
-        assert all(not set(item) & {"operator", "unit", "cadence", "source_family"}
-                   for item in data["manual"]["thesis"][field])
+        assert all(
+            not set(item) & {"operator", "unit", "cadence", "source_family"}
+            for item in data["manual"]["thesis"][field]
+        )
     assert UnderwritingSnapshot.from_json(payload).to_json() == payload
     original = persist(store, "ADBE", legacy)
     event = create_event(store, original, event_input(), now=NOW)
-    approve_event(store, event["event_id"], "THESIS_UPDATE", "Approved before new predicate", now=NOW)
+    approve_event(
+        store,
+        event["event_id"],
+        "THESIS_UPDATE",
+        "Approved before new predicate",
+        now=NOW,
+    )
     before = (
-        store.list_change_events(), store.list_change_approvals(),
-        store.list_underwriting("ADBE"), canonical_json(assess_event(store, event["event_id"])),
+        store.list_change_events(),
+        store.list_change_approvals(),
+        store.list_underwriting("ADBE"),
+        canonical_json(assess_event(store, event["event_id"])),
     )
     structured = persist(store, "ADBE", predicate_snapshot())
     new = create_event(store, structured, predicate_event(), now=NOW)
-    approve_event(store, new["event_id"], "NOISE", "Does not invalidate the earlier approval", now=NOW)
+    approve_event(
+        store,
+        new["event_id"],
+        "NOISE",
+        "Does not invalidate the earlier approval",
+        now=NOW,
+    )
     assert store.list_change_events()[0] == before[0][0]
     assert store.list_change_approvals()[0] == before[1][0]
     assert store.list_underwriting("ADBE")[0] == before[2][0]
     assert canonical_json(assess_event(store, event["event_id"])) == before[3]
     assert current_change_state(store, "ADBE")["status"] == "REUNDERWRITING_REQUIRED"
-    assert current_change_state(store, "ADBE")["since_underwriting"]["THESIS_UPDATE"] == 1
-    assert not set(event["assessment"]["condition"]) & {"operator", "unit", "cadence", "source_family"}
+    assert (
+        current_change_state(store, "ADBE")["since_underwriting"]["THESIS_UPDATE"] == 1
+    )
+    assert not set(event["assessment"]["condition"]) & {
+        "operator",
+        "unit",
+        "cadence",
+        "source_family",
+    }
 
 
 def test_structured_predicate_roundtrip_cloning_and_zero_threshold() -> None:
@@ -1185,12 +1283,16 @@ def test_structured_predicate_roundtrip_cloning_and_zero_threshold() -> None:
     assert condition["operator"] == "GTE"
     draft = authoring_from_manual(restored.manual)
     cloned = parse_authoring_input(draft)
-    assert cloned.thesis.monitoring_dependencies[0] == restored.manual.thesis.monitoring_dependencies[0]
+    assert (
+        cloned.thesis.monitoring_dependencies[0]
+        == restored.manual.thesis.monitoring_dependencies[0]
+    )
     assert json.loads(restored.to_json()) == json.loads(payload)
 
 
 def test_summary_uses_real_approval_not_flattened_candidate(
-    store: SqliteStore, monkeypatch: pytest.MonkeyPatch,
+    store: SqliteStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event = record_event(store)
     pending = assess_event(store, event["event_id"])
@@ -1203,12 +1305,20 @@ def test_summary_uses_real_approval_not_flattened_candidate(
     assert sum(state["since_underwriting"].values()) == 0
 
 
-def test_approval_moves_noncomparable_event_out_of_pending_counters(store: SqliteStore) -> None:
+def test_approval_moves_noncomparable_event_out_of_pending_counters(
+    store: SqliteStore,
+) -> None:
     selected = persist(store, "ADBE", predicate_snapshot())
     data = predicate_event()
     data["observation"]["metric"]["source_family"] = "different"
     event = create_event(store, selected, data, now=NOW)
-    approve_event(store, event["event_id"], "THESIS_UPDATE", "Explicit causal judgment despite incompatible metric", now=NOW)
+    approve_event(
+        store,
+        event["event_id"],
+        "THESIS_UPDATE",
+        "Explicit causal judgment despite incompatible metric",
+        now=NOW,
+    )
     state = current_change_state(store, "ADBE")
     assert state["pending_approval"] == state["pending_non_comparable"] == 0
     assert state["since_underwriting"]["THESIS_UPDATE"] == 1
@@ -1229,7 +1339,14 @@ def test_authoring_widgets_preserve_and_edit_structured_predicate() -> None:
     app.run()
     assert not app.exception
     result = app.session_state["edited_conditions"][0]
-    for field in ("operator", "threshold", "observable", "unit", "cadence", "source_family"):
+    for field in (
+        "operator",
+        "threshold",
+        "observable",
+        "unit",
+        "cadence",
+        "source_family",
+    ):
         assert result[field] == predicate_condition()[field]
     app.number_input(key="predicate_test.0.numeric_threshold").set_value(7.5).run()
     assert not app.exception
@@ -1238,15 +1355,21 @@ def test_authoring_widgets_preserve_and_edit_structured_predicate() -> None:
     assert _conditions([result])[0].source_family == "adobe_earnings"
 
 
-def test_structured_zero_threshold_not_flagged_missing_in_projection(store: SqliteStore) -> None:
+def test_structured_zero_threshold_not_flagged_missing_in_projection(
+    store: SqliteStore,
+) -> None:
     from owner_lens.underwriting_contract import project_underwriting
 
     persist(store, "ADBE", predicate_snapshot(threshold=0))
     projection = project_underwriting(store, "ADBE", version=1)
-    assert not any(item.section == "total_adobe_arr_growth" for item in projection.missing_evidence)
+    assert not any(
+        item.section == "total_adobe_arr_growth" for item in projection.missing_evidence
+    )
 
 
-def test_workbench_displays_independent_pending_noncomparable_counter(store: SqliteStore) -> None:
+def test_workbench_displays_independent_pending_noncomparable_counter(
+    store: SqliteStore,
+) -> None:
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
@@ -1259,6 +1382,8 @@ def test_workbench_displays_independent_pending_noncomparable_counter(store: Sql
     app.session_state["changes_version"] = "ADBE:1"
     app.run()
     assert not app.exception and not app.error
-    assert any("Pending non-comparable assessment: 1" in item.value for item in app.caption)
+    assert any(
+        "Pending non-comparable assessment: 1" in item.value for item in app.caption
+    )
     assert any("Status: REVIEW_PENDING" in item.value for item in app.markdown)
     assert sum(app.dataframe[0].value["Count"]) == 0

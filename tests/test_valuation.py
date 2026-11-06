@@ -443,7 +443,7 @@ def test_v4_migration_keeps_old_underwriting_exact(store: SqliteStore) -> None:
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "13"
+        == "14"
     )
     assert store.list_underwriting("ADBE") == (old,)
     with pytest.raises(ValuationError, match="BEAR"):

@@ -95,10 +95,13 @@ def test_refresh_versions_snapshots_and_preserves_distinct_share_classes(
     assert len(store.list_universe_members(first.snapshot_id)) == 4
     assert len(store.list_universe_members(changed.snapshot_id)) == 4
     assert len(store.list_security_refresh_state()) == 4 * len(SP500_REFRESH_DATASETS)
-    assert store._conn.execute("SELECT COUNT(*) FROM universe_snapshots").fetchone()[0] == 2
-    assert store.get_latest_universe_snapshot(SP500_PROVIDER) == store.get_universe_snapshot(
-        SP500_PROVIDER, changed.content_hash
+    assert (
+        store._conn.execute("SELECT COUNT(*) FROM universe_snapshots").fetchone()[0]
+        == 2
     )
+    assert store.get_latest_universe_snapshot(
+        SP500_PROVIDER
+    ) == store.get_universe_snapshot(SP500_PROVIDER, changed.content_hash)
 
     raw = store._raw_store
     assert raw is not None
@@ -138,14 +141,15 @@ def test_unknown_or_duplicate_requested_tickers_fail_without_partial_snapshot(
     with pytest.raises(UniverseRefreshError, match="not in the current"):
         refresh_sp500_universe(client=client, store=store, tickers=("ZZZZ",))
     with pytest.raises(UniverseRefreshError, match="Duplicate ticker"):
-        refresh_sp500_universe(
-            client=client, store=store, tickers=("GOOG", "goog")
-        )
+        refresh_sp500_universe(client=client, store=store, tickers=("GOOG", "goog"))
 
     assert store.get_latest_universe_snapshot(SP500_PROVIDER) is None
-    assert store._conn.execute(
-        "SELECT COUNT(*) FROM universe_refresh_runs WHERE status = 'FAILED'"
-    ).fetchone()[0] == 1
+    assert (
+        store._conn.execute(
+            "SELECT COUNT(*) FROM universe_refresh_runs WHERE status = 'FAILED'"
+        ).fetchone()[0]
+        == 1
+    )
     store.close()
 
 
@@ -162,9 +166,12 @@ def test_failed_fetch_can_resume_and_preserves_refresh_state(
 
     assert resumed.member_count == 4
     assert run is not None and run.status == "SUCCEEDED"
-    assert store._conn.execute(
-        "SELECT COUNT(*) FROM universe_refresh_runs WHERE status = 'FAILED'"
-    ).fetchone()[0] == 1
+    assert (
+        store._conn.execute(
+            "SELECT COUNT(*) FROM universe_refresh_runs WHERE status = 'FAILED'"
+        ).fetchone()[0]
+        == 1
+    )
     assert len(store.list_security_refresh_state()) == 4 * len(SP500_REFRESH_DATASETS)
     store.close()
 
@@ -192,15 +199,25 @@ def test_rerun_is_idempotent_after_snapshot_commit_before_run_completion(
     monkeypatch.setattr(store, "save_universe_snapshot", save)
     resumed = refresh_sp500_universe(client=FixtureClient(_response()), store=store)
     assert not resumed.new_snapshot
-    assert store._conn.execute("SELECT COUNT(*) FROM universe_snapshots").fetchone()[0] == 1
-    assert store._conn.execute("SELECT COUNT(*) FROM universe_members").fetchone()[0] == 4
-    assert store._conn.execute(
-        "SELECT COUNT(*) FROM universe_refresh_runs WHERE status = 'SUCCEEDED'"
-    ).fetchone()[0] == 1
+    assert (
+        store._conn.execute("SELECT COUNT(*) FROM universe_snapshots").fetchone()[0]
+        == 1
+    )
+    assert (
+        store._conn.execute("SELECT COUNT(*) FROM universe_members").fetchone()[0] == 4
+    )
+    assert (
+        store._conn.execute(
+            "SELECT COUNT(*) FROM universe_refresh_runs WHERE status = 'SUCCEEDED'"
+        ).fetchone()[0]
+        == 1
+    )
     store.close()
 
 
-def test_schema_v1_migrates_additively_and_preserves_sec_company(tmp_path: Path) -> None:
+def test_schema_v1_migrates_additively_and_preserves_sec_company(
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "legacy.sqlite"
     with sqlite3.connect(db_path) as connection:
         connection.executescript(
@@ -222,12 +239,13 @@ def test_schema_v1_migrates_additively_and_preserves_sec_company(tmp_path: Path)
 
     store = _store(tmp_path, "legacy.sqlite")
     assert store.get_company("0000796343") is not None
-    assert store._conn.execute(
-        "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-    ).fetchone()[0] == "13"
-    assert store._conn.execute(
-        "SELECT COUNT(*) FROM securities"
-    ).fetchone()[0] == 0
+    assert (
+        store._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+        == "14"
+    )
+    assert store._conn.execute("SELECT COUNT(*) FROM securities").fetchone()[0] == 0
     store.close()
 
 

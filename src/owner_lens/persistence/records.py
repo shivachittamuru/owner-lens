@@ -10,10 +10,10 @@ perform no lossy conversion.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 # Store-level version awareness.
-SCHEMA_VERSION: Final = 13
+SCHEMA_VERSION: Final = 14
 DEFAULT_CALCULATION_VERSION: Final = "1.0"
 DEFAULT_ANALYSIS_RULE_VERSION: Final = "1.0"
 
@@ -36,6 +36,7 @@ __all__ = [
     "FmpEodPriceRecord",
     "FmpEstimateRecord",
     "FmpEvidenceSnapshotRecord",
+    "FmpHistoricalPriceRecord",
     "OutcomeObservationRecord",
     "PortfolioSnapshotRecord",
     "ReportedFactRecord",
@@ -294,6 +295,19 @@ class FmpEodPriceRecord:
     close: float
     source_field: str
     currency: str | None = None
+
+
+@dataclass(frozen=True)
+class FmpHistoricalPriceRecord:
+    """One historical FMP price observation linked to its immutable raw snapshot."""
+
+    snapshot_id: int
+    security_id: int
+    market_date: str
+    price: float
+    source_field: str
+    currency: None = None
+    adjustment_basis: Literal["UNVERIFIED"] = "UNVERIFIED"
 
 
 @dataclass(frozen=True)

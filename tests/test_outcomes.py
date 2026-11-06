@@ -551,7 +551,7 @@ def test_v9_additive_migration_and_content_integrity(store: SqliteStore) -> None
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "13"
+        == "14"
     )
     store.save_outcome_observation(canonical_json(report))
     store._conn.executescript(

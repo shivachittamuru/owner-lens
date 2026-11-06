@@ -200,7 +200,7 @@ def test_initialize_records_schema_version(tmp_path: Path) -> None:
             "SELECT value FROM schema_meta WHERE key = 'schema_version'"
         ).fetchone()
     assert row is not None
-    assert int(row[0]) == 13
+    assert int(row[0]) == 14
 
 
 def test_repeat_initialize_is_a_no_op(tmp_path: Path) -> None:
@@ -217,7 +217,9 @@ def test_incompatible_schema_version_raises(tmp_path: Path) -> None:
     store.initialize()
     store.close()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("UPDATE schema_meta SET value = '999' WHERE key = 'schema_version'")
+        conn.execute(
+            "UPDATE schema_meta SET value = '999' WHERE key = 'schema_version'"
+        )
         conn.commit()
     reopened = SqliteStore(db_path)
     with pytest.raises(SchemaVersionError):
@@ -309,7 +311,9 @@ def test_cost_revenue_provenance_is_preserved(tmp_path: Path) -> None:
 # -- Coverage semantics (T022) ----------------------------------------------
 
 
-def test_visa_unsupported_diluted_shares_persists_as_unsupported(tmp_path: Path) -> None:
+def test_visa_unsupported_diluted_shares_persists_as_unsupported(
+    tmp_path: Path,
+) -> None:
     store = _fresh_store(tmp_path)
     _persist(store, "V")
     coverage = store.get_company_coverage(_CIKS["V"])

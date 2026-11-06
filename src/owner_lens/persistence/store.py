@@ -14,9 +14,11 @@ as the persistence-category errors in ``owner_lens.persistence.errors``.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any, Protocol, Self
 from uuid import uuid4
@@ -46,6 +48,7 @@ from owner_lens.persistence.records import (
     FmpEodPriceRecord,
     FmpEstimateRecord,
     FmpEvidenceSnapshotRecord,
+    FmpHistoricalPriceRecord,
     OutcomeObservationRecord,
     PortfolioSnapshotRecord,
     ReportedFactRecord,
@@ -92,8 +95,7 @@ def _resolve_aggregate_refresh_states(
             continue
         child_records = [by_key.get((record.security_id, child)) for child in children]
         statuses = [
-            child.status if child is not None else "PENDING"
-            for child in child_records
+            child.status if child is not None else "PENDING" for child in child_records
         ]
         if "FAILED" in statuses:
             status = "FAILED"
@@ -110,7 +112,11 @@ def _resolve_aggregate_refresh_states(
         ]
         details = [
             f"{name}: {child.status if child is not None else 'PENDING'}"
-            + (f" ({child.last_error})" if child is not None and child.last_error else "")
+            + (
+                f" ({child.last_error})"
+                if child is not None and child.last_error
+                else ""
+            )
             for name, child in zip(children, child_records, strict=True)
             if child is None or child.status != "SUCCEEDED"
         ]
@@ -622,6 +628,18 @@ CREATE TABLE IF NOT EXISTS fmp_eod_prices (
     source_field TEXT NOT NULL,
     currency     TEXT
 );
+CREATE TABLE IF NOT EXISTS fmp_historical_prices (
+    snapshot_id      INTEGER NOT NULL REFERENCES fmp_evidence_snapshots(snapshot_id),
+    security_id      INTEGER NOT NULL REFERENCES securities(security_id),
+    market_date      TEXT NOT NULL,
+    price            REAL NOT NULL CHECK(price > 0),
+    source_field     TEXT NOT NULL CHECK(source_field IN ('close', 'price')),
+    currency         TEXT CHECK(currency IS NULL),
+    adjustment_basis TEXT NOT NULL CHECK(adjustment_basis = 'UNVERIFIED'),
+    PRIMARY KEY(snapshot_id, market_date)
+);
+CREATE INDEX IF NOT EXISTS fmp_historical_prices_by_security_date
+    ON fmp_historical_prices(security_id, market_date);
 CREATE TABLE IF NOT EXISTS fmp_estimates (
     snapshot_id            INTEGER NOT NULL REFERENCES fmp_evidence_snapshots(snapshot_id),
     target_date            TEXT NOT NULL,
@@ -663,7 +681,10 @@ class OwnerLensStore(Protocol):
     ) -> None: ...
 
     def save_coverage(
-        self, coverage: Sequence[CoverageResultRecord], *, snapshot: SourceSnapshotRecord
+        self,
+        coverage: Sequence[CoverageResultRecord],
+        *,
+        snapshot: SourceSnapshotRecord,
     ) -> None: ...
 
     def source_snapshot_exists(self, cik: str, content_hash: str) -> bool: ...
@@ -752,8 +773,7 @@ class SqliteStore:
                 if 1 <= stored < SCHEMA_VERSION:
                     self._migrate_to_current_schema(stored)
                     self._conn.execute(
-                        "UPDATE schema_meta SET value = ? "
-                        "WHERE key = 'schema_version'",
+                        "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
                         (str(SCHEMA_VERSION),),
                     )
                     self._conn.commit()
@@ -768,7 +788,7 @@ class SqliteStore:
             ) from exc
 
     def _migrate_to_current_schema(self, stored_version: int) -> None:
-        if stored_version in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+        if stored_version in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
             return  # Additive tables and triggers are installed by _SCHEMA.
         if stored_version not in (1, 2):
             raise SchemaVersionError(
@@ -826,20 +846,40 @@ class SqliteStore:
             self._conn.execute("BEGIN IMMEDIATE")
             report = load_decision_json(review_json)
             expected = build_review(
-                self, UnderwritingSelection(report["ticker"], report["underwriting"]["version"]),
-                report["judgment"], review_id=report["review_id"], recorded_at=report["recorded_at"],
+                self,
+                UnderwritingSelection(
+                    report["ticker"], report["underwriting"]["version"]
+                ),
+                report["judgment"],
+                review_id=report["review_id"],
+                recorded_at=report["recorded_at"],
             )
             payload = canonical_json(report)
             if payload != canonical_json(expected):
-                raise ValueError("Attribution differs from exact sources, reviewed interpretation or deterministic layers.")
+                raise ValueError(
+                    "Attribution differs from exact sources, reviewed interpretation or deterministic layers."
+                )
             self._conn.execute(
                 "INSERT INTO attribution_reviews VALUES (?, ?, ?, ?, ?, ?)",
-                (report["review_id"], report["security_id"], report["underwriting"]["underwriting_id"],
-                 report["recorded_at"], payload, compute_content_hash(payload.encode())),
+                (
+                    report["review_id"],
+                    report["security_id"],
+                    report["underwriting"]["underwriting_id"],
+                    report["recorded_at"],
+                    payload,
+                    compute_content_hash(payload.encode()),
+                ),
             )
             self._conn.commit()
             return report["review_id"]
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OverflowError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot append attribution review: {exc}") from exc
 
@@ -850,20 +890,34 @@ class SqliteStore:
             ).fetchall()
             for row in rows:
                 report = json.loads(row["review_json"])
-                if (
-                    compute_content_hash(row["review_json"].encode()) != row["content_hash"]
-                    or (row["review_id"], row["security_id"], row["underwriting_id"], row["recorded_at"])
-                    != (report["review_id"], report["security_id"],
-                        report["underwriting"]["underwriting_id"], report["recorded_at"])
+                if compute_content_hash(row["review_json"].encode()) != row[
+                    "content_hash"
+                ] or (
+                    row["review_id"],
+                    row["security_id"],
+                    row["underwriting_id"],
+                    row["recorded_at"],
+                ) != (
+                    report["review_id"],
+                    report["security_id"],
+                    report["underwriting"]["underwriting_id"],
+                    report["recorded_at"],
                 ):
-                    raise StorageReadError("Attribution failed identity/content integrity verification.")
+                    raise StorageReadError(
+                        "Attribution failed identity/content integrity verification."
+                    )
             return tuple(row["review_json"] for row in rows)
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read attribution reviews: {exc}") from exc
 
     def get_attribution_review(self, review_id: str) -> str:
         selected = next(
-            (payload for payload in self.list_attribution_reviews() if json.loads(payload)["review_id"] == review_id), None,
+            (
+                payload
+                for payload in self.list_attribution_reviews()
+                if json.loads(payload)["review_id"] == review_id
+            ),
+            None,
         )
         if selected is None:
             raise StorageReadError(f"Attribution review {review_id} not found.")
@@ -881,20 +935,40 @@ class SqliteStore:
             self._conn.execute("BEGIN IMMEDIATE")
             report = load_decision_json(review_json)
             expected = build_review(
-                self, UnderwritingSelection(report["ticker"], report["underwriting"]["version"]),
-                report["judgment"], review_id=report["review_id"], recorded_at=report["recorded_at"],
+                self,
+                UnderwritingSelection(
+                    report["ticker"], report["underwriting"]["version"]
+                ),
+                report["judgment"],
+                review_id=report["review_id"],
+                recorded_at=report["recorded_at"],
             )
             payload = canonical_json(report)
             if payload != canonical_json(expected):
-                raise ValueError("Review differs from exact inputs, investor authority or deterministic checks.")
+                raise ValueError(
+                    "Review differs from exact inputs, investor authority or deterministic checks."
+                )
             self._conn.execute(
                 "INSERT INTO mistake_reviews VALUES (?, ?, ?, ?, ?, ?)",
-                (report["review_id"], report["security_id"], report["underwriting"]["underwriting_id"],
-                 report["recorded_at"], payload, compute_content_hash(payload.encode())),
+                (
+                    report["review_id"],
+                    report["security_id"],
+                    report["underwriting"]["underwriting_id"],
+                    report["recorded_at"],
+                    payload,
+                    compute_content_hash(payload.encode()),
+                ),
             )
             self._conn.commit()
             return report["review_id"]
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OverflowError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot append mistake review: {exc}") from exc
 
@@ -905,20 +979,33 @@ class SqliteStore:
             ).fetchall()
             for row in rows:
                 report = json.loads(row["review_json"])
-                if (
-                    compute_content_hash(row["review_json"].encode()) != row["content_hash"]
-                    or (row["review_id"], row["security_id"], row["underwriting_id"], row["recorded_at"])
-                    != (report["review_id"], report["security_id"],
-                        report["underwriting"]["underwriting_id"], report["recorded_at"])
+                if compute_content_hash(row["review_json"].encode()) != row[
+                    "content_hash"
+                ] or (
+                    row["review_id"],
+                    row["security_id"],
+                    row["underwriting_id"],
+                    row["recorded_at"],
+                ) != (
+                    report["review_id"],
+                    report["security_id"],
+                    report["underwriting"]["underwriting_id"],
+                    report["recorded_at"],
                 ):
-                    raise StorageReadError("Mistake review failed identity/content integrity verification.")
+                    raise StorageReadError(
+                        "Mistake review failed identity/content integrity verification."
+                    )
             return tuple(row["review_json"] for row in rows)
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read mistake reviews: {exc}") from exc
 
     def get_mistake_review(self, review_id: str) -> str:
         selected = next(
-            (payload for payload in self.list_mistake_reviews() if json.loads(payload)["review_id"] == review_id),
+            (
+                payload
+                for payload in self.list_mistake_reviews()
+                if json.loads(payload)["review_id"] == review_id
+            ),
             None,
         )
         if selected is None:
@@ -935,12 +1022,17 @@ class SqliteStore:
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             report = load_decision_json(report_json)
-            expected = build_report(self, as_of=report["as_of_date"], company=report["company"])
+            expected = build_report(
+                self, as_of=report["as_of_date"], company=report["company"]
+            )
             payload = canonical_json(report)
             if payload != canonical_json(expected):
-                raise ValueError("Calibration differs from exact inputs and deterministic model.")
+                raise ValueError(
+                    "Calibration differs from exact inputs and deterministic model."
+                )
             existing = self._conn.execute(
-                "SELECT report_json FROM calibration_reports WHERE report_id=?", (report["report_id"],),
+                "SELECT report_json FROM calibration_reports WHERE report_id=?",
+                (report["report_id"],),
             ).fetchone()
             if existing is not None:
                 if existing["report_json"] != payload:
@@ -948,12 +1040,24 @@ class SqliteStore:
             else:
                 self._conn.execute(
                     "INSERT INTO calibration_reports VALUES (?, ?, ?, ?, ?)",
-                    (report["report_id"], report["as_of_date"], report["model_version"],
-                     payload, compute_content_hash(payload.encode())),
+                    (
+                        report["report_id"],
+                        report["as_of_date"],
+                        report["model_version"],
+                        payload,
+                        compute_content_hash(payload.encode()),
+                    ),
                 )
             self._conn.commit()
             return report["report_id"]
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OverflowError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot save calibration report: {exc}") from exc
 
@@ -962,7 +1066,8 @@ class SqliteStore:
 
         try:
             row = self._conn.execute(
-                "SELECT * FROM calibration_reports WHERE report_id=?", (report_id,),
+                "SELECT * FROM calibration_reports WHERE report_id=?",
+                (report_id,),
             ).fetchone()
             if row is None:
                 raise StorageReadError(f"Calibration report {report_id} not found.")
@@ -974,7 +1079,9 @@ class SqliteStore:
                 or (identity, report["as_of_date"], report["model_version"])
                 != (row["report_id"], row["as_of_date"], row["model_version"])
             ):
-                raise StorageReadError("Calibration report failed identity/content integrity verification.")
+                raise StorageReadError(
+                    "Calibration report failed identity/content integrity verification."
+                )
             return row["report_json"]
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read calibration report: {exc}") from exc
@@ -992,9 +1099,12 @@ class SqliteStore:
             validate_observation(self, report)
             payload = canonical_json(report)
             record = OutcomeObservationRecord(
-                report["observation_id"], report["security_id"],
-                report["underwriting"]["underwriting_id"], report["recorded_at"],
-                payload, compute_content_hash(payload.encode()),
+                report["observation_id"],
+                report["security_id"],
+                report["underwriting"]["underwriting_id"],
+                report["recorded_at"],
+                payload,
+                compute_content_hash(payload.encode()),
             )
             self._conn.execute(
                 "INSERT INTO outcome_observations VALUES (?, ?, ?, ?, ?, ?)",
@@ -1002,29 +1112,58 @@ class SqliteStore:
             )
             self._conn.commit()
             return record
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OverflowError,
+        ) as exc:
             self._conn.rollback()
-            raise StorageWriteError(f"Cannot append outcome observation: {exc}") from exc
+            raise StorageWriteError(
+                f"Cannot append outcome observation: {exc}"
+            ) from exc
 
     def list_outcome_observations(self) -> tuple[OutcomeObservationRecord, ...]:
         try:
-            records = tuple(OutcomeObservationRecord(**dict(row)) for row in self._conn.execute(
-                "SELECT * FROM outcome_observations ORDER BY julianday(recorded_at), rowid"
-            ).fetchall())
+            records = tuple(
+                OutcomeObservationRecord(**dict(row))
+                for row in self._conn.execute(
+                    "SELECT * FROM outcome_observations ORDER BY julianday(recorded_at), rowid"
+                ).fetchall()
+            )
             for record in records:
                 report = json.loads(record.snapshot_json)
-                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash or (
-                    record.observation_id, record.security_id, record.underwriting_id, record.recorded_at
-                ) != (report["observation_id"], report["security_id"],
-                      report["underwriting"]["underwriting_id"], report["recorded_at"]):
-                    raise StorageReadError("Outcome observation failed identity/content integrity verification.")
+                if compute_content_hash(
+                    record.snapshot_json.encode()
+                ) != record.content_hash or (
+                    record.observation_id,
+                    record.security_id,
+                    record.underwriting_id,
+                    record.recorded_at,
+                ) != (
+                    report["observation_id"],
+                    report["security_id"],
+                    report["underwriting"]["underwriting_id"],
+                    report["recorded_at"],
+                ):
+                    raise StorageReadError(
+                        "Outcome observation failed identity/content integrity verification."
+                    )
             return records
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read outcome observations: {exc}") from exc
 
     def get_outcome_observation(self, observation_id: str) -> OutcomeObservationRecord:
-        record = next((item for item in self.list_outcome_observations()
-                       if item.observation_id == observation_id), None)
+        record = next(
+            (
+                item
+                for item in self.list_outcome_observations()
+                if item.observation_id == observation_id
+            ),
+            None,
+        )
         if record is None:
             raise StorageReadError(f"Outcome observation {observation_id} not found.")
         return record
@@ -1042,8 +1181,12 @@ class SqliteStore:
             validate_event_sources(self, event)
             payload = canonical_json(event)
             record = ChangeEventRecord(
-                event["event_id"], event["security_id"], event["underwriting"]["underwriting_id"],
-                event["recorded_at"], payload, compute_content_hash(payload.encode()),
+                event["event_id"],
+                event["security_id"],
+                event["underwriting"]["underwriting_id"],
+                event["recorded_at"],
+                payload,
+                compute_content_hash(payload.encode()),
             )
             self._conn.execute(
                 "INSERT INTO change_events VALUES (?, ?, ?, ?, ?, ?)",
@@ -1051,27 +1194,52 @@ class SqliteStore:
             )
             self._conn.commit()
             return record
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OverflowError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot append change event: {exc}") from exc
 
     def list_change_events(self) -> tuple[ChangeEventRecord, ...]:
         try:
-            records = tuple(ChangeEventRecord(**dict(row)) for row in self._conn.execute(
-                "SELECT * FROM change_events ORDER BY julianday(recorded_at), rowid"
-            ).fetchall())
+            records = tuple(
+                ChangeEventRecord(**dict(row))
+                for row in self._conn.execute(
+                    "SELECT * FROM change_events ORDER BY julianday(recorded_at), rowid"
+                ).fetchall()
+            )
             for record in records:
                 event = json.loads(record.snapshot_json)
-                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash or (
-                    record.event_id, record.security_id, record.underwriting_id, record.recorded_at
-                ) != (event["event_id"], event["security_id"], event["underwriting"]["underwriting_id"], event["recorded_at"]):
-                    raise StorageReadError("Change event failed identity/content integrity verification.")
+                if compute_content_hash(
+                    record.snapshot_json.encode()
+                ) != record.content_hash or (
+                    record.event_id,
+                    record.security_id,
+                    record.underwriting_id,
+                    record.recorded_at,
+                ) != (
+                    event["event_id"],
+                    event["security_id"],
+                    event["underwriting"]["underwriting_id"],
+                    event["recorded_at"],
+                ):
+                    raise StorageReadError(
+                        "Change event failed identity/content integrity verification."
+                    )
             return records
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read change events: {exc}") from exc
 
     def get_change_event(self, event_id: str) -> ChangeEventRecord:
-        record = next((item for item in self.list_change_events() if item.event_id == event_id), None)
+        record = next(
+            (item for item in self.list_change_events() if item.event_id == event_id),
+            None,
+        )
         if record is None:
             raise StorageReadError(f"Change event {event_id} not found.")
         return record
@@ -1086,22 +1254,40 @@ class SqliteStore:
             raise StorageWriteError("Approval requires its own transaction.")
         try:
             self._conn.execute("BEGIN IMMEDIATE")
-            fields = {"approval_id", "event_id", "approved_at", "approved_classification",
-                      "rationale", "category", "reunderwriting_trigger", "model_version"}
-            approval = _object(load_decision_json(snapshot_json), "approval", fields, fields)
+            fields = {
+                "approval_id",
+                "event_id",
+                "approved_at",
+                "approved_classification",
+                "rationale",
+                "category",
+                "reunderwriting_trigger",
+                "model_version",
+            }
+            approval = _object(
+                load_decision_json(snapshot_json), "approval", fields, fields
+            )
             for key in ("approval_id", "event_id", "rationale"):
                 _text(approval[key], key)
             event = self.get_change_event(approval["event_id"])
             if (
-                approval["category"] != "JUDGMENT" or approval["model_version"] != MODEL_VERSION
-                or approval["reunderwriting_trigger"] != trigger(approval["approved_classification"])
-                or _time(approval["approved_at"], "approved_at") < _time(event.recorded_at, "recorded_at")
+                approval["category"] != "JUDGMENT"
+                or approval["model_version"] != MODEL_VERSION
+                or approval["reunderwriting_trigger"]
+                != trigger(approval["approved_classification"])
+                or _time(approval["approved_at"], "approved_at")
+                < _time(event.recorded_at, "recorded_at")
             ):
-                raise ValueError("Invalid classification approval category, trigger, model or timestamp.")
+                raise ValueError(
+                    "Invalid classification approval category, trigger, model or timestamp."
+                )
             payload = canonical_json(approval)
             record = ChangeApprovalRecord(
-                approval["approval_id"], event.event_id, approval["approved_at"],
-                payload, compute_content_hash(payload.encode()),
+                approval["approval_id"],
+                event.event_id,
+                approval["approved_at"],
+                payload,
+                compute_content_hash(payload.encode()),
             )
             self._conn.execute(
                 "INSERT INTO change_approvals VALUES (?, ?, ?, ?, ?)",
@@ -1109,21 +1295,40 @@ class SqliteStore:
             )
             self._conn.commit()
             return record
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot append approval: {exc}") from exc
 
     def list_change_approvals(self) -> tuple[ChangeApprovalRecord, ...]:
         try:
-            records = tuple(ChangeApprovalRecord(**dict(row)) for row in self._conn.execute(
-                "SELECT * FROM change_approvals ORDER BY julianday(approved_at), rowid"
-            ).fetchall())
+            records = tuple(
+                ChangeApprovalRecord(**dict(row))
+                for row in self._conn.execute(
+                    "SELECT * FROM change_approvals ORDER BY julianday(approved_at), rowid"
+                ).fetchall()
+            )
             for record in records:
                 approval = json.loads(record.snapshot_json)
-                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash or (
-                    record.approval_id, record.event_id, record.approved_at
-                ) != (approval["approval_id"], approval["event_id"], approval["approved_at"]):
-                    raise StorageReadError("Change approval failed identity/content integrity verification.")
+                if compute_content_hash(
+                    record.snapshot_json.encode()
+                ) != record.content_hash or (
+                    record.approval_id,
+                    record.event_id,
+                    record.approved_at,
+                ) != (
+                    approval["approval_id"],
+                    approval["event_id"],
+                    approval["approved_at"],
+                ):
+                    raise StorageReadError(
+                        "Change approval failed identity/content integrity verification."
+                    )
             return records
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read change approvals: {exc}") from exc
@@ -1142,8 +1347,11 @@ class SqliteStore:
             validate_portfolio_sources(self, snapshot)
             payload = snapshot.to_json()
             record = PortfolioSnapshotRecord(
-                snapshot.snapshot_id, snapshot.created_at, snapshot.as_of_date,
-                payload, compute_content_hash(payload.encode()),
+                snapshot.snapshot_id,
+                snapshot.created_at,
+                snapshot.as_of_date,
+                payload,
+                compute_content_hash(payload.encode()),
             )
             self._conn.execute(
                 "INSERT INTO portfolio_snapshots VALUES (?, ?, ?, ?, ?)",
@@ -1151,7 +1359,13 @@ class SqliteStore:
             )
             self._conn.commit()
             return record
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot append portfolio snapshot: {exc}") from exc
 
@@ -1165,23 +1379,36 @@ class SqliteStore:
             records = tuple(PortfolioSnapshotRecord(**dict(row)) for row in rows)
             for record in records:
                 snapshot = PortfolioSnapshot.from_json(record.snapshot_json)
-                if (
-                    compute_content_hash(record.snapshot_json.encode()) != record.content_hash
-                    or (snapshot.snapshot_id, snapshot.created_at, snapshot.as_of_date)
-                    != (record.snapshot_id, record.created_at, record.as_of_date)
-                ):
-                    raise StorageReadError("Portfolio failed identity/content integrity verification.")
+                if compute_content_hash(
+                    record.snapshot_json.encode()
+                ) != record.content_hash or (
+                    snapshot.snapshot_id,
+                    snapshot.created_at,
+                    snapshot.as_of_date,
+                ) != (record.snapshot_id, record.created_at, record.as_of_date):
+                    raise StorageReadError(
+                        "Portfolio failed identity/content integrity verification."
+                    )
             return records
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read portfolios: {exc}") from exc
 
     def get_portfolio_snapshot(self, snapshot_id: str) -> str:
-        selected = next((item for item in self.list_portfolio_snapshots() if item.snapshot_id == snapshot_id), None)
+        selected = next(
+            (
+                item
+                for item in self.list_portfolio_snapshots()
+                if item.snapshot_id == snapshot_id
+            ),
+            None,
+        )
         if selected is None:
             raise StorageReadError(f"Portfolio snapshot {snapshot_id} not found.")
         return selected.snapshot_json
 
-    def save_sizing_analysis(self, report_json: str, *, created_at: str) -> SizingAnalysisRecord:
+    def save_sizing_analysis(
+        self, report_json: str, *, created_at: str
+    ) -> SizingAnalysisRecord:
         from owner_lens.decisions import load_decision_json
         from owner_lens.position_sizing import canonical_json, validate_sizing_sources
 
@@ -1193,10 +1420,16 @@ class SqliteStore:
             validate_sizing_sources(self, report, created_at)
             payload = canonical_json(report)
             record = SizingAnalysisRecord(
-                str(uuid4()), created_at, report["underwriting"]["underwriting_id"],
+                str(uuid4()),
+                created_at,
+                report["underwriting"]["underwriting_id"],
                 report["portfolio"]["snapshot_id"],
-                report["decision_context"]["decision_id"] if report["decision_context"] is not None else None,
-                report["model_version"], payload, compute_content_hash(payload.encode()),
+                report["decision_context"]["decision_id"]
+                if report["decision_context"] is not None
+                else None,
+                report["model_version"],
+                payload,
+                compute_content_hash(payload.encode()),
             )
             self._conn.execute(
                 "INSERT INTO sizing_analyses VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1204,7 +1437,13 @@ class SqliteStore:
             )
             self._conn.commit()
             return record
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot append sizing analysis: {exc}") from exc
 
@@ -1216,19 +1455,37 @@ class SqliteStore:
             records = tuple(SizingAnalysisRecord(**dict(row)) for row in rows)
             for record in records:
                 report = json.loads(record.report_json)
-                if (
-                    compute_content_hash(record.report_json.encode()) != record.content_hash
-                    or (record.underwriting_id, record.portfolio_id, record.model_version, record.decision_id)
-                    != (report["underwriting"]["underwriting_id"], report["portfolio"]["snapshot_id"],
-                        report["model_version"], report["decision_context"]["decision_id"] if report["decision_context"] is not None else None)
+                if compute_content_hash(
+                    record.report_json.encode()
+                ) != record.content_hash or (
+                    record.underwriting_id,
+                    record.portfolio_id,
+                    record.model_version,
+                    record.decision_id,
+                ) != (
+                    report["underwriting"]["underwriting_id"],
+                    report["portfolio"]["snapshot_id"],
+                    report["model_version"],
+                    report["decision_context"]["decision_id"]
+                    if report["decision_context"] is not None
+                    else None,
                 ):
-                    raise StorageReadError("Sizing analysis failed identity/content integrity verification.")
+                    raise StorageReadError(
+                        "Sizing analysis failed identity/content integrity verification."
+                    )
             return records
         except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             raise StorageReadError(f"Cannot read sizing analyses: {exc}") from exc
 
     def get_sizing_analysis(self, analysis_id: str) -> SizingAnalysisRecord:
-        selected = next((item for item in self.list_sizing_analyses() if item.analysis_id == analysis_id), None)
+        selected = next(
+            (
+                item
+                for item in self.list_sizing_analyses()
+                if item.analysis_id == analysis_id
+            ),
+            None,
+        )
         if selected is None:
             raise StorageReadError(f"Sizing analysis {analysis_id} not found.")
         return selected
@@ -1245,9 +1502,14 @@ class SqliteStore:
             validate_decision_sources(self, snapshot)
             underwriting = snapshot.chosen.underwriting
             record = DecisionRecord(
-                snapshot.decision_id, underwriting.security_id, underwriting.ticker,
-                underwriting.underwriting_id, underwriting.version,
-                snapshot.decision_at, snapshot.as_of_date, snapshot.to_json(),
+                snapshot.decision_id,
+                underwriting.security_id,
+                underwriting.ticker,
+                underwriting.underwriting_id,
+                underwriting.version,
+                snapshot.decision_at,
+                snapshot.as_of_date,
+                snapshot.to_json(),
                 compute_content_hash(snapshot.to_json().encode()),
             )
             self._conn.execute(
@@ -1257,14 +1519,28 @@ class SqliteStore:
             for entry in snapshot.shadows:
                 self._conn.execute(
                     "INSERT INTO shadow_entries VALUES (?, ?, ?, ?, ?, ?)",
-                    (entry.shadow_id, entry.decision_id, entry.underwriting_id,
-                     entry.role, entry.to_json(), compute_content_hash(entry.to_json().encode())),
+                    (
+                        entry.shadow_id,
+                        entry.decision_id,
+                        entry.underwriting_id,
+                        entry.role,
+                        entry.to_json(),
+                        compute_content_hash(entry.to_json().encode()),
+                    ),
                 )
             self._conn.commit()
             return record
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             self._conn.rollback()
-            raise StorageWriteError(f"Cannot append decision/shadow state: {exc}") from exc
+            raise StorageWriteError(
+                f"Cannot append decision/shadow state: {exc}"
+            ) from exc
 
     def list_decisions(self, ticker: str | None = None) -> tuple[DecisionRecord, ...]:
         """Chronological decision history, optionally resolved by stable security."""
@@ -1287,27 +1563,50 @@ class SqliteStore:
                 ).fetchall()
             result = tuple(DecisionRecord(**dict(row)) for row in rows)
             for record in result:
-                if compute_content_hash(record.snapshot_json.encode()) != record.content_hash:
-                    raise StorageReadError("Decision failed content integrity verification.")
+                if (
+                    compute_content_hash(record.snapshot_json.encode())
+                    != record.content_hash
+                ):
+                    raise StorageReadError(
+                        "Decision failed content integrity verification."
+                    )
                 snapshot = DecisionSnapshot.from_json(record.snapshot_json)
                 chosen = snapshot.chosen.underwriting
                 if (
-                    (record.decision_id, record.security_id, record.ticker,
-                     record.underwriting_id, record.underwriting_version, record.decision_at, record.as_of_date)
-                    != (snapshot.decision_id, chosen.security_id, chosen.ticker,
-                        chosen.underwriting_id, chosen.version, snapshot.decision_at, snapshot.as_of_date)
+                    record.decision_id,
+                    record.security_id,
+                    record.ticker,
+                    record.underwriting_id,
+                    record.underwriting_version,
+                    record.decision_at,
+                    record.as_of_date,
+                ) != (
+                    snapshot.decision_id,
+                    chosen.security_id,
+                    chosen.ticker,
+                    chosen.underwriting_id,
+                    chosen.version,
+                    snapshot.decision_at,
+                    snapshot.as_of_date,
                 ):
-                    raise StorageReadError("Decision index differs from immutable snapshot.")
+                    raise StorageReadError(
+                        "Decision index differs from immutable snapshot."
+                    )
             return result
         except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
             raise StorageReadError(f"Cannot read decisions: {exc}") from exc
 
-    def list_shadow_entries(self, decision_id: str | None = None) -> tuple[ShadowEntryRecord, ...]:
+    def list_shadow_entries(
+        self, decision_id: str | None = None
+    ) -> tuple[ShadowEntryRecord, ...]:
         """Read verified frozen starts only, never current market observations."""
         from owner_lens.decisions import read_decision
 
         try:
-            decisions = {record.decision_id: read_decision(record) for record in self.list_decisions()}
+            decisions = {
+                record.decision_id: read_decision(record)
+                for record in self.list_decisions()
+            }
             if decision_id is not None and decision_id not in decisions:
                 raise StorageReadError(f"Decision {decision_id} not found.")
             rows = self._conn.execute(
@@ -1324,57 +1623,87 @@ class SqliteStore:
                 for entry in snapshot.shadows
             }
             if set(expected) != {record.shadow_id for record in result}:
-                raise StorageReadError("Shadow entries differ from the decision bundle.")
+                raise StorageReadError(
+                    "Shadow entries differ from the decision bundle."
+                )
             for record in result:
                 entry = expected[record.shadow_id]
                 if (
-                    compute_content_hash(record.snapshot_json.encode()) != record.content_hash
+                    compute_content_hash(record.snapshot_json.encode())
+                    != record.content_hash
                     or record.snapshot_json != entry.to_json()
                     or (record.decision_id, record.underwriting_id, record.role)
                     != (entry.decision_id, entry.underwriting_id, entry.role)
                 ):
-                    raise StorageReadError("Shadow failed identity/content integrity verification.")
+                    raise StorageReadError(
+                        "Shadow failed identity/content integrity verification."
+                    )
             return result
         except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
             raise StorageReadError(f"Cannot read shadow entries: {exc}") from exc
 
     def save_underwriting(
-        self, *, security_id: int, ticker: str, created_at: str,
-        as_of_date: str, snapshot_json: str,
+        self,
+        *,
+        security_id: int,
+        ticker: str,
+        created_at: str,
+        as_of_date: str,
+        snapshot_json: str,
         expected_latest_version: int | None = None,
     ) -> UnderwritingRecord:
         """Allocate a version and append atomically, never updating a prior record."""
         if self._in_transaction:
-            raise StorageWriteError("Underwriting creation requires its own transaction.")
+            raise StorageWriteError(
+                "Underwriting creation requires its own transaction."
+            )
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             row = self._conn.execute(
                 "SELECT COALESCE(MAX(version), 0) + 1 AS version "
-                "FROM underwriting_records WHERE security_id = ?", (security_id,),
+                "FROM underwriting_records WHERE security_id = ?",
+                (security_id,),
             ).fetchone()
-            if expected_latest_version is not None and int(row["version"]) != expected_latest_version + 1:
+            if (
+                expected_latest_version is not None
+                and int(row["version"]) != expected_latest_version + 1
+            ):
                 self._conn.rollback()
                 raise StorageWriteError(
                     "Underwriting history changed since review. Review the latest version before saving."
                 )
             record = UnderwritingRecord(
-                str(uuid4()), security_id, ticker, int(row["version"]),
-                created_at, as_of_date, snapshot_json,
+                str(uuid4()),
+                security_id,
+                ticker,
+                int(row["version"]),
+                created_at,
+                as_of_date,
+                snapshot_json,
                 compute_content_hash(snapshot_json.encode()),
             )
             self._conn.execute(
                 "INSERT INTO underwriting_records(underwriting_id, security_id, ticker, "
                 "version, created_at, as_of_date, snapshot_json, content_hash) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-                (record.underwriting_id, record.security_id, record.ticker,
-                 record.version, record.created_at, record.as_of_date,
-                 record.snapshot_json, record.content_hash),
+                (
+                    record.underwriting_id,
+                    record.security_id,
+                    record.ticker,
+                    record.version,
+                    record.created_at,
+                    record.as_of_date,
+                    record.snapshot_json,
+                    record.content_hash,
+                ),
             )
             self._conn.commit()
             return record
         except sqlite3.Error as exc:
             self._conn.rollback()
-            raise StorageWriteError(f"Cannot append underwriting record: {exc}") from exc
+            raise StorageWriteError(
+                f"Cannot append underwriting record: {exc}"
+            ) from exc
 
     def list_underwriting(self, ticker: str) -> tuple[UnderwritingRecord, ...]:
         """Resolve by current security symbol or historical recorded symbol."""
@@ -1383,7 +1712,8 @@ class SqliteStore:
                 "SELECT u.* FROM underwriting_records u WHERE u.security_id IN ("
                 "SELECT security_id FROM securities WHERE symbol = ? UNION "
                 "SELECT security_id FROM underwriting_records WHERE ticker = ?) "
-                "ORDER BY version", (ticker, ticker),
+                "ORDER BY version",
+                (ticker, ticker),
             ).fetchall()
         except sqlite3.Error as exc:
             raise StorageReadError(f"Cannot read underwriting history: {exc}") from exc
@@ -1391,8 +1721,13 @@ class SqliteStore:
         if len({record.security_id for record in records}) > 1:
             raise StorageReadError(f"Ambiguous historical security symbol: {ticker}.")
         for record in records:
-            if compute_content_hash(record.snapshot_json.encode()) != record.content_hash:
-                raise StorageReadError(f"Underwriting {record.underwriting_id} failed integrity verification.")
+            if (
+                compute_content_hash(record.snapshot_json.encode())
+                != record.content_hash
+            ):
+                raise StorageReadError(
+                    f"Underwriting {record.underwriting_id} failed integrity verification."
+                )
         return records
 
     def get_valuation(self, underwriting_id: str, model_version: str) -> str | None:
@@ -1411,32 +1746,56 @@ class SqliteStore:
         return str(row["result_json"])
 
     def save_challenger_run(
-        self, record: UnderwritingRecord, *, challenger_version: str, model_version: str,
-        created_at: str, context_json: str, output_json: str,
+        self,
+        record: UnderwritingRecord,
+        *,
+        challenger_version: str,
+        model_version: str,
+        created_at: str,
+        context_json: str,
+        output_json: str,
     ) -> ChallengerRunRecord:
         if self._in_transaction:
-            raise StorageWriteError("Challenger persistence requires its own transaction.")
+            raise StorageWriteError(
+                "Challenger persistence requires its own transaction."
+            )
         try:
             context = json.loads(context_json)
             output = json.loads(output_json)
             identity = context["record"]
-            if (identity["underwriting_id"] != record.underwriting_id
-                    or identity["version"] != record.version
-                    or identity["content_hash"] != record.content_hash
-                    or context["snapshot"] != json.loads(record.snapshot_json)
-                    or output["category"] != "JUDGMENT"):
-                raise StorageWriteError("Challenger context/output does not match immutable underwriting.")
+            if (
+                identity["underwriting_id"] != record.underwriting_id
+                or identity["version"] != record.version
+                or identity["content_hash"] != record.content_hash
+                or context["snapshot"] != json.loads(record.snapshot_json)
+                or output["category"] != "JUDGMENT"
+            ):
+                raise StorageWriteError(
+                    "Challenger context/output does not match immutable underwriting."
+                )
             self._conn.execute("BEGIN IMMEDIATE")
             saved = self._conn.execute(
                 "SELECT version, content_hash FROM underwriting_records WHERE underwriting_id=?",
                 (record.underwriting_id,),
             ).fetchone()
-            if saved is None or (saved["version"], saved["content_hash"]) != (record.version, record.content_hash):
-                raise StorageWriteError("Challenger underwriting identity/hash not found in store.")
+            if saved is None or (saved["version"], saved["content_hash"]) != (
+                record.version,
+                record.content_hash,
+            ):
+                raise StorageWriteError(
+                    "Challenger underwriting identity/hash not found in store."
+                )
             run = ChallengerRunRecord(
-                str(uuid4()), record.underwriting_id, record.version, record.content_hash,
-                challenger_version, model_version, created_at,
-                compute_content_hash(context_json.encode()), context_json, output_json,
+                str(uuid4()),
+                record.underwriting_id,
+                record.version,
+                record.content_hash,
+                challenger_version,
+                model_version,
+                created_at,
+                compute_content_hash(context_json.encode()),
+                context_json,
+                output_json,
                 compute_content_hash(output_json.encode()),
             )
             self._conn.execute(
@@ -1445,11 +1804,19 @@ class SqliteStore:
             )
             self._conn.commit()
             return run
-        except (sqlite3.Error, PersistenceError, ValueError, KeyError, TypeError) as exc:
+        except (
+            sqlite3.Error,
+            PersistenceError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             self._conn.rollback()
             raise StorageWriteError(f"Cannot persist challenger run: {exc}") from exc
 
-    def list_challenger_runs(self, underwriting_id: str) -> tuple[ChallengerRunRecord, ...]:
+    def list_challenger_runs(
+        self, underwriting_id: str
+    ) -> tuple[ChallengerRunRecord, ...]:
         try:
             rows = self._conn.execute(
                 "SELECT r.* FROM challenger_runs r WHERE underwriting_id=? ORDER BY julianday(created_at), rowid",
@@ -1463,26 +1830,44 @@ class SqliteStore:
             raise StorageReadError(f"Cannot read challenger runs: {exc}") from exc
         runs = tuple(ChallengerRunRecord(**dict(row)) for row in rows)
         for run in runs:
-            if (original is None
-                    or (run.underwriting_version, run.underwriting_content_hash) != (original["version"], original["content_hash"])
-                    or compute_content_hash(run.context_json.encode()) != run.input_content_hash
-                    or compute_content_hash(run.output_json.encode()) != run.output_content_hash):
-                raise StorageReadError("Challenger run failed identity/content integrity verification.")
+            if (
+                original is None
+                or (run.underwriting_version, run.underwriting_content_hash)
+                != (original["version"], original["content_hash"])
+                or compute_content_hash(run.context_json.encode())
+                != run.input_content_hash
+                or compute_content_hash(run.output_json.encode())
+                != run.output_content_hash
+            ):
+                raise StorageReadError(
+                    "Challenger run failed identity/content integrity verification."
+                )
         return runs
 
-    def save_valuation(self, underwriting_id: str, model_version: str, result_json: str) -> str:
+    def save_valuation(
+        self, underwriting_id: str, model_version: str, result_json: str
+    ) -> str:
         if self._in_transaction:
-            raise StorageWriteError("Valuation persistence requires its own transaction.")
+            raise StorageWriteError(
+                "Valuation persistence requires its own transaction."
+            )
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             existing = self.get_valuation(underwriting_id, model_version)
             if existing is not None:
                 if existing != result_json:
-                    raise StorageWriteError("Saved valuation differs for the same underwriting/model version.")
+                    raise StorageWriteError(
+                        "Saved valuation differs for the same underwriting/model version."
+                    )
             else:
                 self._conn.execute(
                     "INSERT INTO valuation_results VALUES(?, ?, ?, ?)",
-                    (underwriting_id, model_version, result_json, compute_content_hash(result_json.encode())),
+                    (
+                        underwriting_id,
+                        model_version,
+                        result_json,
+                        compute_content_hash(result_json.encode()),
+                    ),
                 )
             self._conn.commit()
             return existing if existing is not None else result_json
@@ -1491,7 +1876,11 @@ class SqliteStore:
             raise StorageWriteError(f"Cannot persist valuation: {exc}") from exc
 
     def get_underwriting_evidence(
-        self, security_id: int, *, cutoff: str, as_of_date: str,
+        self,
+        security_id: int,
+        *,
+        cutoff: str,
+        as_of_date: str,
     ) -> dict[str, Any]:
         """Read only evidence actually retrieved by the belief snapshot cutoff."""
         try:
@@ -1508,13 +1897,17 @@ class SqliteStore:
                 "SELECT snapshot_id FROM fmp_evidence_snapshots WHERE security_id = s.security_id "
                 "AND dataset = s.dataset AND julianday(fetched_at) <= julianday(?) "
                 "ORDER BY julianday(fetched_at) DESC, snapshot_id DESC LIMIT 1) "
-                "ORDER BY dataset", (security_id, cutoff, cutoff),
+                "ORDER BY dataset",
+                (security_id, cutoff, cutoff),
             ).fetchall()
             estimates = [
-                tuple(dict(row) for row in self._conn.execute(
-                    "SELECT * FROM fmp_estimates WHERE snapshot_id = ? ORDER BY target_date",
-                    (snapshot["snapshot_id"],),
-                ).fetchall())
+                tuple(
+                    dict(row)
+                    for row in self._conn.execute(
+                        "SELECT * FROM fmp_estimates WHERE snapshot_id = ? ORDER BY target_date",
+                        (snapshot["snapshot_id"],),
+                    ).fetchall()
+                )
                 for snapshot in snapshots
             ]
             price = self._conn.execute(
@@ -1533,7 +1926,9 @@ class SqliteStore:
                 (history["history_id"] if history else None,),
             ).fetchall()
         except sqlite3.Error as exc:
-            raise StorageReadError(f"Cannot read point-in-time underwriting evidence: {exc}") from exc
+            raise StorageReadError(
+                f"Cannot read point-in-time underwriting evidence: {exc}"
+            ) from exc
         return {
             "history_id": history["history_id"] if history else None,
             "sources": tuple(dict(row) for row in sources),
@@ -1641,7 +2036,9 @@ class SqliteStore:
             )
             self._commit()
         except sqlite3.Error as exc:
-            raise StorageWriteError(f"Cannot save company {company.cik}: {exc}") from exc
+            raise StorageWriteError(
+                f"Cannot save company {company.cik}: {exc}"
+            ) from exc
 
     def save_source_snapshot(
         self, snapshot: SourceSnapshotRecord, *, raw_payload: bytes | None = None
@@ -1774,7 +2171,12 @@ class SqliteStore:
                     "category) VALUES(?, ?, ?, ?) "
                     "ON CONFLICT(analysis_result_id, position) DO NOTHING",
                     [
-                        (analysis_result_id, driver.position, driver.code, driver.category)
+                        (
+                            analysis_result_id,
+                            driver.position,
+                            driver.code,
+                            driver.category,
+                        )
                         for driver in result.drivers
                     ],
                 )
@@ -1785,7 +2187,10 @@ class SqliteStore:
             ) from exc
 
     def save_coverage(
-        self, coverage: Sequence[CoverageResultRecord], *, snapshot: SourceSnapshotRecord
+        self,
+        coverage: Sequence[CoverageResultRecord],
+        *,
+        snapshot: SourceSnapshotRecord,
     ) -> None:
         snapshot_id = self._require_snapshot_id(snapshot)
         company_id = self._require_company_id(snapshot.cik)
@@ -1937,7 +2342,9 @@ class SqliteStore:
                 (int(row["id"]),),
             ).fetchall()
         except sqlite3.Error as exc:
-            raise StorageReadError(f"Cannot read latest summary for {cik}: {exc}") from exc
+            raise StorageReadError(
+                f"Cannot read latest summary for {cik}: {exc}"
+            ) from exc
         drivers = tuple(
             AnalysisDriverRecord(
                 position=int(d["position"]), code=d["code"], category=d["category"]
@@ -2103,9 +2510,7 @@ class SqliteStore:
                 f"Cannot update processing status for {cik}: {exc}"
             ) from exc
 
-    def start_universe_refresh_run(
-        self, run: UniverseRefreshRunRecord
-    ) -> None:
+    def start_universe_refresh_run(self, run: UniverseRefreshRunRecord) -> None:
         try:
             self._conn.execute(
                 "INSERT INTO universe_refresh_runs(run_id, started_at, status, "
@@ -2197,11 +2602,14 @@ class SqliteStore:
                         "Universe snapshot insert did not produce a readable row."
                     )
                 snapshot_id = int(snapshot_row["snapshot_id"])
-                inserted_snapshot = self._conn.execute(
-                    "SELECT COUNT(*) AS count FROM universe_members "
-                    "WHERE snapshot_id = ?",
-                    (snapshot_id,),
-                ).fetchone()["count"] == 0
+                inserted_snapshot = (
+                    self._conn.execute(
+                        "SELECT COUNT(*) AS count FROM universe_members "
+                        "WHERE snapshot_id = ?",
+                        (snapshot_id,),
+                    ).fetchone()["count"]
+                    == 0
+                )
                 if inserted_snapshot:
                     for member in members:
                         self._conn.execute(
@@ -2362,8 +2770,7 @@ class SqliteStore:
     def list_securities(self) -> tuple[SecurityRecord, ...]:
         try:
             rows = self._conn.execute(
-                "SELECT security_id, symbol, name, cik FROM securities "
-                "ORDER BY symbol"
+                "SELECT security_id, symbol, name, cik FROM securities ORDER BY symbol"
             ).fetchall()
         except sqlite3.Error as exc:
             raise StorageReadError(f"Cannot list securities: {exc}") from exc
@@ -2392,7 +2799,9 @@ class SqliteStore:
         try:
             rows = self._conn.execute(query, params).fetchall()
         except sqlite3.Error as exc:
-            raise StorageReadError(f"Cannot list security refresh state: {exc}") from exc
+            raise StorageReadError(
+                f"Cannot list security refresh state: {exc}"
+            ) from exc
         return _resolve_aggregate_refresh_states(
             tuple(
                 SecurityRefreshStateRecord(
@@ -2438,9 +2847,7 @@ class SqliteStore:
             last_error=row["last_error"],
         )
 
-    def get_universe_refresh_run(
-        self, run_id: str
-    ) -> UniverseRefreshRunRecord | None:
+    def get_universe_refresh_run(self, run_id: str) -> UniverseRefreshRunRecord | None:
         try:
             row = self._conn.execute(
                 "SELECT run_id, started_at, completed_at, status, snapshot_id, "
@@ -2463,9 +2870,7 @@ class SqliteStore:
             error=row["error"],
         )
 
-    def universe_security_ids(
-        self, snapshot_id: int
-    ) -> dict[str, int]:
+    def universe_security_ids(self, snapshot_id: int) -> dict[str, int]:
         try:
             rows = self._conn.execute(
                 "SELECT symbol, security_id FROM universe_members "
@@ -2595,9 +3000,12 @@ class SqliteStore:
                         f"Cannot resolve FMP evidence snapshot for "
                         f"security {snapshot.security_id}/{snapshot.dataset}."
                     )
-                inserted = self._conn.execute(
-                    "SELECT changes() AS changed"
-                ).fetchone()["changed"] == 1
+                inserted = (
+                    self._conn.execute("SELECT changes() AS changed").fetchone()[
+                        "changed"
+                    ]
+                    == 1
+                )
                 stored = FmpEvidenceSnapshotRecord(
                     snapshot_id=int(row["snapshot_id"]),
                     security_id=snapshot.security_id,
@@ -2805,9 +3213,12 @@ class SqliteStore:
                 if row is None:
                     raise StorageWriteError("Cannot resolve FMP canonical history.")
                 history_id = int(row["history_id"])
-                inserted_history = self._conn.execute(
-                    "SELECT changes() AS changed"
-                ).fetchone()["changed"] == 1
+                inserted_history = (
+                    self._conn.execute("SELECT changes() AS changed").fetchone()[
+                        "changed"
+                    ]
+                    == 1
+                )
                 if inserted_history:
                     self._conn.executemany(
                         "INSERT INTO fmp_canonical_facts(history_id, snapshot_id, metric, "
@@ -2865,9 +3276,156 @@ class SqliteStore:
                 f"Cannot save EOD price for security {price.security_id}: {exc}"
             ) from exc
 
-    def save_fmp_estimates(
-        self, estimates: Sequence[FmpEstimateRecord]
+    def save_fmp_historical_prices(
+        self, prices: Sequence[FmpHistoricalPriceRecord]
     ) -> None:
+        if not prices:
+            return
+        keys = [(price.snapshot_id, price.market_date) for price in prices]
+        if len(set(keys)) != len(keys):
+            raise StorageWriteError(
+                "Duplicate market date in an FMP historical-price snapshot."
+            )
+        for price in prices:
+            try:
+                parsed_date = date.fromisoformat(price.market_date)
+            except (TypeError, ValueError):
+                raise StorageWriteError(
+                    f"Invalid FMP historical market date {price.market_date!r}."
+                ) from None
+            if parsed_date.isoformat() != price.market_date:
+                raise StorageWriteError(
+                    f"Non-canonical FMP historical market date {price.market_date!r}."
+                )
+            if (
+                isinstance(price.price, bool)
+                or not isinstance(price.price, (int, float))
+                or not math.isfinite(price.price)
+                or price.price <= 0
+            ):
+                raise StorageWriteError(
+                    f"Invalid FMP historical price for {price.market_date}."
+                )
+            if price.source_field not in {"close", "price"}:
+                raise StorageWriteError(
+                    f"Invalid FMP historical price field {price.source_field!r}."
+                )
+            if price.currency is not None or price.adjustment_basis != "UNVERIFIED":
+                raise StorageWriteError(
+                    "Historical FMP prices require unknown currency and "
+                    "UNVERIFIED adjustment basis."
+                )
+        try:
+            with self.transaction():
+                snapshot_ids = {price.snapshot_id for price in prices}
+                for snapshot_id in snapshot_ids:
+                    row = self._conn.execute(
+                        "SELECT security_id, dataset FROM fmp_evidence_snapshots "
+                        "WHERE snapshot_id = ?",
+                        (snapshot_id,),
+                    ).fetchone()
+                    if row is None or row["dataset"] != "historical_price":
+                        raise StorageWriteError(
+                            f"Snapshot {snapshot_id} is not historical-price evidence."
+                        )
+                    expected_security_ids = {
+                        price.security_id
+                        for price in prices
+                        if price.snapshot_id == snapshot_id
+                    }
+                    if expected_security_ids != {int(row["security_id"])}:
+                        raise StorageWriteError(
+                            f"Historical-price snapshot {snapshot_id} does not match "
+                            "its persisted security identity."
+                        )
+                for price in prices:
+                    self._conn.execute(
+                        "INSERT INTO fmp_historical_prices(snapshot_id, security_id, "
+                        "market_date, price, source_field, currency, adjustment_basis) "
+                        "VALUES(?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(snapshot_id, market_date) DO NOTHING",
+                        (
+                            price.snapshot_id,
+                            price.security_id,
+                            price.market_date,
+                            price.price,
+                            price.source_field,
+                            price.currency,
+                            price.adjustment_basis,
+                        ),
+                    )
+                    existing = self._conn.execute(
+                        "SELECT security_id, price, source_field, currency, "
+                        "adjustment_basis FROM fmp_historical_prices "
+                        "WHERE snapshot_id = ? AND market_date = ?",
+                        (price.snapshot_id, price.market_date),
+                    ).fetchone()
+                    expected = (
+                        price.security_id,
+                        price.price,
+                        price.source_field,
+                        price.currency,
+                        price.adjustment_basis,
+                    )
+                    actual = (
+                        int(existing["security_id"]),
+                        float(existing["price"]),
+                        existing["source_field"],
+                        existing["currency"],
+                        existing["adjustment_basis"],
+                    )
+                    if actual != expected:
+                        raise StorageWriteError(
+                            "Conflicting FMP historical observation for "
+                            f"snapshot {price.snapshot_id} on {price.market_date}."
+                        )
+        except StorageWriteError:
+            raise
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                "Cannot save FMP historical prices: " + str(exc)
+            ) from exc
+
+    def list_fmp_historical_prices(
+        self,
+        security_id: int,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> tuple[FmpHistoricalPriceRecord, ...]:
+        query = (
+            "SELECT snapshot_id, security_id, market_date, price, source_field, "
+            "currency, adjustment_basis FROM fmp_historical_prices "
+            "WHERE security_id = ?"
+        )
+        parameters: list[object] = [security_id]
+        if start_date is not None:
+            query += " AND market_date >= ?"
+            parameters.append(start_date)
+        if end_date is not None:
+            query += " AND market_date <= ?"
+            parameters.append(end_date)
+        query += " ORDER BY market_date, snapshot_id"
+        try:
+            rows = self._conn.execute(query, parameters).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot list historical prices for security {security_id}: {exc}"
+            ) from exc
+        return tuple(
+            FmpHistoricalPriceRecord(
+                snapshot_id=int(row["snapshot_id"]),
+                security_id=int(row["security_id"]),
+                market_date=row["market_date"],
+                price=float(row["price"]),
+                source_field=row["source_field"],
+                currency=row["currency"],
+                adjustment_basis=row["adjustment_basis"],
+            )
+            for row in rows
+        )
+
+    def save_fmp_estimates(self, estimates: Sequence[FmpEstimateRecord]) -> None:
         target_dates = [estimate.target_date for estimate in estimates]
         if len(set(target_dates)) != len(target_dates):
             raise StorageWriteError(

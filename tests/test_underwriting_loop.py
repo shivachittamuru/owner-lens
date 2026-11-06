@@ -614,7 +614,7 @@ def test_v5_migration_preserves_snapshots_valuations_and_installs_challenger(
         store._conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        == "13"
+        == "14"
     )
     assert (
         store.list_underwriting("ADBE") == (record,)
@@ -712,7 +712,9 @@ def test_challenger_bounds_citation_types_and_times(store: SqliteStore) -> None:
     with pytest.raises(ChallengerError, match="match"):
         validate_output(bad, context)
     with pytest.raises(ChallengerError, match="timezone"):
-        run_challenger(store, record, now=datetime(2026, 6, 3, tzinfo=UTC).replace(tzinfo=None))
+        run_challenger(
+            store, record, now=datetime(2026, 6, 3, tzinfo=UTC).replace(tzinfo=None)
+        )
     with pytest.raises(ChallengerError, match="predate"):
         run_challenger(store, record, now=datetime(2026, 6, 1, tzinfo=UTC))
     assert store.list_challenger_runs(record.underwriting_id) == ()

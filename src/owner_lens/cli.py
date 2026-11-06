@@ -17,7 +17,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +52,10 @@ from owner_lens.decisions import (
     load_decision_json,
     read_decision,
 )
-from owner_lens.evidence_ingestion import refresh_sp500_evidence
+from owner_lens.evidence_ingestion import (
+    refresh_sp500_evidence,
+    run_historical_price_pilot,
+)
 from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
 from owner_lens.ingestion import IngestionResult, IngestionStatus, ingest_company
 from owner_lens.opportunity_comparison import (
@@ -148,6 +151,42 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Refetch evidence even when a recent persisted response is available.",
     )
 
+    historical_price_pilot = sub.add_parser(
+        "historical-price-pilot",
+        help=(
+            "Persist historical prices for TYL, ADSK, and NVDA in an explicit "
+            "disposable store."
+        ),
+    )
+    historical_price_pilot.add_argument(
+        "--db",
+        required=True,
+        help="Existing disposable copy of the OwnerLens SQLite database.",
+    )
+    historical_price_pilot.add_argument(
+        "--raw-data",
+        required=True,
+        help="Existing disposable copy of the raw snapshot directory.",
+    )
+    historical_price_pilot.add_argument(
+        "--from",
+        dest="start_date",
+        required=True,
+        help="Historical start date (YYYY-MM-DD), at most three years before --to.",
+    )
+    historical_price_pilot.add_argument(
+        "--to",
+        dest="end_date",
+        required=True,
+        help="Historical end date (YYYY-MM-DD), not in the future.",
+    )
+    historical_price_pilot.add_argument(
+        "--confirm-disposable-store",
+        action="store_true",
+        required=True,
+        help="Confirm that --db and --raw-data refer to disposable copies.",
+    )
+
     evidence_status = sub.add_parser(
         "evidence-status",
         help="Summarize persisted S&P 500 evidence coverage without network calls.",
@@ -219,10 +258,16 @@ def _build_parser() -> argparse.ArgumentParser:
     comparison.add_argument("selections", nargs="+", metavar="TICKER:VERSION")
     comparison.add_argument("--json", action="store_true")
 
-    attribution = sub.add_parser("attribution", help="Layered immutable attribution, not skill or luck scoring.")
-    attribution_actions = attribution.add_subparsers(dest="attribution_action", required=True)
+    attribution = sub.add_parser(
+        "attribution", help="Layered immutable attribution, not skill or luck scoring."
+    )
+    attribution_actions = attribution.add_subparsers(
+        dest="attribution_action", required=True
+    )
     attribution_review = attribution_actions.add_parser("review")
-    attribution_review_actions = attribution_review.add_subparsers(dest="review_action", required=True)
+    attribution_review_actions = attribution_review.add_subparsers(
+        dest="review_action", required=True
+    )
     attribution_create = attribution_review_actions.add_parser("create")
     attribution_create.add_argument("ticker")
     attribution_create.add_argument("--version", type=int, required=True)
@@ -235,7 +280,9 @@ def _build_parser() -> argparse.ArgumentParser:
     attribution_summary = attribution_actions.add_parser("summary")
     attribution_summary.add_argument("--json", action="store_true")
 
-    mistakes = sub.add_parser("mistakes", help="Immutable investor mistake reviews; no skill assessment.")
+    mistakes = sub.add_parser(
+        "mistakes", help="Immutable investor mistake reviews; no skill assessment."
+    )
     mistake_actions = mistakes.add_subparsers(dest="mistakes_action", required=True)
     review = mistake_actions.add_parser("review")
     review_actions = review.add_subparsers(dest="review_action", required=True)
@@ -247,7 +294,9 @@ def _build_parser() -> argparse.ArgumentParser:
         if action == "create":
             command.add_argument("--file", type=Path, required=True)
         else:
-            command.add_argument("--review-date", help="UTC review date (default: today).")
+            command.add_argument(
+                "--review-date", help="UTC review date (default: today)."
+            )
             command.add_argument("--decision-id")
             command.add_argument("--sizing-analysis-id")
             command.add_argument("--calibration-report-id")
@@ -258,19 +307,28 @@ def _build_parser() -> argparse.ArgumentParser:
     mistake_summary = mistake_actions.add_parser("summary")
     mistake_summary.add_argument("--json", action="store_true")
 
-    calibration = sub.add_parser("calibration", help="Offline, sample-guarded forecast calibration; no skill assessment.")
-    calibration_actions = calibration.add_subparsers(dest="calibration_action", required=True)
+    calibration = sub.add_parser(
+        "calibration",
+        help="Offline, sample-guarded forecast calibration; no skill assessment.",
+    )
+    calibration_actions = calibration.add_subparsers(
+        dest="calibration_action", required=True
+    )
     for action in ("run", "company"):
         command = calibration_actions.add_parser(action)
         if action == "company":
             command.add_argument("ticker")
-        command.add_argument("--as-of", help="UTC cutoff date YYYY-MM-DD (default: today).")
+        command.add_argument(
+            "--as-of", help="UTC cutoff date YYYY-MM-DD (default: today)."
+        )
         command.add_argument("--json", action="store_true")
     calibration_show = calibration_actions.add_parser("show")
     calibration_show.add_argument("report_id")
     calibration_show.add_argument("--json", action="store_true")
 
-    outcome = sub.add_parser("outcome", help="Immutable manual forecast-versus-outcome tracking, offline.")
+    outcome = sub.add_parser(
+        "outcome", help="Immutable manual forecast-versus-outcome tracking, offline."
+    )
     outcome_actions = outcome.add_subparsers(dest="outcome_action", required=True)
     for action in ("create", "compare"):
         command = outcome_actions.add_parser(action)
@@ -286,7 +344,10 @@ def _build_parser() -> argparse.ArgumentParser:
     outcome_history.add_argument("ticker")
     outcome_history.add_argument("--json", action="store_true")
 
-    change = sub.add_parser("change", help="Manual What Changed events and explicit classification approval, offline.")
+    change = sub.add_parser(
+        "change",
+        help="Manual What Changed events and explicit classification approval, offline.",
+    )
     change_actions = change.add_subparsers(dest="change_action", required=True)
     change_create = change_actions.add_parser("create")
     change_create.add_argument("ticker")
@@ -298,34 +359,56 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument("event_id")
         command.add_argument("--json", action="store_true")
         if action == "approve":
-            command.add_argument("--classification", choices=[item.value for item in ChangeClassification], required=True)
-            command.add_argument("--rationale", required=True, help="Explicit investor approval/override rationale.")
+            command.add_argument(
+                "--classification",
+                choices=[item.value for item in ChangeClassification],
+                required=True,
+            )
+            command.add_argument(
+                "--rationale",
+                required=True,
+                help="Explicit investor approval/override rationale.",
+            )
     for action in ("history", "summary"):
         command = change_actions.add_parser(action)
         command.add_argument("ticker")
         command.add_argument("--json", action="store_true")
 
-    decision = sub.add_parser("decision", help="Append or read immutable investor decisions offline.")
+    decision = sub.add_parser(
+        "decision", help="Append or read immutable investor decisions offline."
+    )
     decision_actions = decision.add_subparsers(dest="decision_action", required=True)
-    decision_create = decision_actions.add_parser("create", help="Append a decision tied to an exact completed version.")
+    decision_create = decision_actions.add_parser(
+        "create", help="Append a decision tied to an exact completed version."
+    )
     decision_create.add_argument("ticker")
     decision_create.add_argument("--version", type=int, required=True)
     decision_create.add_argument("--file", type=Path, required=True)
     decision_create.add_argument("--json", action="store_true")
-    decision_show = decision_actions.add_parser("show", help="Show the most recent decision or an exact decision ID.")
+    decision_show = decision_actions.add_parser(
+        "show", help="Show the most recent decision or an exact decision ID."
+    )
     decision_show.add_argument("ticker")
     decision_show.add_argument("--decision-id")
     decision_show.add_argument("--json", action="store_true")
-    decision_history = decision_actions.add_parser("history", help="Show append-only chronological decision history.")
+    decision_history = decision_actions.add_parser(
+        "history", help="Show append-only chronological decision history."
+    )
     decision_history.add_argument("ticker")
     decision_history.add_argument("--json", action="store_true")
-    shadow = sub.add_parser("shadow", help="Read frozen independent counterfactual starts; no P&L.")
+    shadow = sub.add_parser(
+        "shadow", help="Read frozen independent counterfactual starts; no P&L."
+    )
     shadow_actions = shadow.add_subparsers(dest="shadow_action", required=True)
-    shadow_show = shadow_actions.add_parser("show", help="Show shadow entries from saved decisions.")
+    shadow_show = shadow_actions.add_parser(
+        "show", help="Show shadow entries from saved decisions."
+    )
     shadow_show.add_argument("--decision-id")
     shadow_show.add_argument("--json", action="store_true")
 
-    portfolio = sub.add_parser("portfolio", help="Immutable manually supplied portfolio context.")
+    portfolio = sub.add_parser(
+        "portfolio", help="Immutable manually supplied portfolio context."
+    )
     portfolio_actions = portfolio.add_subparsers(dest="portfolio_action", required=True)
     snapshots = portfolio_actions.add_parser("snapshot")
     snapshot_actions = snapshots.add_subparsers(dest="snapshot_action", required=True)
@@ -337,17 +420,43 @@ def _build_parser() -> argparse.ArgumentParser:
     portfolio_show.add_argument("--json", action="store_true")
     portfolio_list = snapshot_actions.add_parser("list")
     portfolio_list.add_argument("--json", action="store_true")
-    sizing = sub.add_parser("position-size", help="Offline bounded sizing guidance; no trade or decision is created.")
+    sizing = sub.add_parser(
+        "position-size",
+        help="Offline bounded sizing guidance; no trade or decision is created.",
+    )
     sizing.add_argument("ticker")
     sizing.add_argument("--version", type=int, required=True)
-    sizing.add_argument("--portfolio", required=True, help="Exact immutable portfolio snapshot UUID.")
-    sizing.add_argument("--policy", type=Path, required=True, help="Explicit JUDGMENT limits; no defaults.")
-    sizing.add_argument("--context", type=Path, help="Manual sector/industry/tags for an unheld opportunity.")
-    sizing.add_argument("--increment", type=float, help="Proposed incremental weight as a decimal ratio.")
-    sizing.add_argument("--decision-id", help="Optional exact Feature 9B decision context.")
-    sizing.add_argument("--save", action="store_true", help="Append an immutable analysis; no decision or trade.")
+    sizing.add_argument(
+        "--portfolio", required=True, help="Exact immutable portfolio snapshot UUID."
+    )
+    sizing.add_argument(
+        "--policy",
+        type=Path,
+        required=True,
+        help="Explicit JUDGMENT limits; no defaults.",
+    )
+    sizing.add_argument(
+        "--context",
+        type=Path,
+        help="Manual sector/industry/tags for an unheld opportunity.",
+    )
+    sizing.add_argument(
+        "--increment",
+        type=float,
+        help="Proposed incremental weight as a decimal ratio.",
+    )
+    sizing.add_argument(
+        "--decision-id", help="Optional exact Feature 9B decision context."
+    )
+    sizing.add_argument(
+        "--save",
+        action="store_true",
+        help="Append an immutable analysis; no decision or trade.",
+    )
     sizing.add_argument("--json", action="store_true")
-    sizing_history = sub.add_parser("sizing", help="Read saved sizing analyses without recalculation.")
+    sizing_history = sub.add_parser(
+        "sizing", help="Read saved sizing analyses without recalculation."
+    )
     sizing_actions = sizing_history.add_subparsers(dest="sizing_action", required=True)
     sizing_show = sizing_actions.add_parser("show")
     sizing_show.add_argument("analysis_id")
@@ -356,12 +465,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sizing_list.add_argument("--json", action="store_true")
 
     underwriting = sub.add_parser(
-        "underwriting", help="Create or inspect immutable manual underwriting snapshots (offline)."
+        "underwriting",
+        help="Create or inspect immutable manual underwriting snapshots (offline).",
     )
     actions = underwriting.add_subparsers(dest="underwriting_action", required=True)
-    create = actions.add_parser("create", help="Append a new version using persisted FMP evidence.")
+    create = actions.add_parser(
+        "create", help="Append a new version using persisted FMP evidence."
+    )
     create.add_argument("ticker")
-    create.add_argument("--file", required=True, type=Path, help="Explicit manual JSON inputs.")
+    create.add_argument(
+        "--file", required=True, type=Path, help="Explicit manual JSON inputs."
+    )
     complete = actions.add_parser(
         "complete", help="Commit Authoring v2 JSON and run deterministic analysis."
     )
@@ -372,42 +486,78 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     analyze.add_argument("ticker")
     analyze.add_argument("--version", type=int, required=True)
-    show_underwriting = actions.add_parser("show", help="Print a saved snapshot without recomputation.")
+    show_underwriting = actions.add_parser(
+        "show", help="Print a saved snapshot without recomputation."
+    )
     show_underwriting.add_argument("ticker")
-    show_underwriting.add_argument("--version", type=int, help="Version to show (default: latest).")
+    show_underwriting.add_argument(
+        "--version", type=int, help="Version to show (default: latest)."
+    )
     history = actions.add_parser("history", help="List preserved versions.")
     history.add_argument("ticker")
-    summary = actions.add_parser("summary", help="Offline probability-weighted terminal return, not a recommendation.")
+    summary = actions.add_parser(
+        "summary",
+        help="Offline probability-weighted terminal return, not a recommendation.",
+    )
     summary.add_argument("ticker")
     summary.add_argument("--version", type=int, required=True)
-    summary.add_argument("--required-return", type=float, help="Explicit evaluation hurdle; otherwise use saved investor policy.")
+    summary.add_argument(
+        "--required-return",
+        type=float,
+        help="Explicit evaluation hurdle; otherwise use saved investor policy.",
+    )
     summary.add_argument("--json", action="store_true")
 
-    challenger = sub.add_parser("challenger", help="Bounded offline advisory review of immutable underwriting.")
-    challenger_actions = challenger.add_subparsers(dest="challenger_action", required=True)
+    challenger = sub.add_parser(
+        "challenger", help="Bounded offline advisory review of immutable underwriting."
+    )
+    challenger_actions = challenger.add_subparsers(
+        dest="challenger_action", required=True
+    )
     for action in ("run", "show"):
-        command = challenger_actions.add_parser(action, help="Append an advisory run." if action == "run" else "Read a saved run.")
+        command = challenger_actions.add_parser(
+            action,
+            help="Append an advisory run." if action == "run" else "Read a saved run.",
+        )
         command.add_argument("ticker")
         command.add_argument("--version", type=int, required=True)
         if action == "show":
-            command.add_argument("--run-id", help="Exact run UUID; default latest for this underwriting version.")
+            command.add_argument(
+                "--run-id",
+                help="Exact run UUID; default latest for this underwriting version.",
+            )
 
-    valuation = sub.add_parser("valuation", help="Offline deterministic five-year scenario valuation.")
+    valuation = sub.add_parser(
+        "valuation", help="Offline deterministic five-year scenario valuation."
+    )
     valuation_actions = valuation.add_subparsers(dest="valuation_action", required=True)
     for action in ("run", "show"):
         valuation_command = valuation_actions.add_parser(
-            action, help="Compute and persist valuation." if action == "run" else "Read a saved valuation."
+            action,
+            help="Compute and persist valuation."
+            if action == "run"
+            else "Read a saved valuation.",
         )
         valuation_command.add_argument("ticker")
-        valuation_command.add_argument("--version", type=int, required=True,
-                                       help="Exact immutable underwriting version.")
+        valuation_command.add_argument(
+            "--version",
+            type=int,
+            required=True,
+            help="Exact immutable underwriting version.",
+        )
 
-    variant = sub.add_parser("variant", help="Offline consensus/BASE assumption comparison.")
+    variant = sub.add_parser(
+        "variant", help="Offline consensus/BASE assumption comparison."
+    )
     variant_actions = variant.add_subparsers(dest="variant_action", required=True)
-    variant_show = variant_actions.add_parser("show", help="Derive variant perception and local valuation sensitivity.")
+    variant_show = variant_actions.add_parser(
+        "show", help="Derive variant perception and local valuation sensitivity."
+    )
     variant_show.add_argument("ticker")
     variant_show.add_argument("--version", type=int, required=True)
-    variant_show.add_argument("--json", action="store_true", help="Print full typed report and provenance.")
+    variant_show.add_argument(
+        "--json", action="store_true", help="Print full typed report and provenance."
+    )
 
     return parser
 
@@ -435,7 +585,8 @@ def _cmd_attribution(args: argparse.Namespace) -> int:
                 report = review_history(source.store, args.ticker.strip().upper())
             else:
                 report = create_review(
-                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    source.store,
+                    UnderwritingSelection(args.ticker.strip().upper(), args.version),
                     load_decision_json(args.file.read_text(encoding="utf-8-sig")),
                 )
             print(canonical_json(report))
@@ -468,14 +619,19 @@ def _cmd_mistakes(args: argparse.Namespace) -> int:
             elif args.review_action == "history":
                 report = review_history(source.store, args.ticker.strip().upper())
             else:
-                selection = UnderwritingSelection(args.ticker.strip().upper(), args.version)
+                selection = UnderwritingSelection(
+                    args.ticker.strip().upper(), args.version
+                )
                 if args.review_action == "create":
                     report = create_review(
-                        source.store, selection,
+                        source.store,
+                        selection,
                         load_decision_json(args.file.read_text(encoding="utf-8-sig")),
                     )
                 else:
-                    suggestion = suggest_review(source.store, selection, review_date=args.review_date)
+                    suggestion = suggest_review(
+                        source.store, selection, review_date=args.review_date
+                    )
                     links = {
                         **suggestion["links"],
                         "decision_id": args.decision_id,
@@ -483,7 +639,10 @@ def _cmd_mistakes(args: argparse.Namespace) -> int:
                         "calibration_report_id": args.calibration_report_id,
                     }
                     report = suggest_review(
-                        source.store, selection, links=links, review_date=args.review_date,
+                        source.store,
+                        selection,
+                        links=links,
+                        review_date=args.review_date,
                     )
             print(canonical_json(report))
         return 0
@@ -509,8 +668,11 @@ def _cmd_calibration(args: argparse.Namespace) -> int:
                 report = read_report(source.store, args.report_id)
             else:
                 report = run_calibration(
-                    source.store, as_of=args.as_of,
-                    company=args.ticker if args.calibration_action == "company" else None,
+                    source.store,
+                    as_of=args.as_of,
+                    company=args.ticker
+                    if args.calibration_action == "company"
+                    else None,
                 )
             print(canonical_json(report) if args.json else format_report(report))
         return 0
@@ -537,21 +699,31 @@ def _cmd_outcome(args: argparse.Namespace) -> int:
                 raise OutcomeError("Outcome history requires SQLite.")
             if args.outcome_action == "create":
                 report = create_observation(
-                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    source.store,
+                    UnderwritingSelection(args.ticker.strip().upper(), args.version),
                     load_decision_json(args.file.read_text(encoding="utf-8-sig")),
                 )
             elif args.outcome_action == "show":
                 report = read_observation(source.store, args.observation_id)
             elif args.outcome_action == "history":
                 history = outcome_history(source.store, args.ticker.strip().upper())
-                print(canonical_json(history) if args.json else
-                      "\n\n".join(format_observation(item) for item in history) or "No outcome observations recorded.")
+                print(
+                    canonical_json(history)
+                    if args.json
+                    else "\n\n".join(format_observation(item) for item in history)
+                    or "No outcome observations recorded."
+                )
                 return 0
             else:
                 comparison = compare_outcomes(
-                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    source.store,
+                    UnderwritingSelection(args.ticker.strip().upper(), args.version),
                 )
-                print(canonical_json(comparison) if args.json else format_comparison(comparison))
+                print(
+                    canonical_json(comparison)
+                    if args.json
+                    else format_comparison(comparison)
+                )
                 return 0
             print(canonical_json(report) if args.json else format_observation(report))
         return 0
@@ -569,23 +741,34 @@ def _cmd_change(args: argparse.Namespace) -> int:
                 raise ChangeError("Change history requires SQLite.")
             if args.change_action == "create":
                 event = create_event(
-                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    source.store,
+                    UnderwritingSelection(args.ticker.strip().upper(), args.version),
                     load_decision_json(args.file.read_text(encoding="utf-8-sig")),
                 )
                 report = assess_event(source.store, event["event_id"])
             elif args.change_action in ("assess", "show"):
                 report = assess_event(source.store, args.event_id)
             elif args.change_action == "approve":
-                approve_event(source.store, args.event_id, args.classification, args.rationale)
+                approve_event(
+                    source.store, args.event_id, args.classification, args.rationale
+                )
                 report = assess_event(source.store, args.event_id)
             elif args.change_action == "history":
                 history = change_history(source.store, args.ticker.strip().upper())
-                print(canonical_json(history) if args.json else
-                      "\n\n".join(format_assessment(item) for item in history) or "No change events recorded.")
+                print(
+                    canonical_json(history)
+                    if args.json
+                    else "\n\n".join(format_assessment(item) for item in history)
+                    or "No change events recorded."
+                )
                 return 0
             else:
                 report = current_change_state(source.store, args.ticker.strip().upper())
-                print(canonical_json(report) if args.json else format_current_state(report))
+                print(
+                    canonical_json(report)
+                    if args.json
+                    else format_current_state(report)
+                )
                 return 0
             print(canonical_json(report) if args.json else format_assessment(report))
         return 0
@@ -603,40 +786,104 @@ def _cmd_sizing(args: argparse.Namespace) -> int:
                 raise SizingError("Portfolio context and sizing require SQLite.")
             if args.command == "portfolio":
                 if args.snapshot_action == "create":
-                    portfolio = create_portfolio(source.store, load_decision_json(args.file.read_text(encoding="utf-8-sig")))
-                    print(portfolio.to_json() if args.json else f"Created portfolio snapshot {portfolio.snapshot_id}; normalization total {portfolio.normalization_total:g}.")
+                    portfolio = create_portfolio(
+                        source.store,
+                        load_decision_json(args.file.read_text(encoding="utf-8-sig")),
+                    )
+                    print(
+                        portfolio.to_json()
+                        if args.json
+                        else f"Created portfolio snapshot {portfolio.snapshot_id}; normalization total {portfolio.normalization_total:g}."
+                    )
                 elif args.snapshot_action == "show":
                     payload = source.store.get_portfolio_snapshot(args.snapshot_id)
-                    print(payload if args.json else json.dumps(json.loads(payload), indent=2))
+                    print(
+                        payload
+                        if args.json
+                        else json.dumps(json.loads(payload), indent=2)
+                    )
                 else:
                     records = source.store.list_portfolio_snapshots()
-                    print("[" + ",".join(record.snapshot_json for record in records) + "]" if args.json else
-                          "\n".join(f"{record.snapshot_id} | {record.as_of_date}" for record in records) or "No portfolio snapshots recorded.")
+                    print(
+                        "[" + ",".join(record.snapshot_json for record in records) + "]"
+                        if args.json
+                        else "\n".join(
+                            f"{record.snapshot_id} | {record.as_of_date}"
+                            for record in records
+                        )
+                        or "No portfolio snapshots recorded."
+                    )
             elif args.command == "position-size":
                 report = size_position(
-                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
-                    args.portfolio, load_decision_json(args.policy.read_text(encoding="utf-8-sig")),
-                    context_data=load_decision_json(args.context.read_text(encoding="utf-8-sig")) if args.context else None,
-                    proposed_increment=args.increment, decision_id=args.decision_id,
+                    source.store,
+                    UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    args.portfolio,
+                    load_decision_json(args.policy.read_text(encoding="utf-8-sig")),
+                    context_data=load_decision_json(
+                        args.context.read_text(encoding="utf-8-sig")
+                    )
+                    if args.context
+                    else None,
+                    proposed_increment=args.increment,
+                    decision_id=args.decision_id,
                 )
                 if args.save:
-                    saved = source.store.save_sizing_analysis(canonical_json(report), created_at=datetime.now(UTC).isoformat())
-                    print(canonical_json({"analysis_id": saved.analysis_id, "created_at": saved.created_at, "report": report}) if args.json else
-                          f"Saved analysis {saved.analysis_id}\n" + format_sizing(report))
+                    saved = source.store.save_sizing_analysis(
+                        canonical_json(report), created_at=datetime.now(UTC).isoformat()
+                    )
+                    print(
+                        canonical_json(
+                            {
+                                "analysis_id": saved.analysis_id,
+                                "created_at": saved.created_at,
+                                "report": report,
+                            }
+                        )
+                        if args.json
+                        else f"Saved analysis {saved.analysis_id}\n"
+                        + format_sizing(report)
+                    )
                 else:
-                    print(canonical_json(report) if args.json else format_sizing(report))
+                    print(
+                        canonical_json(report) if args.json else format_sizing(report)
+                    )
             elif args.sizing_action == "show":
                 saved = source.store.get_sizing_analysis(args.analysis_id)
-                print(saved.report_json if args.json else format_sizing(json.loads(saved.report_json)))
+                print(
+                    saved.report_json
+                    if args.json
+                    else format_sizing(json.loads(saved.report_json))
+                )
             else:
                 analyses = source.store.list_sizing_analyses()
-                print(canonical_json([{
-                    "analysis_id": item.analysis_id, "created_at": item.created_at,
-                    "report": json.loads(item.report_json),
-                } for item in analyses]) if args.json else
-                    "\n".join(f"{item.analysis_id} | {item.created_at} | {item.underwriting_id} | {item.portfolio_id}" for item in analyses) or "No sizing analyses recorded.")
+                print(
+                    canonical_json(
+                        [
+                            {
+                                "analysis_id": item.analysis_id,
+                                "created_at": item.created_at,
+                                "report": json.loads(item.report_json),
+                            }
+                            for item in analyses
+                        ]
+                    )
+                    if args.json
+                    else "\n".join(
+                        f"{item.analysis_id} | {item.created_at} | {item.underwriting_id} | {item.portfolio_id}"
+                        for item in analyses
+                    )
+                    or "No sizing analyses recorded."
+                )
         return 0
-    except (SizingError, DecisionError, ComparisonError, PersistenceError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (
+        SizingError,
+        DecisionError,
+        ComparisonError,
+        PersistenceError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -656,19 +903,27 @@ def _cmd_decision(args: argparse.Namespace) -> int:
                 if args.json:
                     print("[" + ",".join(entry.to_json() for entry in entries) + "]")
                 else:
-                    print("Decision date | Ticker | Role | Frozen price/date | Underwriting | Decision/action")
+                    print(
+                        "Decision date | Ticker | Role | Frozen price/date | Underwriting | Decision/action"
+                    )
                     for entry in entries:
-                        price = (f"${entry.frozen_price:.2f} / {entry.market_date}"
-                                 if entry.frozen_price is not None else "MISSING (benchmark placeholder)")
-                        print(f"{entry.decision_at} | {entry.ticker} | {entry.role} | {price} | "
-                              f"{entry.underwriting_version or 'N/A'} | {entry.decision_id} / {entry.action}")
+                        price = (
+                            f"${entry.frozen_price:.2f} / {entry.market_date}"
+                            if entry.frozen_price is not None
+                            else "MISSING (benchmark placeholder)"
+                        )
+                        print(
+                            f"{entry.decision_at} | {entry.ticker} | {entry.role} | {price} | "
+                            f"{entry.underwriting_version or 'N/A'} | {entry.decision_id} / {entry.action}"
+                        )
                     if not entries:
                         print("No shadow entries recorded.")
                     print(DECISION_DISCLAIMER)
                 return 0
             if args.decision_action == "create":
                 snapshot = create_decision(
-                    source.store, UnderwritingSelection(args.ticker.strip().upper(), args.version),
+                    source.store,
+                    UnderwritingSelection(args.ticker.strip().upper(), args.version),
                     load_decision_json(args.file.read_text(encoding="utf-8-sig")),
                 )
                 print(snapshot.to_json() if args.json else format_decision(snapshot))
@@ -676,17 +931,50 @@ def _cmd_decision(args: argparse.Namespace) -> int:
                 records = source.store.list_decisions(args.ticker)
                 if args.decision_action == "history":
                     if args.json:
-                        print("[" + ",".join(record.snapshot_json for record in records) + "]")
+                        print(
+                            "["
+                            + ",".join(record.snapshot_json for record in records)
+                            + "]"
+                        )
                     else:
-                        print("\n\n".join(format_decision(read_decision(record)) for record in records)
-                              or f"No decisions recorded for {args.ticker}.")
+                        print(
+                            "\n\n".join(
+                                format_decision(read_decision(record))
+                                for record in records
+                            )
+                            or f"No decisions recorded for {args.ticker}."
+                        )
                 else:
-                    selected = next((record for record in records if record.decision_id == args.decision_id), None) if args.decision_id else (records[-1] if records else None)
+                    selected = (
+                        next(
+                            (
+                                record
+                                for record in records
+                                if record.decision_id == args.decision_id
+                            ),
+                            None,
+                        )
+                        if args.decision_id
+                        else (records[-1] if records else None)
+                    )
                     if selected is None:
-                        raise DecisionError(f"Decision {args.decision_id or 'history'} not found for {args.ticker}.")
-                    print(selected.snapshot_json if args.json else format_decision(read_decision(selected)))
+                        raise DecisionError(
+                            f"Decision {args.decision_id or 'history'} not found for {args.ticker}."
+                        )
+                    print(
+                        selected.snapshot_json
+                        if args.json
+                        else format_decision(read_decision(selected))
+                    )
         return 0
-    except (DecisionError, ComparisonError, PersistenceError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (
+        DecisionError,
+        ComparisonError,
+        PersistenceError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -695,7 +983,9 @@ def _cmd_compare_underwriting(args: argparse.Namespace) -> int:
     from owner_lens.workbench.data import open_source
 
     try:
-        selections = tuple(UnderwritingSelection.parse(value) for value in args.selections)
+        selections = tuple(
+            UnderwritingSelection.parse(value) for value in args.selections
+        )
         with open_source() as source:
             if not isinstance(source.store, SqliteStore):
                 raise ComparisonError("Opportunity comparison requires SQLite.")
@@ -713,13 +1003,29 @@ def _cmd_variant(args: argparse.Namespace) -> int:
     try:
         with open_source() as source:
             if not isinstance(source.store, SqliteStore):
-                raise VariantError("Variant comparison requires SQLite underwriting records.")
-            record = next((item for item in source.store.list_underwriting(args.ticker.strip().upper())
-                           if item.version == args.version), None)
+                raise VariantError(
+                    "Variant comparison requires SQLite underwriting records."
+                )
+            record = next(
+                (
+                    item
+                    for item in source.store.list_underwriting(
+                        args.ticker.strip().upper()
+                    )
+                    if item.version == args.version
+                ),
+                None,
+            )
             if record is None:
-                raise VariantError(f"Underwriting {args.ticker} version {args.version} not found.")
+                raise VariantError(
+                    f"Underwriting {args.ticker} version {args.version} not found."
+                )
             report = compare_variant(record)
-            print(json.dumps(json.loads(report.to_json()), indent=2) if args.json else format_variant(report))
+            print(
+                json.dumps(json.loads(report.to_json()), indent=2)
+                if args.json
+                else format_variant(report)
+            )
         return 0
     except (VariantError, PersistenceError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -733,14 +1039,30 @@ def _cmd_summary(args: argparse.Namespace) -> int:
         with open_source() as source:
             if not isinstance(source.store, SqliteStore):
                 raise SummaryError("Underwriting summary requires SQLite.")
-            record = next((item for item in source.store.list_underwriting(args.ticker.strip().upper())
-                           if item.version == args.version), None)
-            if record is None:
-                raise SummaryError(f"Underwriting {args.ticker} version {args.version} not found.")
-            summary = summarize_underwriting(
-                record, saved_valuation(source.store, record), required_return=args.required_return,
+            record = next(
+                (
+                    item
+                    for item in source.store.list_underwriting(
+                        args.ticker.strip().upper()
+                    )
+                    if item.version == args.version
+                ),
+                None,
             )
-            print(json.dumps(json.loads(summary.to_json()), indent=2) if args.json else format_summary(summary))
+            if record is None:
+                raise SummaryError(
+                    f"Underwriting {args.ticker} version {args.version} not found."
+                )
+            summary = summarize_underwriting(
+                record,
+                saved_valuation(source.store, record),
+                required_return=args.required_return,
+            )
+            print(
+                json.dumps(json.loads(summary.to_json()), indent=2)
+                if args.json
+                else format_summary(summary)
+            )
         return 0
     except (SummaryError, PersistenceError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -754,28 +1076,62 @@ def _cmd_challenger(args: argparse.Namespace) -> int:
         with open_source() as source:
             if not isinstance(source.store, SqliteStore):
                 raise ChallengerError("Challenger requires SQLite.")
-            record = next((item for item in source.store.list_underwriting(args.ticker.strip().upper())
-                           if item.version == args.version), None)
+            record = next(
+                (
+                    item
+                    for item in source.store.list_underwriting(
+                        args.ticker.strip().upper()
+                    )
+                    if item.version == args.version
+                ),
+                None,
+            )
             if record is None:
-                raise ChallengerError(f"Underwriting {args.ticker} version {args.version} not found.")
+                raise ChallengerError(
+                    f"Underwriting {args.ticker} version {args.version} not found."
+                )
             if args.challenger_action == "run":
                 run = run_challenger(source.store, record)
             else:
                 runs = source.store.list_challenger_runs(record.underwriting_id)
-                selected_run = next((item for item in reversed(runs) if args.run_id is None or item.run_id == args.run_id), None)
+                selected_run = next(
+                    (
+                        item
+                        for item in reversed(runs)
+                        if args.run_id is None or item.run_id == args.run_id
+                    ),
+                    None,
+                )
                 if selected_run is None:
-                    raise ChallengerError("No matching saved challenger run. Run 'challenger run' first.")
+                    raise ChallengerError(
+                        "No matching saved challenger run. Run 'challenger run' first."
+                    )
                 run = selected_run
-            print(json.dumps({
-                "run_id": run.run_id, "underwriting_id": run.underwriting_id,
-                "underwriting_version": run.underwriting_version,
-                "underwriting_content_hash": run.underwriting_content_hash,
-                "challenger_version": run.challenger_version, "model_version": run.model_version,
-                "created_at": run.created_at, "input_content_hash": run.input_content_hash,
-                "output_content_hash": run.output_content_hash, "output": json.loads(run.output_json),
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "run_id": run.run_id,
+                        "underwriting_id": run.underwriting_id,
+                        "underwriting_version": run.underwriting_version,
+                        "underwriting_content_hash": run.underwriting_content_hash,
+                        "challenger_version": run.challenger_version,
+                        "model_version": run.model_version,
+                        "created_at": run.created_at,
+                        "input_content_hash": run.input_content_hash,
+                        "output_content_hash": run.output_content_hash,
+                        "output": json.loads(run.output_json),
+                    },
+                    indent=2,
+                )
+            )
         return 0
-    except (ChallengerError, SummaryError, VariantError, PersistenceError, OSError) as exc:
+    except (
+        ChallengerError,
+        SummaryError,
+        VariantError,
+        PersistenceError,
+        OSError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -788,15 +1144,23 @@ def _cmd_valuation(args: argparse.Namespace) -> int:
             if not isinstance(source.store, SqliteStore):
                 raise ValuationError("Valuation requires SQLite persistence.")
             records = source.store.list_underwriting(args.ticker.strip().upper())
-            record = next((item for item in records if item.version == args.version), None)
+            record = next(
+                (item for item in records if item.version == args.version), None
+            )
             if record is None:
-                raise ValuationError(f"Underwriting {args.ticker} version {args.version} not found.")
+                raise ValuationError(
+                    f"Underwriting {args.ticker} version {args.version} not found."
+                )
             if args.valuation_action == "run":
                 result_json = run_valuation(source.store, record)
             else:
-                saved_json = source.store.get_valuation(record.underwriting_id, MODEL_VERSION)
+                saved_json = source.store.get_valuation(
+                    record.underwriting_id, MODEL_VERSION
+                )
                 if saved_json is None:
-                    raise ValuationError("No saved valuation for this version. Run 'valuation run' first.")
+                    raise ValuationError(
+                        "No saved valuation for this version. Run 'valuation run' first."
+                    )
                 result_json = saved_json
             print(json.dumps(json.loads(result_json), indent=2))
         return 0
@@ -841,34 +1205,62 @@ def _cmd_underwriting(args: argparse.Namespace) -> int:
             if args.underwriting_action == "create":
                 manual = load_manual_json(args.file.read_text(encoding="utf-8-sig"))
                 record = create_underwriting(source, args.ticker, manual)
-                print(f"Created {record.ticker} underwriting v{record.version}: "
-                      f"{record.underwriting_id} | as of {record.as_of_date}")
+                print(
+                    f"Created {record.ticker} underwriting v{record.version}: "
+                    f"{record.underwriting_id} | as of {record.as_of_date}"
+                )
                 return 0
             records = source.store.list_underwriting(args.ticker.strip().upper())
             if not records:
                 raise UnderwritingError(f"No underwriting records for {args.ticker}.")
             if args.underwriting_action == "history":
-                print(json.dumps([
-                    {"underwriting_id": record.underwriting_id, "version": record.version,
-                     "ticker": record.ticker, "security_id": record.security_id,
-                     "created_at": record.created_at, "as_of_date": record.as_of_date,
-                     "content_hash": record.content_hash}
-                    for record in records
-                ], indent=2))
+                print(
+                    json.dumps(
+                        [
+                            {
+                                "underwriting_id": record.underwriting_id,
+                                "version": record.version,
+                                "ticker": record.ticker,
+                                "security_id": record.security_id,
+                                "created_at": record.created_at,
+                                "as_of_date": record.as_of_date,
+                                "content_hash": record.content_hash,
+                            }
+                            for record in records
+                        ],
+                        indent=2,
+                    )
+                )
             else:
                 version = args.version
-                selected_record = next((record for record in reversed(records)
-                               if version is None or record.version == version), None)
+                selected_record = next(
+                    (
+                        record
+                        for record in reversed(records)
+                        if version is None or record.version == version
+                    ),
+                    None,
+                )
                 if selected_record is None:
-                    raise UnderwritingError(f"Underwriting version {version} not found.")
+                    raise UnderwritingError(
+                        f"Underwriting version {version} not found."
+                    )
                 record = selected_record
-                print(json.dumps({
-                    "underwriting_id": record.underwriting_id, "version": record.version,
-                    "ticker": record.ticker, "security_id": record.security_id,
-                    "created_at": record.created_at, "as_of_date": record.as_of_date,
-                    "content_hash": record.content_hash,
-                    "snapshot": json.loads(record.snapshot_json),
-                }, indent=2))
+                print(
+                    json.dumps(
+                        {
+                            "underwriting_id": record.underwriting_id,
+                            "version": record.version,
+                            "ticker": record.ticker,
+                            "security_id": record.security_id,
+                            "created_at": record.created_at,
+                            "as_of_date": record.as_of_date,
+                            "content_hash": record.content_hash,
+                            "snapshot": json.loads(record.snapshot_json),
+                        },
+                        indent=2,
+                    )
+                )
         return 0
     except (UnderwritingError, PersistenceError, OSError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -901,10 +1293,7 @@ def format_result(result: IngestionResult, *, overall: str | None = None) -> str
     """Render a concise, owner-friendly report for one ingestion outcome."""
     if result.status is IngestionStatus.FAILED and result.failure is not None:
         name = result.company.company_name if result.company else "(unresolved)"
-        return (
-            f"{name}\n"
-            f"FAILED ({result.failure.kind.value}): {result.failure.message}"
-        )
+        return f"{name}\nFAILED ({result.failure.kind.value}): {result.failure.message}"
 
     company = result.company
     snapshot = result.source_snapshot
@@ -1032,6 +1421,89 @@ def _cmd_refresh_sp500(args: argparse.Namespace) -> int:
         store.close()
 
 
+def _cmd_historical_price_pilot(args: argparse.Namespace) -> int:
+    db_path = Path(args.db)
+    raw_path = Path(args.raw_data)
+    if not db_path.is_file():
+        print(
+            f"Disposable SQLite database does not exist: {db_path}",
+            file=sys.stderr,
+        )
+        return 2
+    if not raw_path.is_dir():
+        print(
+            f"Disposable raw snapshot directory does not exist: {raw_path}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        start_date = date.fromisoformat(args.start_date)
+        end_date = date.fromisoformat(args.end_date)
+        if (
+            start_date.isoformat() != args.start_date
+            or end_date.isoformat() != args.end_date
+        ):
+            raise ValueError("Dates must use canonical YYYY-MM-DD format.")
+        settings = load_settings()
+        api_key = require_fmp_api_key(settings)
+        store = SqliteStore(db_path, raw_store=FilesystemRawSnapshotStore(raw_path))
+        try:
+            store.initialize()
+            with FmpClient(api_key) as client:
+                results = run_historical_price_pilot(
+                    client=client,
+                    store=store,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            failures = False
+            print(
+                "Historical-price pilot complete; latest-price records and "
+                "screening/underwriting data were not modified."
+            )
+            for result in results:
+                status = (
+                    "UNSUPPORTED: no observations"
+                    if result.observation_count == 0
+                    else "OK"
+                )
+                conflict_details = []
+                if result.overlap_conflicts:
+                    conflict_details.append(
+                        "saved EOD overlap " + ", ".join(result.overlap_conflicts)
+                    )
+                if result.revision_conflicts:
+                    conflict_details.append(
+                        "historical revision " + "; ".join(result.revision_conflicts)
+                    )
+                if conflict_details:
+                    status = "CONFLICT: " + "; ".join(conflict_details)
+                    failures = True
+                if result.observation_count == 0:
+                    failures = True
+                print(
+                    f"{result.symbol}: {status}; {result.observation_count} prices "
+                    f"({result.first_market_date or 'n/a'} to "
+                    f"{result.last_market_date or 'n/a'}); "
+                    f"history snapshot={result.historical_snapshot_id} "
+                    f"sha256={result.historical_content_hash}; "
+                    f"profile snapshot={result.profile_snapshot_id} "
+                    f"sha256={result.profile_content_hash}; "
+                    f"splits snapshot={result.splits_snapshot_id} "
+                    f"sha256={result.splits_content_hash}; "
+                    f"saved EOD overlap matches={result.overlap_matches}; "
+                    "currency=UNKNOWN, adjustment=UNVERIFIED."
+                )
+                for split_date, numerator, denominator in result.split_events:
+                    print(f"  split evidence: {split_date} {numerator}:{denominator}")
+            return 1 if failures else 0
+        finally:
+            store.close()
+    except (FmpError, PersistenceError, ValueError, OSError) as exc:
+        print(f"Historical-price pilot failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def _cmd_evidence_status(args: argparse.Namespace) -> int:
     settings = load_settings()
     store = build_local_store(settings)
@@ -1081,15 +1553,17 @@ def _cmd_show(args: argparse.Namespace) -> int:
     store.initialize()
     try:
         ticker = args.ticker.strip().upper()
-        company = next(
-            (c for c in store.list_companies() if c.ticker == ticker), None
-        )
+        company = next((c for c in store.list_companies() if c.ticker == ticker), None)
         if company is None:
             print(f"{ticker} has not been ingested.", file=sys.stderr)
             return 1
         summary = store.get_latest_summary(company.cik)
         coverage = store.get_company_coverage(company.cik)
-        lines = [f"{company.ticker} - {company.company_name}", f"CIK: {company.cik}", ""]
+        lines = [
+            f"{company.ticker} - {company.company_name}",
+            f"CIK: {company.cik}",
+            "",
+        ]
         lines.append(
             f"Latest summary: {summary.classification}"
             if summary
@@ -1337,6 +1811,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest(args)
     if args.command == "refresh-sp500":
         return _cmd_refresh_sp500(args)
+    if args.command == "historical-price-pilot":
+        return _cmd_historical_price_pilot(args)
     if args.command == "evidence-status":
         return _cmd_evidence_status(args)
     if args.command == "show":
