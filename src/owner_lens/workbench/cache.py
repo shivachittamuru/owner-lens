@@ -22,11 +22,15 @@ only place caching is applied.
 
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
+from owner_lens.candidate_review import CandidateSelection
 from owner_lens.owner_economics import OwnerEconomicsRow
 from owner_lens.persistence import SqliteStore
 from owner_lens.screening import (
+    ScreeningBucket,
     ScreeningResult,
     assemble_screening_evidence,
     screen_company,
@@ -52,6 +56,12 @@ from owner_lens.workbench.data import (
     load_persisted_companies,
     open_source,
     screen_persisted_universe,
+)
+from owner_lens.workbench.discovery import (
+    DISPLAY_LIMIT,
+    DiscoveryLanes,
+    discovery_lanes,
+    discovery_price_card,
 )
 
 __all__ = [
@@ -230,6 +240,58 @@ def uncertainty_fragility_reviews(
         )
 
 
+@st.cache_data(show_spinner="Loading saved discovery price evidence…")
+def cached_discovery_price(
+    selection: CandidateSelection,
+    db_path: str,
+    *,
+    _source: WorkbenchSource,
+) -> dict[str, Any]:
+    return discovery_price_card(_source, selection)
+
+
+def discovery_overview(
+    companies: tuple[PersistedCompany, ...],
+    results: tuple[ScreeningResult, ...],
+    db_path: str,
+) -> tuple[DiscoveryLanes, dict[str, dict[str, Any]]]:
+    eligible = tuple(
+        r.ticker
+        for r in results
+        if r.bucket in (ScreeningBucket.WATCH, ScreeningBucket.LOW_PRIORITY)
+    )
+    owners = (
+        cached_improving_economics_owner_economics(
+            fingerprint(companies),
+            eligible,
+            db_path,
+            companies[0].provider,
+        )
+        if companies
+        else ()
+    )
+    lanes = discovery_lanes(companies, results, dict(owners))
+    with open_run_source() as source:
+        current = (
+            {
+                c.ticker: c
+                for c in load_persisted_companies(source, companies[0].provider)
+            }
+            if companies
+            else {}
+        )
+        if any(current.get(c.ticker) != c for c in companies):
+            raise WorkbenchError("Discovery evidence changed; reload persisted data.")
+        cards = {
+            item.company.ticker: cached_discovery_price(item, db_path, _source=source)
+            for item in (
+                *lanes.compounders[:DISPLAY_LIMIT],
+                *lanes.improving[:DISPLAY_LIMIT],
+            )
+        }
+    return lanes, cards
+
+
 @st.cache_data(show_spinner="Building company detail…")
 def cached_company_detail(
     ticker: str,
@@ -328,3 +390,4 @@ def clear_caches() -> None:
     cached_coverage_standings.clear()
     cached_improving_economics_owner_economics.clear()
     cached_uncertainty_fragility.clear()
+    cached_discovery_price.clear()

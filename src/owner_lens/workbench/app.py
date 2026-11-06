@@ -215,16 +215,23 @@ def main() -> None:
             screener.render(results)
         if st.checkbox(
             "Show Uncertainty & Fragility review",
+            value=True,
             key="show_uncertainty_fragility",
             help="Offline historical research prompts, existing financial warnings, and evidence limitations. No risk score.",
         ):
-            from owner_lens.workbench.cache import uncertainty_fragility_reviews
+            from owner_lens.workbench.cache import (
+                discovery_overview,
+                uncertainty_fragility_reviews,
+            )
 
             reviews = _guarded(
                 lambda: uncertainty_fragility_reviews(companies, results, db_path)
             )
             if reviews is not None:
-                screener.render_uncertainty_fragility(reviews, results)
+                overview_data = _guarded(lambda: discovery_overview(companies, results, db_path))
+                if overview_data is not None:
+                    lanes, cards = overview_data
+                    screener.render_discovery(lanes, cards, reviews, results)
     elif page == "Company":
         _company_page(usable, provider, db_path)
     elif page == "Compare":

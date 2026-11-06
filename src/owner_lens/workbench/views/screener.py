@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
 from owner_lens.compounding import cagr
@@ -25,6 +27,7 @@ from owner_lens.workbench.data import (
     format_ratio,
     limiting_factor_label,
 )
+from owner_lens.workbench.discovery import DISPLAY_LIMIT, DiscoveryLanes, price_summary
 from owner_lens.workbench.views._common import (
     BUCKET_LABEL,
     COVERAGE_LABEL,
@@ -140,6 +143,166 @@ def render_uncertainty_fragility(
         st.session_state["selected_ticker"] = ticker
         st.session_state["requested_page"] = "Company"
         st.rerun()
+
+
+def _research_label(code: str) -> str:
+    return {
+        "NO_FLAG_FROM_CURRENT_CHECKS": "No flag from current checks (not safety)",
+        "ACTIVATED_EXISTING_GATE": "Existing survival gate activated",
+        "OBSERVED_FINANCIAL_WARNING": "Observed financial warning",
+        "INSUFFICIENT_EVIDENCE": "Insufficient financial evidence",
+    }.get(code, code.replace("_", " ").capitalize())
+
+
+def render_discovery(
+    lanes: DiscoveryLanes,
+    cards: dict[str, dict[str, Any]],
+    reviews: tuple[UncertaintyFragilityReview, ...],
+    results: tuple[ScreeningResult, ...],
+) -> None:
+    st.subheader("Discovery research queue")
+    st.caption(
+        "Survival first, economics next, price evidence last. Existing Feature 7 order; "
+        "first eight per opportunity lane for presentation, not a new score or valuation verdict."
+    )
+    with st.expander("Selection logic and price limitations"):
+        st.write(
+            "Compounders: existing High Priority or Worth Underwriting, compounder setup, "
+            "Strong business quality, capital efficiency and per-share bands, no gate. "
+            "Improving: existing M2-A1 WATCH/LOW_PRIORITY eligibility, five positive FCF years "
+            "and rising latest-three FCF and FCF/share; no gate. Financial Services/Real Estate "
+            "are excluded from ordinary-business opportunity lanes. Missingness and definition "
+            "differences never qualify a company. Existing financial gates have their own lane."
+        )
+        st.write(
+            "Each opportunity uses its latest persisted market date, not necessarily the same "
+            "date across companies. Conditional P/FCF reuses M2-A3; currency/share basis, "
+            "filing availability and accounting conflicts remain explicit. No cheap/expensive labels."
+        )
+    by_ticker = {review.ticker: review for review in reviews}
+    choices: list[str] = []
+    for title, selections in (
+        ("Strong compounders worth valuation research", lanes.compounders),
+        ("Improving businesses worth investigation", lanes.improving),
+        ("Fragility review: existing survival gates", lanes.fragility),
+    ):
+        st.markdown(f"#### {title}")
+        st.caption(
+            f"{len(selections)} eligible; showing first {min(DISPLAY_LIMIT, len(selections))} in existing rank order."
+        )
+        if not selections:
+            st.caption("No companies meet the existing criteria; no substitutes.")
+            continue
+        visible = selections[:DISPLAY_LIMIT]
+        choices.extend(item.company.ticker for item in visible)
+        rows = []
+        for item in visible:
+            ticker = item.company.ticker
+            review = by_ticker[ticker]
+            latest = review.annual[-1] if review.annual else {}
+            fps = latest.get("FCF/share")
+            trend = (
+                f"FY{latest.get('fiscal_year', '?')} FCF/share {fps:.2f}"
+                if fps is not None
+                else "FCF/share unavailable"
+            )
+            first = review.annual[0] if review.annual else {}
+            start = first.get("FCF/share")
+            if start is not None and fps is not None:
+                trend = (
+                    f"FCF/share FY{first['fiscal_year']} {start:.2f} "
+                    f"to FY{latest['fiscal_year']} {fps:.2f}"
+                )
+            if review.business:
+                trend += "; " + ", ".join(
+                    _research_label(x.code) for x in review.business
+                )
+            warnings = "; ".join(
+                _research_label(x.code) for x in review.financial
+            ) or _research_label(review.financial_state)
+            card = cards.get(
+                ticker, {"error": "Economics/gate review only; valuation not assessed"}
+            )
+            rows.append(
+                {
+                    "Company": f"{ticker} | {item.company.company_name}",
+                    "Why surfaced": (
+                        _research_label(item.screening.gate.value)
+                        if item.screening.gate
+                        else item.selection_reason
+                    ),
+                    "Economics trend": trend,
+                    "Financial warnings": warnings,
+                    "Price/valuation evidence": price_summary(card),
+                    "Next research question": review.research_direction,
+                }
+            )
+        st.dataframe(
+            frame(rows),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Financial warnings": st.column_config.TextColumn(
+                    help="Warnings and gates are separate from evidence limitations; no gate is not safety."
+                ),
+                "Price/valuation evidence": st.column_config.TextColumn(
+                    help="Latest persisted date per company. Conditional ratios are NOT_VERIFIED, never an attractiveness verdict."
+                ),
+            },
+        )
+        if len(selections) > DISPLAY_LIMIT:
+            with st.expander(f"All {len(selections)} eligible in {title.lower()}"):
+                st.dataframe(
+                    frame(
+                        [
+                            {
+                                "Company": item.company.ticker,
+                                "Existing priority": _research_label(
+                                    item.screening.bucket.value
+                                ),
+                                "Existing gate": _research_label(
+                                    item.screening.gate.value
+                                )
+                                if item.screening.gate
+                                else "None (not safety)",
+                            }
+                            for item in selections
+                        ]
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+                choices.extend(
+                    item.company.ticker for item in selections[DISPLAY_LIMIT:]
+                )
+    if choices:
+        ticker = st.selectbox(
+            "Shortlisted company to investigate", choices, key="discovery_ticker"
+        )
+        if st.button("Inspect shortlisted company evidence", key="discovery_inspect"):
+            st.session_state["uf_ticker"] = ticker
+            st.session_state["uf_flagged_only"] = False
+        if st.button(
+            "Open shortlisted company research / underwriting", key="discovery_open"
+        ):
+            st.session_state["selected_ticker"] = ticker
+            st.session_state["requested_page"] = "Company"
+            st.rerun()
+        if ticker in cards:
+            with st.expander("Selected price, denominator and source details"):
+                card = cards[ticker]
+                if "error" in card:
+                    st.warning(card["error"])
+                else:
+                    st.json(
+                        {
+                            "quote": card["quote"],
+                            "annual_denominators": card["financial_references"],
+                            "warnings": card["warnings"],
+                            "valuation_status": card["valuation_status"],
+                        }
+                    )
+    render_uncertainty_fragility(reviews, results)
 
 
 def render(results: tuple[ScreeningResult, ...]) -> None:

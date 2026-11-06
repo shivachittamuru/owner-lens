@@ -86,6 +86,55 @@ year duration when the provider omits period-start metadata.
 
 ## Manual Workbench validation
 
+### Integrated discovery queue
+
+M2-A3.3 adds a multi-company queue above the evidence inspector. It is visible
+by default below the existing Screener and Improving Economics views; uncheck
+Show Uncertainty & Fragility review to hide the additive section.
+
+Two opportunity lanes use existing eligibility, not missingness or accounting
+differences:
+
+* Strong compounders: M2-A3's compounder setup, High Priority or Worth
+  Underwriting, Strong business-quality, capital-efficiency and per-share
+  bands, and no existing gate.
+* Improving businesses: existing M2-A1 financial criteria and WATCH/LOW_PRIORITY
+  eligibility, with no existing gate.
+
+Financial Services and Real Estate are excluded from ordinary-business
+opportunity comparisons. All activated financial gates are retained in a
+separate fragility lane. Coverage gates are not financial distress; they remain
+available in the inspector and primary Screener.
+
+Each lane reports its total eligible count and displays the first eight in
+original Feature 7 rank order. Eight is the existing M2-A3 presentation bound,
+not a financial threshold. Expand the remainder to inspect all eligible names
+and gates. No normalization-control reservation is applied to discovery, and
+M2-A3 candidate selection itself is unchanged.
+
+The first eight opportunity companies per lane receive cached M2-A3 worksheets
+using each company's latest saved market date. Dates can differ across names.
+No quote is fetched; conditional ratios remain unverified. Unsupported ratios
+are unresolved, never cheap or expensive. Additional names and gated controls
+remain economics/gate reviews, not valuation comparisons.
+
+Choose Shortlisted company to investigate, then Inspect shortlisted company
+evidence to populate the existing inspector, or Open shortlisted company
+research / underwriting to navigate to Company. Price/denominator provenance
+for bounded opportunity worksheets is available in a separate expander.
+
+Read-only validation of the current pilot found 28 eligible compounders, 56
+ungated improving businesses, and 173 existing financial-gate cases. These are
+observed counts, not selection targets. DECK and CMG appear in the first eight
+compounders; ADSK appears in the first eight improving businesses. ORCL and
+INTC remain in the expanded financial-gate lane.
+
+For October 30, 2026 persisted prices, DECK's conditional latest/median P/FCF
+is approximately 10.9x/13.1x; CMG's is 29.6x/29.6x; ADSK's latest is 22.3x
+and its median comparison is unresolved. These are arithmetic observations,
+not valuation verdicts. Current USD profile evidence permits conditional
+arithmetic; historical currency/share adjustment remains unverified.
+
 Run from the repository directory. To inspect the existing disposable pilot:
 
 ```powershell
@@ -121,11 +170,15 @@ Screener and Improving Economics lane.
 6. Use Open research / underwriting in Company view. Existing research and
    immutable underwriting remain the destination; no records are created.
 7. Rerun the Screener and confirm stable ordering and repeatable observations.
+8. Confirm the discovery tables show multiple companies without first entering
+   a ticker. Inspect DECK and CMG in compounders, ADSK in improving (or the
+   expanded remainder), and ORCL/INTC in the fragility lane. A debt-definition
+   limitation alone must never create an opportunity candidate.
 
 ## Validation commands
 
 ```powershell
-uv run pytest -q tests\test_uncertainty_fragility.py tests\test_workbench_pages.py tests\test_workbench_fmp.py tests\test_screening_buckets.py tests\test_candidate_review.py
+uv run pytest -q tests\test_discovery.py tests\test_uncertainty_fragility.py tests\test_screening_buckets.py tests\test_candidate_review.py
 uv run ruff check src tests
 uv run mypy src
 git diff --check
