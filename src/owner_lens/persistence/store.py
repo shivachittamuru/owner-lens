@@ -735,13 +735,23 @@ class SqliteStore:
     """A local SQLite implementation of the OwnerLens storage boundary."""
 
     def __init__(
-        self, db_path: Path, *, raw_store: RawSnapshotStore | None = None
+        self,
+        db_path: Path,
+        *,
+        raw_store: RawSnapshotStore | None = None,
+        read_only: bool = False,
     ) -> None:
         self._db_path = Path(db_path)
         self._raw_store = raw_store
         self._in_transaction = False
         try:
-            self._conn = sqlite3.connect(self._db_path)
+            self._conn = (
+                sqlite3.connect(
+                    self._db_path.resolve().as_uri() + "?mode=ro", uri=True
+                )
+                if read_only
+                else sqlite3.connect(self._db_path)
+            )
         except sqlite3.Error as exc:
             raise StorageConnectionError(
                 f"Cannot open persistence store at {self._db_path}: {exc}"
@@ -2915,6 +2925,23 @@ class SqliteStore:
             raise StorageWriteError(
                 f"Cannot update refresh state for security {security_id}/{dataset}: {exc}"
             ) from exc
+
+    def list_fmp_evidence_snapshots(
+        self, security_id: int, dataset: str
+    ) -> tuple[dict[str, Any], ...]:
+        """Read all immutable vintages for one dataset, newest retrieval first."""
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM fmp_evidence_snapshots "
+                "WHERE security_id = ? AND dataset = ? "
+                "ORDER BY fetched_at DESC, snapshot_id DESC",
+                (security_id, dataset),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageReadError(
+                f"Cannot read FMP evidence vintages for {security_id}/{dataset}: {exc}"
+            ) from exc
+        return tuple(dict(row) for row in rows)
 
     def get_latest_fmp_evidence_snapshot(
         self, security_id: int, dataset: str

@@ -49,6 +49,7 @@ __all__ = [
     "EvidenceRefreshSummary",
     "HistoricalPricePilotResult",
     "refresh_sp500_evidence",
+    "retrieve_candidate_prices",
     "run_historical_price_pilot",
 ]
 
@@ -875,6 +876,76 @@ def _members_and_ids(store: SqliteStore) -> tuple[tuple[FmpConstituent, int], ..
         )
         for record in records
     )
+
+
+def retrieve_candidate_prices(
+    *,
+    client: FmpClient,
+    store: SqliteStore,
+    symbols: tuple[str, ...],
+    market_date: date,
+) -> tuple[dict[str, Any], ...]:
+    """Explicit bounded acquisition; never refresh fundamentals or latest quotes."""
+    if not symbols or len(symbols) > 24 or len(set(symbols)) != len(symbols):
+        raise ValueError("Candidate acquisition requires 1-24 distinct symbols.")
+    start_date = market_date - timedelta(days=14)
+    _validate_historical_range(start_date, market_date)
+    members = {member.symbol: (member, sid) for member, sid in _members_and_ids(store)}
+    missing = set(symbols) - set(members)
+    if missing:
+        raise ValueError(f"Candidate symbols outside persisted universe: {sorted(missing)}.")
+    results: list[dict[str, Any]] = []
+    for symbol in symbols:
+        member, security_id = members[symbol]
+        try:
+            profile = client.get_profile_evidence(symbol)
+            _validate_pilot_payload_symbol(profile, symbol)
+            if len(profile.rows) != 1:
+                raise MalformedFmpResponseError(f"{symbol}: profile is not one identity.")
+            cik = _profile_cik(profile.rows[0], symbol)
+            if cik is not None and member.cik is not None and cik != member.cik:
+                raise MalformedFmpResponseError(f"{symbol}: profile CIK mismatch.")
+            splits = client.get_splits_evidence(
+                symbol, start_date=market_date - timedelta(days=1095), end_date=market_date
+            )
+            _validate_pilot_payload_symbol(splits, symbol)
+            prices = client.get_historical_price_evidence(
+                symbol, start_date=start_date, end_date=market_date
+            )
+            _validate_pilot_payload_symbol(prices, symbol)
+            validated = _validated_pilot_prices(
+                symbol, prices.rows, start_date=start_date, end_date=market_date
+            )
+            saved: list[dict[str, Any]] = []
+            with store.transaction():
+                for dataset, period, payload in (
+                    ("candidate_profile", "profile", profile),
+                    ("candidate_splits", "corporate_action", splits),
+                    ("candidate_price", "historical", prices),
+                ):
+                    snapshot = _persist_pilot_snapshot(
+                        store, security_id=security_id, dataset=dataset,
+                        period_type=period, payload=payload,
+                    )
+                    saved.append({
+                        "dataset": dataset, "snapshot_id": snapshot.snapshot_id,
+                        "content_hash": snapshot.content_hash,
+                        "fetched_at": snapshot.fetched_at,
+                    })
+            status = "SUCCEEDED" if any(
+                day == market_date.isoformat() for day, _price, _field in validated
+            ) else "UNSUPPORTED"
+            results.append({
+                "symbol": symbol, "status": status, "snapshots": saved,
+                "reason": None if status == "SUCCEEDED" else "No quote on requested market date.",
+            })
+        except (FmpAuthenticationError, FmpRateLimitError):
+            raise
+        except FmpPlanRestrictionError as exc:
+            results.append({"symbol": symbol, "status": "UNSUPPORTED", "reason": str(exc)})
+        except (FmpError, PersistenceError) as exc:
+            results.append({"symbol": symbol, "status": "FAILED", "reason": str(exc)})
+    return tuple(results)
 
 
 def _record_task_result(counts: dict[str, int], result: _TaskResult) -> None:

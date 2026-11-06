@@ -21,6 +21,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from owner_lens.candidate_review import (
+    build_candidate_report,
+    format_candidate_report,
+    select_candidates,
+)
 from owner_lens.canonical import CanonicalFinancialHistory
 from owner_lens.challenger import ChallengerError, run_challenger
 from owner_lens.changes import (
@@ -54,6 +59,7 @@ from owner_lens.decisions import (
 )
 from owner_lens.evidence_ingestion import (
     refresh_sp500_evidence,
+    retrieve_candidate_prices,
     run_historical_price_pilot,
 )
 from owner_lens.fmp import FmpClient, FmpConfigurationError, FmpError
@@ -107,6 +113,7 @@ from owner_lens.universe_ingestion import (
 )
 from owner_lens.valuation import MODEL_VERSION, ValuationError, run_valuation
 from owner_lens.variant import VariantError, compare_variant, format_variant
+from owner_lens.workbench.data import WorkbenchError, WorkbenchSource
 
 __all__ = ["format_result", "main"]
 
@@ -150,6 +157,23 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Refetch evidence even when a recent persisted response is available.",
     )
+
+    candidate_review = sub.add_parser(
+        "candidate-review",
+        help="Offline bounded research report, or explicit selected-candidate price retrieval.",
+    )
+    candidate_actions = candidate_review.add_subparsers(dest="candidate_action", required=True)
+    for action in ("report", "retrieve-prices"):
+        command = candidate_actions.add_parser(action)
+        command.add_argument("--db", required=True, type=Path)
+        command.add_argument("--raw-data", required=True, type=Path)
+        command.add_argument("--date", required=True, type=date.fromisoformat)
+        if action == "report":
+            command.add_argument("--format", choices=("markdown", "json"), default="markdown")
+            command.add_argument("--ticker", help="Export one selected Research Card for ChatGPT.")
+        else:
+            command.add_argument("--confirm-disposable-store", action="store_true", required=True)
+            command.add_argument("--confirm-fmp-requests", action="store_true", required=True)
 
     historical_price_pilot = sub.add_parser(
         "historical-price-pilot",
@@ -1421,6 +1445,67 @@ def _cmd_refresh_sp500(args: argparse.Namespace) -> int:
         store.close()
 
 
+def _cmd_candidate_review(args: argparse.Namespace) -> int:
+    if not args.db.is_file() or not args.raw_data.is_dir():
+        print("Existing database and raw snapshot directory are required.", file=sys.stderr)
+        return 2
+    if args.date > datetime.now(UTC).date():
+        print("Market date cannot be in the future.", file=sys.stderr)
+        return 2
+    raw = FilesystemRawSnapshotStore(args.raw_data)
+    try:
+        with WorkbenchSource(
+            SqliteStore(args.db, raw_store=raw, read_only=True),
+            raw, str(args.db), str(args.raw_data),
+        ) as source:
+            if args.candidate_action == "report":
+                report = build_candidate_report(source, market_date=args.date)
+                if args.ticker:
+                    cards = [
+                        card for card in report["cards"]
+                        if card["ticker"] == args.ticker.upper()
+                    ]
+                    if not cards:
+                        print("Ticker is not in the reproducible pilot cohorts.", file=sys.stderr)
+                        return 2
+                    print(json.dumps(cards[0], indent=2, allow_nan=False))
+                elif args.format == "json":
+                    print(json.dumps(report, indent=2, allow_nan=False))
+                else:
+                    print(format_candidate_report(report), end="")
+                return 1 if report["selection_errors"] or any(
+                    "error" in card for card in report["cards"]
+                ) else 0
+            selections, errors = select_candidates(source)
+            if errors:
+                print("Acquisition blocked: " + "; ".join(errors), file=sys.stderr)
+                return 1
+            symbols = tuple(selection.company.ticker for selection in selections)
+        settings = load_settings()
+        if (
+            args.db.resolve() == Path(settings.db_path).resolve()
+            or args.raw_data.resolve() == Path(settings.raw_data_path).resolve()
+        ):
+            print(
+                "Price acquisition requires copies, not the configured primary database/raw paths.",
+                file=sys.stderr,
+            )
+            return 2
+        with FmpClient(require_fmp_api_key(settings), cache=None) as client:
+            store = SqliteStore(args.db, raw_store=raw)
+            try:
+                results = retrieve_candidate_prices(
+                    client=client, store=store, symbols=symbols, market_date=args.date
+                )
+            finally:
+                store.close()
+        print(json.dumps(results, indent=2))
+        return 1 if any(row["status"] != "SUCCEEDED" for row in results) else 0
+    except (FmpError, PersistenceError, WorkbenchError, ValueError, TypeError, OSError) as exc:
+        print(f"Candidate review failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def _cmd_historical_price_pilot(args: argparse.Namespace) -> int:
     db_path = Path(args.db)
     raw_path = Path(args.raw_data)
@@ -1813,6 +1898,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_refresh_sp500(args)
     if args.command == "historical-price-pilot":
         return _cmd_historical_price_pilot(args)
+    if args.command == "candidate-review":
+        return _cmd_candidate_review(args)
     if args.command == "evidence-status":
         return _cmd_evidence_status(args)
     if args.command == "show":
