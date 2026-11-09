@@ -58,7 +58,6 @@ from owner_lens.workbench.data import (
     screen_persisted_universe,
 )
 from owner_lens.workbench.discovery import (
-    DISPLAY_LIMIT,
     DiscoveryLanes,
     discovery_lanes,
     discovery_price_card,
@@ -285,8 +284,8 @@ def discovery_overview(
         cards = {
             item.company.ticker: cached_discovery_price(item, db_path, _source=source)
             for item in (
-                *lanes.compounders[:DISPLAY_LIMIT],
-                *lanes.improving[:DISPLAY_LIMIT],
+                *lanes.compounders,
+                *lanes.improving,
             )
         }
     return lanes, cards

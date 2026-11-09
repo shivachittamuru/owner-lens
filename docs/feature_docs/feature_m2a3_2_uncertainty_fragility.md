@@ -11,7 +11,9 @@ Improving Economics eligibility, candidate-review selection, prices, and frozen
 underwriting. It does not produce a risk score, safety classification, or
 investment recommendation.
 
-The review covers the active persisted universe in original Feature 7 order.
+The inspector covers the active persisted universe in original Feature 7 order.
+The additive discovery queue has independent conditional valuation-attention
+ordering; it does not write back a new screening rank.
 Per-company cached results are plain data, keyed on company evidence and the
 original screening result. Loading is opt-in; no provider calls are made.
 
@@ -106,34 +108,98 @@ opportunity comparisons. All activated financial gates are retained in a
 separate fragility lane. Coverage gates are not financial distress; they remain
 available in the inspector and primary Screener.
 
-Each lane reports its total eligible count and displays the first eight in
-original Feature 7 rank order. Eight is the existing M2-A3 presentation bound,
-not a financial threshold. Expand the remainder to inspect all eligible names
-and gates. No normalization-control reservation is applied to discovery, and
-M2-A3 candidate selection itself is unchanged.
+Each lane displays the first eight and reports its total count. Eight is the
+existing M2-A3 presentation bound, not a financial threshold. Expand the
+remainder to inspect all eligible names and gates. No normalization-control
+reservation is applied to discovery, and M2-A3 candidate selection is unchanged.
 
-The first eight opportunity companies per lane receive cached M2-A3 worksheets
-using each company's latest saved market date. Dates can differ across names.
-No quote is fetched; conditional ratios remain unverified. Unsupported ratios
-are unresolved, never cheap or expensive. Additional names and gated controls
-remain economics/gate reviews, not valuation comparisons.
+M2-A3.4 evaluates cached M2-A3 worksheets for every economically eligible
+opportunity before choosing the first eight. It does not evaluate price
+worksheets for the financial-gate lane. No quote is fetched.
+
+### Conditional valuation-attention policy
+
+The common attention date is the newest saved opportunity quote date, not a
+live price or financial statement date. A company is conditionally orderable
+only when it has:
+
+* Existing economic eligibility and no activated gate
+* A known sector compatible with ordinary-business FCF comparisons
+* Sufficient financial-resilience observations from the existing review
+* Three distinct consecutive fiscal years of positive canonical FCF/share
+* Supported positive latest and median P/FCF comparisons
+* Supported currency evidence, including explicitly inferred current profiles
+* A saved quote on the common attention date
+
+Orderable names are grouped by sector alphabetically, then ordered by ascending
+three-year-median P/FCF within that sector. Original Feature 7 rank breaks ties.
+Alphabetical sector placement is a display convention, not investment
+preference. Sectors are coarse peer groups, not proof of comparable business
+models. There is no cross-sector cheapness score or universal multiple cutoff.
+Unranked economically eligible names follow in original Feature 7 order and
+remain selectable. Financial gates retain their original ordering.
+
+Conditional latest and median FCF yields equal the reciprocal of supported
+positive P/FCF. Denominator sensitivity equals latest positive FCF/share divided
+by positive three-year median FCF/share. Missing, negative, gapped or unsupported
+denominators cannot produce a normalized ordering. Latest-year revenue and
+FCF/share growth, historical periods, financial warnings and definition conflicts
+remain available. The selected-company expander preserves raw worksheet
+provenance and the exact ordering or exclusion reason.
+
+Missing prices or currency evidence, insufficient resilience, incompatible
+sectors, source-definition conflicts and invalid canonical inputs remain
+explicitly unresolved or unranked. An invalid metric in a candidate worksheet
+does not crash the full queue or rewrite the canonical facts. A generic debt
+definition difference is not financial distress and does not qualify a company.
+Observed financing warnings remain visible even for orderable names.
+
+Conditional ratios are NOT_VERIFIED. Inferred currency and unverified share
+adjustment are never upgraded into verified valuation. A historical median is
+not normalized sustainable FCF or intrinsic value. High growth, cyclical
+investment and temporary working-capital effects require investor research.
 
 Choose Shortlisted company to investigate, then Inspect shortlisted company
 evidence to populate the existing inspector, or Open shortlisted company
 research / underwriting to navigate to Company. Price/denominator provenance
-for bounded opportunity worksheets is available in a separate expander.
+for opportunity worksheets is available in a separate expander.
 
 Read-only validation of the current pilot found 28 eligible compounders, 56
 ungated improving businesses, and 173 existing financial-gate cases. These are
-observed counts, not selection targets. DECK and CMG appear in the first eight
-compounders; ADSK appears in the first eight improving businesses. ORCL and
-INTC remain in the expanded financial-gate lane.
+observed counts, not selection targets. With the saved evidence, 8 compounders
+and 5 improving businesses meet conditional ordering requirements; the other
+71 stay unranked.
+These counts depend on saved evidence, not economic eligibility changes.
+
+The first eight compounders change from ADBE, CMG, DECK, EME, LRCX, NVDA, RMD,
+ANET to DECK, CMG, EME, ADBE, ANET, LRCX, NVDA, MU. Improving businesses change
+from DIS, NOW, TYL, VEEV, VRSK, STE, TT, ADSK to DIS, STE, VRSK, TT, NOW, TYL,
+VEEV, ADSK. These are sector-grouped research queues, not global return rankings.
+ORCL and INTC retain PERSISTENT_CASH_BURN in the expanded financial-gate lane.
+HST (Real Estate) and JPM (Financial Services) remain available in the primary
+Screener/inspector, outside generic-FCF opportunity ordering.
 
 For October 30, 2026 persisted prices, DECK's conditional latest/median P/FCF
 is approximately 10.9x/13.1x; CMG's is 29.6x/29.6x; ADSK's latest is 22.3x
 and its median comparison is unresolved. These are arithmetic observations,
 not valuation verdicts. Current USD profile evidence permits conditional
 arithmetic; historical currency/share adjustment remains unverified.
+
+NVDA's conditional latest/median multiples are 51.9x/83.4x, yields 1.93%/1.20%,
+and denominator ratio 1.61x. ADSK's denominator ratio is 1.62x, but earlier CapEx
+conflicts block median comparison and ordering. DECK's median yield is 7.66%
+versus CMG's 3.38%, with denominator ratios 1.20x and 1.00x. These differences
+justify questions about durability and expectations, not an attractiveness
+classification. MU is orderable at roughly 596.7x median P/FCF and 34.79x
+denominator sensitivity; inclusion does not imply a low multiple.
+
+Of the 71 unranked companies, 62 lack supported currency comparability, 5 have
+blocked latest/median comparisons and 4 have unresolved canonical repurchase
+signs. Those input errors are disclosed, not corrected in this slice. Source
+statement retrievals for the representative controls are October 31, 2026;
+exact fiscal periods, retrieval timestamps and hashes remain in the inspector
+and selected-company evidence. The read-only pilot database SHA-256 was
+unchanged before/after validation.
 
 Run from the repository directory. To inspect the existing disposable pilot:
 
@@ -174,6 +240,15 @@ Screener and Improving Economics lane.
    a ticker. Inspect DECK and CMG in compounders, ADSK in improving (or the
    expanded remainder), and ORCL/INTC in the fragility lane. A debt-definition
    limitation alone must never create an opportunity candidate.
+9. Compare DECK before CMG within Consumer Cyclical and ADBE before ANET, LRCX,
+   NVDA and MU within Technology. Sector placement is alphabetical, not a
+   cross-sector valuation ranking. Check the common October 30 saved date.
+10. Inspect ADSK's unresolved median, NVDA's growth/sensitivity and MU's extreme
+    sensitivity. Confirm their warnings survive ordering. Expand remaining
+    names to see exclusion reasons, then select one for its complete evidence.
+11. Compare HST or JPM in the primary Screener and inspector. Neither should
+    receive generic-FCF valuation ordering. No gated company belongs to an
+    opportunity lane, regardless of its saved price.
 
 ## Validation commands
 

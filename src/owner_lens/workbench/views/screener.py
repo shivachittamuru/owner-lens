@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 import streamlit as st
@@ -27,7 +28,14 @@ from owner_lens.workbench.data import (
     format_ratio,
     limiting_factor_label,
 )
-from owner_lens.workbench.discovery import DISPLAY_LIMIT, DiscoveryLanes, price_summary
+from owner_lens.workbench.discovery import (
+    DISPLAY_LIMIT,
+    DiscoveryLanes,
+    attention_date,
+    attention_order,
+    price_summary,
+    valuation_attention,
+)
 from owner_lens.workbench.views._common import (
     BUCKET_LABEL,
     COVERAGE_LABEL,
@@ -161,9 +169,11 @@ def render_discovery(
     results: tuple[ScreeningResult, ...],
 ) -> None:
     st.subheader("Discovery research queue")
+    market_date = attention_date(cards)
     st.caption(
-        "Survival first, economics next, price evidence last. Existing Feature 7 order; "
-        "first eight per opportunity lane for presentation, not a new score or valuation verdict."
+        f"Valuation-attention ordering | Common saved market date: {market_date or 'unavailable'}. "
+        "Supported cases grouped by sector (alphabetically), then lower conditional median P/FCF "
+        "within each sector. Unranked economics follow in Feature 7 order. Not a quality or return ranking."
     )
     with st.expander("Selection logic and price limitations"):
         st.write(
@@ -175,20 +185,54 @@ def render_discovery(
             "differences never qualify a company. Existing financial gates have their own lane."
         )
         st.write(
-            "Each opportunity uses its latest persisted market date, not necessarily the same "
-            "date across companies. Conditional P/FCF reuses M2-A3; currency/share basis, "
-            "filing availability and accounting conflicts remain explicit. No cheap/expensive labels."
+            "Each opportunity keeps its latest persisted quote; only quotes on the newest saved "
+            "opportunity date enter ordering. Three consecutive positive annual FCF/share "
+            "references and supported latest/median multiples are required. No gate, known "
+            "compatible sector and sufficient financial-resilience observations are required. "
+            "Ties use original Feature 7 rank. Sectors are coarse peer groups, not proof of "
+            "business-model comparability. Median means historical reference, not sustainable FCF. "
+            "Conditional currency/share-basis status is never upgraded to verified undervaluation."
         )
     by_ticker = {review.ticker: review for review in reviews}
     choices: list[str] = []
     for title, selections in (
-        ("Strong compounders worth valuation research", lanes.compounders),
-        ("Improving businesses worth investigation", lanes.improving),
+        (
+            "Strong compounders worth valuation research",
+            attention_order(lanes.compounders, cards, by_ticker, market_date),
+        ),
+        (
+            "Improving businesses worth investigation",
+            attention_order(lanes.improving, cards, by_ticker, market_date),
+        ),
         ("Fragility review: existing survival gates", lanes.fragility),
     ):
         st.markdown(f"#### {title}")
+        gated_lane = title.startswith("Fragility")
+        ordered_count = (
+            sum(
+                valuation_attention(
+                    item,
+                    cards.get(item.company.ticker, {}),
+                    by_ticker.get(item.company.ticker),
+                    market_date,
+                ).ordering_eligible
+                for item in selections
+            )
+            if not gated_lane
+            else 0
+        )
         st.caption(
-            f"{len(selections)} eligible; showing first {min(DISPLAY_LIMIT, len(selections))} in existing rank order."
+            (
+                f"{len(selections)} financial-gate cases; "
+                if gated_lane
+                else f"{len(selections)} economically eligible; {ordered_count} conditionally orderable; "
+            )
+            + f"showing first {min(DISPLAY_LIMIT, len(selections))}. "
+            + (
+                "Existing gate order unchanged."
+                if gated_lane
+                else "Sector-grouped valuation attention, then unranked research cases."
+            )
         )
         if not selections:
             st.caption("No companies meet the existing criteria; no substitutes.")
@@ -223,6 +267,50 @@ def render_discovery(
             card = cards.get(
                 ticker, {"error": "Economics/gate review only; valuation not assessed"}
             )
+            attention = valuation_attention(item, card, review, market_date)
+            if not review.financial and review.limitations:
+                warnings += "; evidence: " + _research_label(review.limitations[0].code)
+            if card.get("warnings"):
+                warnings += "; " + str(card["warnings"][0])
+            normalized = (
+                f"{attention.median_multiple:.1f}x / {attention.median_yield:.2%} yield"
+                if attention.median_multiple is not None
+                and attention.median_yield is not None
+                else "Unresolved"
+            )
+            latest_yield = (
+                f"; latest conditional FCF yield {attention.latest_yield:.2%}"
+                if attention.latest_yield is not None
+                else "; latest FCF yield unresolved"
+            )
+            sensitivity = (
+                f"{attention.denominator_ratio:.2f}x latest/median FCF/share"
+                if attention.denominator_ratio is not None
+                else "Unavailable"
+            )
+            annual_revenue = card.get("annual_revenue", [])
+            revenue_growth = (
+                annual_revenue[-1]["revenue"] / annual_revenue[-2]["revenue"] - 1
+                if len(annual_revenue) >= 2 and annual_revenue[-2]["revenue"] > 0
+                else None
+            )
+            growth = card.get("latest_fcf_per_share_growth")
+            trend += (
+                f"; revenue growth {revenue_growth:.1%}"
+                if revenue_growth is not None
+                else "; revenue growth unavailable"
+            )
+            trend += (
+                f"; FCF/share growth {growth:.1%}"
+                if growth is not None
+                else "; FCF/share growth unavailable"
+            )
+            question = (
+                f"Can {ticker}'s latest FCF/share persist versus its median reference ({sensitivity})? "
+                "Test growth, reinvestment and competitive durability."
+                if attention.ordering_eligible
+                else attention.reason + " " + review.research_direction
+            )
             rows.append(
                 {
                     "Company": f"{ticker} | {item.company.company_name}",
@@ -230,11 +318,26 @@ def render_discovery(
                         _research_label(item.screening.gate.value)
                         if item.screening.gate
                         else item.selection_reason
+                        + f"; {item.company.sector or 'sector unknown'}; "
+                        + (
+                            "conditional valuation attention"
+                            if attention.ordering_eligible
+                            else "unranked economics"
+                        )
                     ),
                     "Economics trend": trend,
                     "Financial warnings": warnings,
-                    "Price/valuation evidence": price_summary(card),
-                    "Next research question": review.research_direction,
+                    "Price/valuation evidence": price_summary(
+                        {
+                            **card,
+                            "latest_price_to_fcf": attention.latest_multiple,
+                            "median_price_to_fcf": attention.median_multiple,
+                        }
+                    )
+                    + latest_yield,
+                    "Conditional median P/FCF / yield": normalized,
+                    "Denominator sensitivity": sensitivity,
+                    "Next research question": question,
                 }
             )
         st.dataframe(
@@ -247,6 +350,12 @@ def render_discovery(
                 ),
                 "Price/valuation evidence": st.column_config.TextColumn(
                     help="Latest persisted date per company. Conditional ratios are NOT_VERIFIED, never an attractiveness verdict."
+                ),
+                "Conditional median P/FCF / yield": st.column_config.TextColumn(
+                    help="Saved price divided by median canonical FCF/share; yield is its reciprocal. Ordering requires three consecutive positive annual references."
+                ),
+                "Denominator sensitivity": st.column_config.TextColumn(
+                    help="Latest positive FCF/share divided by its three-year median. A historical reference, not a forecast of sustainable cash flow."
                 ),
             },
         )
@@ -265,6 +374,14 @@ def render_discovery(
                                 )
                                 if item.screening.gate
                                 else "None (not safety)",
+                                "Valuation ordering": valuation_attention(
+                                    item,
+                                    cards.get(
+                                        item.company.ticker, {"error": "No worksheet"}
+                                    ),
+                                    by_ticker.get(item.company.ticker),
+                                    market_date,
+                                ).reason,
                             }
                             for item in selections
                         ]
@@ -300,6 +417,25 @@ def render_discovery(
                             "annual_denominators": card["financial_references"],
                             "warnings": card["warnings"],
                             "valuation_status": card["valuation_status"],
+                            "annual_revenue": card.get("annual_revenue", []),
+                            "latest_fcf_per_share_growth": card.get(
+                                "latest_fcf_per_share_growth"
+                            ),
+                            "valuation_attention": asdict(
+                                valuation_attention(
+                                    next(
+                                        item
+                                        for item in (
+                                            *lanes.compounders,
+                                            *lanes.improving,
+                                        )
+                                        if item.company.ticker == ticker
+                                    ),
+                                    card,
+                                    by_ticker.get(ticker),
+                                    market_date,
+                                )
+                            ),
                         }
                     )
     render_uncertainty_fragility(reviews, results)
