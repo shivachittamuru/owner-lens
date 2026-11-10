@@ -1,0 +1,231 @@
+{
+  "contract_version": "owner-earnings-bridge/1",
+  "purpose": "RESEARCH_ONLY",
+  "generated_at": "2026-11-10T07:27:14.345+00:00",
+  "knowledge_cutoff": "2026-11-10T07:27:14.345+00:00",
+  "identity": {
+    "store_namespace": "local-main-evidence",
+    "security_id": 50,
+    "ticker": "DECK",
+    "company_name": "Deckers Brands",
+    "issuer_cik": "0000910521",
+    "provider": "fmp",
+    "history_id": 135,
+    "history_input_hash": "996a9917900b4f2dfe2f47f6b7625c64da6102129bef17044a64248206467bf0"
+  },
+  "source_evidence": {
+    "completeness": "PARTIAL",
+    "scope": "FY2026 main-store canonical baseline and unresolved normalization, not full business research or projected earnings.",
+    "sources": [
+      {
+        "source_id": "income-fy2026",
+        "provider": "fmp",
+        "title": "Persisted FMP DECK annual income statement",
+        "public_uri": null,
+        "dataset": "annual_income_statement",
+        "snapshot_id": 1207,
+        "content_hash": "9b74d8dc4ed19f2066af666106bbe27733013f3229404d597b7fcee66b61e1e4",
+        "endpoint": "income-statement",
+        "retrieved_at": "2026-10-31T08:29:57.215743+00:00",
+        "provider_reported_filing_date": "2026-05-22",
+        "provider_reported_acceptance": "2026-05-22 15:06:44",
+        "accession": null,
+        "status": "AVAILABLE"
+      },
+      {
+        "source_id": "cash-fy2026",
+        "provider": "fmp",
+        "title": "Persisted FMP DECK annual cash-flow statement",
+        "public_uri": null,
+        "dataset": "annual_cash_flow_statement",
+        "snapshot_id": 1209,
+        "content_hash": "161b5230d78bb64d4554fbbd613419a8c4f197dbc486ecc2d07e1f09c586129d",
+        "endpoint": "cash-flow-statement",
+        "retrieved_at": "2026-10-31T08:29:57.495460+00:00",
+        "provider_reported_filing_date": "2026-05-22",
+        "provider_reported_acceptance": "2026-05-22 15:06:44",
+        "accession": null,
+        "status": "AVAILABLE"
+      },
+      {
+        "source_id": "balance-fy2026",
+        "provider": "fmp",
+        "title": "Persisted FMP DECK annual balance sheet",
+        "public_uri": null,
+        "dataset": "annual_balance_sheet_statement",
+        "snapshot_id": 1208,
+        "content_hash": "cfe11c0bd21c303b06dc1da3e3298b7188281be013a9e4b1867d54154b69678a",
+        "endpoint": "balance-sheet-statement",
+        "retrieved_at": "2026-10-31T08:29:57.353079+00:00",
+        "provider_reported_filing_date": "2026-05-22",
+        "provider_reported_acceptance": null,
+        "accession": null,
+        "status": "AVAILABLE"
+      },
+      {
+        "source_id": "price-2026-10-30",
+        "provider": "fmp",
+        "title": "Persisted FMP DECK dated closing price",
+        "public_uri": null,
+        "dataset": "eod_price",
+        "snapshot_id": 1213,
+        "content_hash": "c0ab1ac3de4fa17b2e6d02107c9aae4e12dabebf98a1e81521ac6aa313928851",
+        "endpoint": "historical-price-eod/light",
+        "retrieved_at": "2026-10-31T08:29:58.011503+00:00",
+        "provider_reported_filing_date": null,
+        "provider_reported_acceptance": null,
+        "accession": null,
+        "status": "AVAILABLE"
+      }
+    ],
+    "periods": [
+      {
+        "period_id": "FY2026",
+        "fiscal_year": 2026,
+        "fiscal_period": "FY",
+        "period_start": null,
+        "period_end": "2026-03-31",
+        "temporal_basis": "HISTORICAL"
+      }
+    ],
+    "price": {
+      "market_date": "2026-10-30",
+      "close": {"status": "AVAILABLE", "amount": "81.99", "lower": null, "upper": null, "unit": "UNKNOWN_CURRENCY/share", "reason": "Persisted price, not a verified USD/share comparison."},
+      "currency": null,
+      "currency_basis": "NOT_VERIFIED",
+      "share_basis": "UNVERIFIED",
+      "source_ids": ["price-2026-10-30"]
+    },
+    "limitations": [
+      {"code": "BOUNDED_EXCERPT", "explanation": "One fiscal year, no full-history uncertainty calculation or complete normalization assessment. Canonical metadata is omitted from this compact sample; source fields and snapshot hashes are retained.", "source_ids": []},
+      {"code": "NOT_POINT_IN_TIME_CERTIFIED", "explanation": "Provider reports a May filing date, but this evidence was retrieved in October. It is not proof that the exact payload was available in May.", "source_ids": ["cash-fy2026", "income-fy2026"]},
+      {"code": "PRICE_COMPARABILITY_NOT_VERIFIED", "explanation": "No current profile currency captured in the main store; adjustment basis unverified. No price/owner-earnings ratio is supplied.", "source_ids": ["price-2026-10-30"]}
+    ]
+  },
+  "reported_owner_economics": [
+    {"observation_id": "revenue-26", "period_id": "FY2026", "metric": "revenue", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "5472296000", "lower": null, "upper": null, "unit": "USD", "reason": "Canonical annual revenue."}, "provider_field": "revenue", "source_ids": ["income-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "ocf-26", "period_id": "FY2026", "metric": "operating_cash_flow", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "1181955000", "lower": null, "upper": null, "unit": "USD", "reason": "Canonical annual operating cash flow."}, "provider_field": "netCashProvidedByOperatingActivities", "source_ids": ["cash-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "capex-26", "period_id": "FY2026", "metric": "capital_expenditures", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "84623000", "lower": null, "upper": null, "unit": "USD", "reason": "Positive canonical PP&E cash-spending magnitude."}, "provider_field": "investmentsInPropertyPlantAndEquipment", "source_ids": ["cash-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "fcf-26", "period_id": "FY2026", "metric": "free_cash_flow", "category": "CALCULATION", "quantity": {"status": "AVAILABLE", "amount": "1097332000", "lower": null, "upper": null, "unit": "USD", "reason": "Canonical calculation, not normalized earnings."}, "provider_field": null, "source_ids": ["cash-fy2026"], "input_ids": ["ocf-26", "capex-26"], "calculation": "ocf-26 - abs(capex-26)", "canonical_metadata": {"fact": null}},
+    {"observation_id": "shares-26", "period_id": "FY2026", "metric": "diluted_shares", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "145805000", "lower": null, "upper": null, "unit": "shares", "reason": "Annual diluted weighted-average shares, not current shares outstanding."}, "provider_field": "weightedAverageShsOutDil", "source_ids": ["income-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "fps-26", "period_id": "FY2026", "metric": "fcf_per_share", "category": "CALCULATION", "quantity": {"status": "AVAILABLE", "amount": "7.526024484757039", "lower": null, "upper": null, "unit": "USD/share", "reason": "Serialized existing float; compare arithmetic with explicit tolerance."}, "provider_field": null, "source_ids": ["cash-fy2026", "income-fy2026"], "input_ids": ["fcf-26", "shares-26"], "calculation": "fcf-26 / shares-26", "canonical_metadata": {"fact": null}},
+    {"observation_id": "cash-26", "period_id": "FY2026", "metric": "cash", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "1907249000", "lower": null, "upper": null, "unit": "USD", "reason": "Fiscal-year-end cash."}, "provider_field": "cashAndCashEquivalents", "source_ids": ["balance-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "sti-26", "period_id": "FY2026", "metric": "short_term_investments", "category": "FACT", "quantity": {"status": "STRUCTURALLY_ABSENT", "amount": null, "lower": null, "upper": null, "unit": "USD", "reason": "Existing FMP canonical status: shortTermInvestments zero in every fiscal year."}, "provider_field": "shortTermInvestments", "source_ids": ["balance-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "current-debt-26", "period_id": "FY2026", "metric": "current_debt", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "0", "lower": null, "upper": null, "unit": "USD", "reason": "Canonical component, not all financing obligations."}, "provider_field": "shortTermDebt", "source_ids": ["balance-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "long-debt-26", "period_id": "FY2026", "metric": "long_term_debt", "category": "FACT", "quantity": {"status": "AVAILABLE", "amount": "0", "lower": null, "upper": null, "unit": "USD", "reason": "Canonical component, not all financing obligations."}, "provider_field": "longTermDebt", "source_ids": ["balance-fy2026"], "input_ids": [], "calculation": null, "canonical_metadata": {"fact": null}},
+    {"observation_id": "debt-26", "period_id": "FY2026", "metric": "total_debt", "category": "CALCULATION", "quantity": {"status": "AVAILABLE", "amount": "0", "lower": null, "upper": null, "unit": "USD", "reason": "Existing canonical component sum; provider totalDebt differs."}, "provider_field": null, "source_ids": ["balance-fy2026"], "input_ids": ["current-debt-26", "long-debt-26"], "calculation": "current-debt-26 + long-debt-26", "canonical_metadata": {"fact": null}},
+    {"observation_id": "net-cash-26", "period_id": "FY2026", "metric": "net_cash", "category": "CALCULATION", "quantity": {"status": "AVAILABLE", "amount": "1907249000", "lower": null, "upper": null, "unit": "USD", "reason": "Preserve existing capital-efficiency output; not certification of total liabilities."}, "provider_field": null, "source_ids": ["balance-fy2026"], "input_ids": ["cash-26", "sti-26", "debt-26"], "calculation": "cash plus existing structurally-absent STI treatment minus canonical debt", "canonical_metadata": {"fact": null}},
+    {"observation_id": "roic-26", "period_id": "FY2026", "metric": "roic", "category": "CALCULATION", "quantity": {"status": "AVAILABLE", "amount": "1.603466732006045", "lower": null, "upper": null, "unit": "ratio", "reason": "Existing capital-efficiency output. Full tax and prior-balance inputs omitted from this excerpt."}, "provider_field": null, "source_ids": ["balance-fy2026", "income-fy2026"], "input_ids": [], "calculation": "Existing NOPAT / average invested capital; reproduce from canonical history 135, not this excerpt alone.", "canonical_metadata": {"fact": null}}
+  ],
+  "normalization_adjustments": [
+    {
+      "adjustment_id": "working-capital",
+      "adjustment_type": "WORKING_CAPITAL",
+      "period_id": "FY2026",
+      "category": "JUDGMENT",
+      "signed_effect": {"status": "INSUFFICIENT_EVIDENCE", "amount": null, "lower": null, "upper": null, "unit": "USD", "reason": "No defensible recurring working-capital baseline established."},
+      "input_ids": ["ocf-26"],
+      "source_ids": ["cash-fy2026"],
+      "calculation_or_assumption": "Unresolved; no numerical adjustment.",
+      "economic_rationale": "Separate recurring cash conversion from timing effects.",
+      "uncertainty": "Historical cash movements alone do not establish sustainable working-capital needs.",
+      "approval": "UNREVIEWED",
+      "depends_on": [],
+      "overlap_group": "cash-conversion",
+      "excludes": []
+    },
+    {
+      "adjustment_id": "maintenance-growth",
+      "adjustment_type": "MAINTENANCE_GROWTH_REINVESTMENT",
+      "period_id": "FY2026",
+      "category": "JUDGMENT",
+      "signed_effect": {"status": "UNSUPPORTED", "amount": null, "lower": null, "upper": null, "unit": "USD", "reason": "No sourced maintenance/growth split."},
+      "input_ids": ["capex-26"],
+      "source_ids": ["cash-fy2026"],
+      "calculation_or_assumption": "Do not add all CapEx back or label it growth.",
+      "economic_rationale": "Growth spending may differ from sustaining reinvestment.",
+      "uncertainty": "Management disclosure and competitive requirements need research.",
+      "approval": "UNREVIEWED",
+      "depends_on": [],
+      "overlap_group": "reinvestment",
+      "excludes": []
+    },
+    {
+      "adjustment_id": "sbc-dilution",
+      "adjustment_type": "SBC_DILUTION",
+      "period_id": "FY2026",
+      "category": "JUDGMENT",
+      "signed_effect": {"status": "INSUFFICIENT_EVIDENCE", "amount": null, "lower": null, "upper": null, "unit": "USD", "reason": "No approved choice between cash-cost and dilution treatment."},
+      "input_ids": ["shares-26"],
+      "source_ids": ["income-fy2026", "cash-fy2026"],
+      "calculation_or_assumption": "No SBC haircut or forecast dilution assumption is generated.",
+      "economic_rationale": "Employee equity compensation has an owner cost.",
+      "uncertainty": "Deducting an SBC proxy while projecting the same dilution may double count.",
+      "approval": "UNREVIEWED",
+      "depends_on": [],
+      "overlap_group": "employee-equity-cost",
+      "excludes": []
+    }
+  ],
+  "conditional_owner_earnings": [
+    {
+      "case_id": "reported-fcf-baseline",
+      "kind": "REPORTED_BASELINE",
+      "category": "CALCULATION",
+      "period_id": "FY2026",
+      "baseline_observation_id": "fcf-26",
+      "adjustment_ids": [],
+      "share_observation_id": "shares-26",
+      "formula": "BASELINE_PLUS_SIGNED_ADJUSTMENTS",
+      "owner_earnings": {"status": "AVAILABLE", "amount": "1097332000", "lower": null, "upper": null, "unit": "USD", "reason": "Unadjusted reported FCF baseline only."},
+      "owner_earnings_per_share": {"status": "AVAILABLE", "amount": "7.526024484757039", "lower": null, "upper": null, "unit": "USD/share", "reason": "Unadjusted canonical FCF/share, not normalized earnings."},
+      "share_treatment": "Fiscal FY2026 weighted-average diluted denominator, no new split adjustment.",
+      "unsupported_components": ["working-capital", "maintenance-growth", "sbc-dilution"],
+      "unresolved_risks": ["Brand and demand durability require research.", "No demonstrated recurring owner-earnings baseline."]
+    },
+    {
+      "case_id": "historical-normalization-unresolved",
+      "kind": "HISTORICAL_CONDITIONAL",
+      "category": "CALCULATION",
+      "period_id": "FY2026",
+      "baseline_observation_id": "fcf-26",
+      "adjustment_ids": ["working-capital", "maintenance-growth", "sbc-dilution"],
+      "share_observation_id": "shares-26",
+      "formula": "BASELINE_PLUS_SIGNED_ADJUSTMENTS",
+      "owner_earnings": {"status": "INSUFFICIENT_EVIDENCE", "amount": null, "lower": null, "upper": null, "unit": "USD", "reason": "Unresolved adjustments are not zero."},
+      "owner_earnings_per_share": {"status": "INSUFFICIENT_EVIDENCE", "amount": null, "lower": null, "upper": null, "unit": "USD/share", "reason": "No supported normalized numerator."},
+      "share_treatment": "No projected or current share denominator substituted.",
+      "unsupported_components": ["working-capital", "maintenance-growth", "sbc-dilution"],
+      "unresolved_risks": ["Remaining adjustment categories have not been assessed; no completeness claim.", "Debt-definition composition and lease financing are unresolved."]
+    }
+  ],
+  "research_card": {
+    "topics": ["BUSINESS_MODEL", "ECONOMIC_DRIVERS", "COMPETITIVE_ADVANTAGE", "TEMPORARY_VS_STRUCTURAL", "REINVESTMENT", "CASH_FLOW_SUSTAINABILITY", "RESILIENCE_IMPAIRMENT", "EXPECTATIONS_VS_ASSUMPTIONS", "COMPETING_EXPLANATIONS"],
+    "claims": [
+      {"claim_id": "reported-cash", "topic": "CASH_FLOW_SUSTAINABILITY", "category": "CALCULATION", "text": "FY2026 canonical FCF is USD 1,097,332,000. It does not establish recurring cash generation.", "source_ids": ["cash-fy2026"], "supports": [], "disconfirms": [], "unresolved": false, "observation_date": "2026-03-31"},
+      {"claim_id": "durability-question", "topic": "COMPETITIVE_ADVANTAGE", "category": "JUDGMENT", "text": "Test whether observed demand and margins reflect durable brand economics rather than temporary strength. No conclusion supplied.", "source_ids": [], "supports": [], "disconfirms": [], "unresolved": true, "observation_date": null},
+      {"claim_id": "expectations-gap", "topic": "EXPECTATIONS_VS_ASSUMPTIONS", "category": "JUDGMENT", "text": "No analyst expectation excerpt or investor-approved forecast included here; do not infer a market-implied growth rate from price/FCF.", "source_ids": [], "supports": [], "disconfirms": [], "unresolved": true, "observation_date": null}
+    ],
+    "existing_screening": {
+      "priority": "HIGH_PRIORITY",
+      "gate": null,
+      "coverage": "FULL",
+      "setup": "COMPOUNDER",
+      "dimensions": {"BUSINESS_QUALITY": "STRONG", "CAPITAL_EFFICIENCY": "STRONG", "PER_SHARE_COMPOUNDING": "STRONG", "BALANCE_SHEET_STRENGTH": "STRONG", "CAPITAL_ALLOCATION": "STRONG", "ECONOMIC_MOMENTUM": "STRONG"}
+    },
+    "business_uncertainty": [],
+    "financial_fragility": {"state": "NO_FLAG_FROM_CURRENT_CHECKS", "observations": []},
+    "evidence_limitations": [
+      {"code": "DEBT_DEFINITION_DIFFERENCE", "explanation": "FY2026 canonical short/long debt sum is zero; raw FMP totalDebt is USD 375,194,000. Composition unresolved; not an automatic distress classification.", "source_ids": ["balance-fy2026"]},
+      {"code": "QUALITATIVE_RESEARCH_REQUIRED", "explanation": "No deterministic business indicator is proof of no business uncertainty. Unpopulated research topics remain questions, not negative findings.", "source_ids": []}
+    ],
+    "next_evidence": ["Verify working-capital recurrence, maintenance reinvestment and compensation policy.", "Investigate brand relevance, competitive threats and temporary versus structural demand.", "Resolve financing-obligation composition and price/share compatibility.", "Collect supporting and disconfirming sources for every material hypothesis."],
+    "underwriting_readiness": "RESEARCH_REQUIRED"
+  },
+  "underwriting_handoff": {
+    "authoring_version": 2,
+    "mode": "MANUAL_BELIEFS_ONLY",
+    "existing_underwriting": {"version": 1, "as_of_date": "2026-11-06", "content_hash": "9201c0b0405a438a57b3df61cff1c7599866f632e6f13fe7950ac240f5ad71a9"},
+    "mapping_notes": ["This sample does not amend the frozen DECK v1 record.", "Normalization may inform investor-approved scenario margin and share assumptions, not replace frozen FCF.", "Use only existing title, uri, observed_at and note keys in Authoring v2 references.", "No authoring payload, scenario probabilities, required return or investment decision is generated."]
+  }
+}

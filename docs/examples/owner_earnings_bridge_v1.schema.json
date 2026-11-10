@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Owner Earnings Bridge v1 design contract",
+  "description": "Research sidecar only. Not an Authoring v2 input or a runtime normalization engine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "purpose", "generated_at", "knowledge_cutoff", "identity", "source_evidence", "reported_owner_economics", "normalization_adjustments", "conditional_owner_earnings", "research_card", "underwriting_handoff"],
+  "properties": {
+    "contract_version": {"const": "owner-earnings-bridge/1"},
+    "purpose": {"const": "RESEARCH_ONLY"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "knowledge_cutoff": {"type": "string", "format": "date-time"},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store_namespace", "security_id", "ticker", "company_name", "issuer_cik", "provider", "history_id", "history_input_hash"],
+      "properties": {
+        "store_namespace": {"$ref": "#/$defs/text"},
+        "security_id": {"type": ["integer", "null"], "minimum": 1},
+        "ticker": {"$ref": "#/$defs/text"},
+        "company_name": {"$ref": "#/$defs/text"},
+        "issuer_cik": {"type": ["string", "null"]},
+        "provider": {"enum": ["fmp", "sec"]},
+        "history_id": {"type": ["integer", "null"], "minimum": 1},
+        "history_input_hash": {"$ref": "#/$defs/nullable_hash"}
+      }
+    },
+    "source_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completeness", "scope", "sources", "periods", "price", "limitations"],
+      "properties": {
+        "completeness": {"enum": ["COMPLETE_FOR_STATED_SCOPE", "PARTIAL", "INSUFFICIENT"]},
+        "scope": {"$ref": "#/$defs/text"},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+        "periods": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/period"}},
+        "price": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["market_date", "close", "currency", "currency_basis", "share_basis", "source_ids"],
+          "properties": {
+            "market_date": {"type": ["string", "null"], "format": "date"},
+            "close": {"$ref": "#/$defs/quantity"},
+            "currency": {"type": ["string", "null"]},
+            "currency_basis": {"enum": ["VERIFIED_BAR", "INFERRED_CURRENT_PROFILE", "NOT_VERIFIED"]},
+            "share_basis": {"enum": ["VERIFIED", "UNVERIFIED", "NOT_VERIFIED"]},
+            "source_ids": {"$ref": "#/$defs/ids"}
+          }
+        },
+        "limitations": {"type": "array", "items": {"$ref": "#/$defs/limitation"}}
+      }
+    },
+    "reported_owner_economics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["observation_id", "period_id", "metric", "category", "quantity", "provider_field", "source_ids", "input_ids", "calculation", "canonical_metadata"],
+        "properties": {
+          "observation_id": {"$ref": "#/$defs/text"},
+          "period_id": {"$ref": "#/$defs/text"},
+          "metric": {"enum": ["revenue", "operating_cash_flow", "capital_expenditures", "free_cash_flow", "diluted_shares", "fcf_per_share", "cash", "short_term_investments", "current_debt", "long_term_debt", "total_debt", "net_cash", "roic", "stock_based_compensation"]},
+          "category": {"enum": ["FACT", "CALCULATION"]},
+          "quantity": {"$ref": "#/$defs/quantity"},
+          "provider_field": {"type": ["string", "null"]},
+          "source_ids": {"$ref": "#/$defs/ids"},
+          "input_ids": {"$ref": "#/$defs/ids"},
+          "calculation": {"type": ["string", "null"]},
+          "canonical_metadata": {
+            "type": "object",
+            "description": "Optional unmodified serialized CanonicalFact. Null in a bounded excerpt must be disclosed; source provenance still required.",
+            "additionalProperties": false,
+            "required": ["fact"],
+            "properties": {"fact": {"type": ["object", "null"]}}
+          }
+        }
+      }
+    },
+    "normalization_adjustments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["adjustment_id", "adjustment_type", "period_id", "category", "signed_effect", "input_ids", "source_ids", "calculation_or_assumption", "economic_rationale", "uncertainty", "approval", "depends_on", "overlap_group", "excludes"],
+        "properties": {
+          "adjustment_id": {"$ref": "#/$defs/text"},
+          "adjustment_type": {"enum": ["WORKING_CAPITAL", "MAINTENANCE_GROWTH_REINVESTMENT", "NONRECURRING_CASH", "SBC_DILUTION", "LEASE_FINANCING", "CYCLICAL_MARGIN", "SECTOR_ACCOUNTING"]},
+          "period_id": {"$ref": "#/$defs/text"},
+          "category": {"enum": ["CALCULATION", "ASSUMPTION", "JUDGMENT"]},
+          "signed_effect": {"$ref": "#/$defs/quantity"},
+          "input_ids": {"$ref": "#/$defs/ids"},
+          "source_ids": {"$ref": "#/$defs/ids"},
+          "calculation_or_assumption": {"$ref": "#/$defs/text"},
+          "economic_rationale": {"$ref": "#/$defs/text"},
+          "uncertainty": {"$ref": "#/$defs/text"},
+          "approval": {"enum": ["NOT_REQUIRED_DETERMINISTIC", "UNREVIEWED", "INVESTOR_APPROVED"]},
+          "depends_on": {"$ref": "#/$defs/ids"},
+          "overlap_group": {"type": ["string", "null"]},
+          "excludes": {"$ref": "#/$defs/ids"}
+        }
+      }
+    },
+    "conditional_owner_earnings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "kind", "category", "period_id", "baseline_observation_id", "adjustment_ids", "share_observation_id", "formula", "owner_earnings", "owner_earnings_per_share", "share_treatment", "unsupported_components", "unresolved_risks"],
+        "properties": {
+          "case_id": {"$ref": "#/$defs/text"},
+          "kind": {"enum": ["REPORTED_BASELINE", "HISTORICAL_CONDITIONAL"]},
+          "category": {"const": "CALCULATION"},
+          "period_id": {"$ref": "#/$defs/text"},
+          "baseline_observation_id": {"$ref": "#/$defs/text"},
+          "adjustment_ids": {"$ref": "#/$defs/ids"},
+          "share_observation_id": {"type": ["string", "null"]},
+          "formula": {"const": "BASELINE_PLUS_SIGNED_ADJUSTMENTS"},
+          "owner_earnings": {"$ref": "#/$defs/quantity"},
+          "owner_earnings_per_share": {"$ref": "#/$defs/quantity"},
+          "share_treatment": {"$ref": "#/$defs/text"},
+          "unsupported_components": {"$ref": "#/$defs/ids"},
+          "unresolved_risks": {"$ref": "#/$defs/texts"}
+        }
+      }
+    },
+    "research_card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topics", "claims", "existing_screening", "business_uncertainty", "financial_fragility", "evidence_limitations", "next_evidence", "underwriting_readiness"],
+      "properties": {
+        "topics": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/topic"}
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claim_id", "topic", "category", "text", "source_ids", "supports", "disconfirms", "unresolved", "observation_date"],
+            "properties": {
+              "claim_id": {"$ref": "#/$defs/text"},
+              "topic": {"$ref": "#/$defs/topic"},
+              "category": {"enum": ["FACT", "EXPECTATION", "CALCULATION", "ASSUMPTION", "JUDGMENT"]},
+              "text": {"$ref": "#/$defs/text"},
+              "source_ids": {"$ref": "#/$defs/ids"},
+              "supports": {"$ref": "#/$defs/ids"},
+              "disconfirms": {"$ref": "#/$defs/ids"},
+              "unresolved": {"type": "boolean"},
+              "observation_date": {"type": ["string", "null"], "format": "date"}
+            }
+          }
+        },
+        "existing_screening": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["priority", "gate", "coverage", "setup", "dimensions"],
+          "properties": {
+            "priority": {"$ref": "#/$defs/text"},
+            "gate": {"type": ["string", "null"]},
+            "coverage": {"$ref": "#/$defs/text"},
+            "setup": {"$ref": "#/$defs/text"},
+            "dimensions": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        },
+        "business_uncertainty": {"type": "array", "items": {"$ref": "#/$defs/limitation"}},
+        "financial_fragility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "observations"],
+          "properties": {
+            "state": {"enum": ["ACTIVATED_EXISTING_GATE", "OBSERVED_FINANCIAL_WARNING", "NO_FLAG_FROM_CURRENT_CHECKS", "INSUFFICIENT_EVIDENCE"]},
+            "observations": {"type": "array", "items": {"$ref": "#/$defs/limitation"}}
+          }
+        },
+        "evidence_limitations": {"type": "array", "items": {"$ref": "#/$defs/limitation"}},
+        "next_evidence": {"$ref": "#/$defs/texts"},
+        "underwriting_readiness": {"enum": ["RESEARCH_REQUIRED", "INVESTOR_REVIEW_REQUIRED", "NOT_SUPPORTED"]}
+      }
+    },
+    "underwriting_handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authoring_version", "mode", "existing_underwriting", "mapping_notes"],
+      "properties": {
+        "authoring_version": {"const": 2},
+        "mode": {"const": "MANUAL_BELIEFS_ONLY"},
+        "existing_underwriting": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "as_of_date", "content_hash"],
+              "properties": {
+                "version": {"type": "integer", "minimum": 1},
+                "as_of_date": {"type": "string", "format": "date"},
+                "content_hash": {"$ref": "#/$defs/hash"}
+              }
+            }
+          ]
+        },
+        "mapping_notes": {"$ref": "#/$defs/texts"}
+      }
+    }
+  },
+  "$defs": {
+    "topic": {"enum": ["BUSINESS_MODEL", "ECONOMIC_DRIVERS", "COMPETITIVE_ADVANTAGE", "TEMPORARY_VS_STRUCTURAL", "REINVESTMENT", "CASH_FLOW_SUSTAINABILITY", "RESILIENCE_IMPAIRMENT", "EXPECTATIONS_VS_ASSUMPTIONS", "COMPETING_EXPLANATIONS"]},
+    "text": {"type": "string", "minLength": 1},
+    "texts": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+    "ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nullable_hash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "decimal": {"type": "string", "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"},
+    "nullable_decimal": {"anyOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
+    "quantity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "amount", "lower", "upper", "unit", "reason"],
+      "properties": {
+        "status": {"enum": ["AVAILABLE", "CONDITIONAL", "STRUCTURALLY_ABSENT", "UNSUPPORTED", "INVALID", "NOT_VERIFIED", "INSUFFICIENT_EVIDENCE", "NOT_APPLICABLE"]},
+        "amount": {"$ref": "#/$defs/nullable_decimal"},
+        "lower": {"$ref": "#/$defs/nullable_decimal"},
+        "upper": {"$ref": "#/$defs/nullable_decimal"},
+        "unit": {"enum": ["USD", "USD/share", "shares", "ratio", "UNKNOWN_CURRENCY/share"]},
+        "reason": {"$ref": "#/$defs/text"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"enum": ["AVAILABLE", "CONDITIONAL"]},
+            "amount": {"$ref": "#/$defs/decimal"},
+            "lower": {"type": "null"},
+            "upper": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"enum": ["AVAILABLE", "CONDITIONAL"]},
+            "amount": {"type": "null"},
+            "lower": {"$ref": "#/$defs/decimal"},
+            "upper": {"$ref": "#/$defs/decimal"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"enum": ["STRUCTURALLY_ABSENT", "UNSUPPORTED", "INVALID", "NOT_VERIFIED", "INSUFFICIENT_EVIDENCE", "NOT_APPLICABLE"]},
+            "amount": {"type": "null"},
+            "lower": {"type": "null"},
+            "upper": {"type": "null"}
+          }
+        }
+      ]
+    },
+    "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["period_id", "fiscal_year", "fiscal_period", "period_start", "period_end", "temporal_basis"],
+      "properties": {
+        "period_id": {"$ref": "#/$defs/text"},
+        "fiscal_year": {"type": "integer"},
+        "fiscal_period": {"const": "FY"},
+        "period_start": {"type": ["string", "null"], "format": "date"},
+        "period_end": {"type": "string", "format": "date"},
+        "temporal_basis": {"const": "HISTORICAL"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "provider", "title", "public_uri", "dataset", "snapshot_id", "content_hash", "endpoint", "retrieved_at", "provider_reported_filing_date", "provider_reported_acceptance", "accession", "status"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/text"},
+        "provider": {"enum": ["fmp", "sec", "investor", "external"]},
+        "title": {"$ref": "#/$defs/text"},
+        "public_uri": {"type": ["string", "null"], "format": "uri"},
+        "dataset": {"$ref": "#/$defs/text"},
+        "snapshot_id": {"type": ["integer", "null"], "minimum": 1},
+        "content_hash": {"$ref": "#/$defs/nullable_hash"},
+        "endpoint": {"type": ["string", "null"]},
+        "retrieved_at": {"type": ["string", "null"], "format": "date-time"},
+        "provider_reported_filing_date": {"type": ["string", "null"], "format": "date"},
+        "provider_reported_acceptance": {"type": ["string", "null"]},
+        "accession": {"type": ["string", "null"]},
+        "status": {"enum": ["AVAILABLE", "NOT_VERIFIED", "UNSUPPORTED"]}
+      }
+    },
+    "limitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "explanation", "source_ids"],
+      "properties": {
+        "code": {"$ref": "#/$defs/text"},
+        "explanation": {"$ref": "#/$defs/text"},
+        "source_ids": {"$ref": "#/$defs/ids"}
+      }
+    }
+  }
+}
