@@ -250,7 +250,96 @@ Screener and Improving Economics lane.
     receive generic-FCF valuation ordering. No gated company belongs to an
     opportunity lane, regardless of its saved price.
 
-## Validation commands
+## M2-A5.1 numeric sorting and compact discovery tables
+
+The existing [Screener renderer](../../src/owner_lens/workbench/views/screener.py)
+keeps the same discovery membership, valuation-attention order, first-eight
+shortlist and company navigation. No calculation, gate, provider, persistence
+or underwriting service changes are involved.
+
+Previously, long text columns combined multiples, yields, economic trends and
+research questions. Opportunity tables now show eight columns: ticker, sector,
+economic setup, median P/FCF, median FCF yield, latest-to-median FCF/share,
+financial warnings and valuation/evidence status. Financial-gate tables show
+ticker, economic priority, gate/warning summary and coverage.
+
+Median/latest P/FCF, median/latest FCF yield, latest-to-median FCF/share, revenue
+growth and FCF/share growth remain numeric, including in the expanded detail
+tables. The separate Improving Economics review table also keeps diluted-share
+CAGR numeric. Streamlit NumberColumn uses multiple suffixes and percent
+formatting; a stored ratio of 0.12 displays as 12.00%, not 0.12%. Missing metrics
+remain numeric nulls, never zero or text placeholders.
+
+The first view contains eight companies per lane. The existing all-eligible
+expander uses the same compact columns and includes every eligible company,
+not only the remainder. Economics, valuation and screening details remain in
+a separate expander, including company names, historical trends, latest
+metrics, research questions and exclusion reasons. Selected-company source
+details and the existing uncertainty/fragility inspector retain dates,
+denominators, currency/share-basis limitations and complete gate evidence.
+
+Sorting changes presentation only. Conditional P/FCF and FCF yield are not
+verified undervaluation measures and may not be comparable across business
+models.
+
+Header sorting applies only to that displayed table. It cannot change shortlist
+membership, lane membership, Feature 7 rank, the default attention order or the
+company selector order. Use the all-eligible expander to sort the whole lane.
+Null cells have no economic meaning; consult the separate status and detailed
+evidence. Streamlit controls client-side sort indicators and null placement.
+
+### Manual numeric-table checks
+
+Run these commands from the repository directory to open the existing saved
+pilot, without fetching new evidence:
+
+```powershell
+$pilotRoot = (Resolve-Path -LiteralPath "data\historical-price-pilot-f8a480903eb34e4cb6f74371ed9c8565").Path
+$pilotDb = Join-Path $pilotRoot "ownerlens.db"
+$pilotRaw = Join-Path $pilotRoot "raw"
+$env:OWNER_LENS_RAW_DATA_PATH = $pilotRaw
+uv run --no-sync owner-lens workbench --db "$pilotDb" --provider fmp
+```
+
+In Screener, enable Show Uncertainty & Fragility review:
+
+1. Compare the initial eight names against the unchanged attention order.
+   Expand all eligible names; confirm none disappeared.
+2. Click median P/FCF in both directions. Compare DECK, CMG and NVDA using
+   numeric magnitude, not leading digits. Test yields in both directions.
+3. Confirm ADSK's blocked median remains null (blank/None), with an explicit unranked
+   explanation. Inspect its supported latest comparison in expanded details.
+4. Confirm ORCL and INTC retain their cash-burn gate and original coverage.
+   Use Inspect shortlisted company evidence for the complete gate reasons.
+5. Inspect saved dates, source IDs, annual denominators and currency/share
+   limitations. Use Open shortlisted company research / underwriting and
+   confirm Company remains the destination, without saving a version.
+6. Rerun/reset the view to verify default ordering is unchanged. Table sorting
+   is local presentation state, not a persisted ranking policy.
+
+### Focused presentation validation
+
+The local-evidence test is opt-in. It opens the supplied existing database
+read-only, verifies DECK, CMG, NVDA, ADSK, ORCL and INTC, blocks HTTP requests
+and checks zero database changes plus an unchanged database SHA-256. It never
+initializes or seeds that database.
+
+```powershell
+$pilotRoot = (Resolve-Path -LiteralPath "data\historical-price-pilot-f8a480903eb34e4cb6f74371ed9c8565").Path
+$env:OWNER_LENS_DISCOVERY_TEST_DB = Join-Path $pilotRoot "ownerlens.db"
+$env:OWNER_LENS_DISCOVERY_TEST_RAW = Join-Path $pilotRoot "raw"
+uv run --no-sync pytest -q tests\test_discovery.py tests\test_workbench_frames.py tests\test_workbench.py
+uv run --no-sync ruff check src tests
+uv run --no-sync mypy src
+git diff --check
+Remove-Item Env:\OWNER_LENS_DISCOVERY_TEST_DB, Env:\OWNER_LENS_DISCOVERY_TEST_RAW
+```
+
+Without those two test variables, fixture-based tests still run; the single
+local-evidence test skips. The M2-A4 integration checkpoint passed 1,952 tests.
+This presentation-only slice does not require another full-suite run.
+
+## Earlier evidence-service validation commands
 
 ```powershell
 uv run pytest -q tests\test_discovery.py tests\test_uncertainty_fragility.py tests\test_screening_buckets.py tests\test_candidate_review.py

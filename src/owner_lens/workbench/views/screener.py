@@ -25,7 +25,6 @@ from owner_lens.workbench.data import (
     format_count,
     format_money,
     format_per_share,
-    format_ratio,
     limiting_factor_label,
 )
 from owner_lens.workbench.discovery import (
@@ -51,6 +50,73 @@ _SORTS = {
     "Screening score": lambda r: (-r.screening_score, r.ticker),
     "Ticker": lambda r: r.ticker,
 }
+
+_DISCOVERY_NUMBERS = {
+    "Median P/FCF": (
+        "%.1fx", "Conditional saved price / three-year median canonical FCF/share."
+    ),
+    "Median FCF yield": (
+        "percent", "Conditional reciprocal of median P/FCF; 0.12 means 12%."
+    ),
+    "FCF/share latest/median": (
+        "%.2fx", "Latest positive FCF/share / its three-year median; not a forecast."
+    ),
+    "Latest P/FCF": ("%.1fx", "Conditional saved price / latest canonical FCF/share."),
+    "Latest FCF yield": (
+        "percent", "Conditional reciprocal of latest P/FCF; 0.12 means 12%."
+    ),
+    "Revenue growth": ("percent", "Existing latest annual revenue growth; 0.12 means 12%."),
+    "FCF/share growth": (
+        "percent", "Existing latest annual FCF/share growth; 0.12 means 12%."
+    ),
+}
+_OPPORTUNITY_COLUMNS = (
+    "Ticker", "Sector", "Economic setup", "Median P/FCF", "Median FCF yield",
+    "FCF/share latest/median", "Financial warnings", "Valuation/evidence status",
+)
+_FRAGILITY_COLUMNS = ("Ticker", "Economic priority", "Gate/warning summary", "Coverage")
+
+
+def _discovery_frame(
+    rows: list[dict[str, Any]], *, gated: bool = False, details: bool = False
+):  # type: ignore[no-untyped-def]
+    table = frame(rows)
+    if table.empty:
+        return table
+    for column in _DISCOVERY_NUMBERS:
+        # All-null evidence must stay numeric too, never text or a zero multiple.
+        table[column] = table[column].astype("Float64")
+    columns = _FRAGILITY_COLUMNS if gated else _OPPORTUNITY_COLUMNS
+    return table if details else table[list(columns)]
+
+
+def _discovery_columns() -> dict[str, Any]:
+    return {
+        **{
+            name: st.column_config.NumberColumn(
+                format=fmt,
+                help=help_text,
+                width="small",
+                step=0.0001 if fmt == "percent" else None,
+            )
+            for name, (fmt, help_text) in _DISCOVERY_NUMBERS.items()
+        },
+        "Ticker": st.column_config.TextColumn(width="small"),
+        "Sector": st.column_config.TextColumn(width="small"),
+        "Economic setup": st.column_config.TextColumn(width="small"),
+        "Financial warnings": st.column_config.TextColumn(
+            width="medium",
+            help="Warnings remain independent of missing evidence; no gate is not safety.",
+        ),
+        "Gate/warning summary": st.column_config.TextColumn(
+            width="medium",
+            help="Every activated survival gate is retained; inspect full evidence below.",
+        ),
+        "Valuation/evidence status": st.column_config.TextColumn(
+            width="medium",
+            help="Conditional ratios are not verified undervaluation; inspect currency/share basis and dates.",
+        ),
+    }
 
 
 def render_uncertainty_fragility(
@@ -175,6 +241,10 @@ def render_discovery(
         "Supported cases grouped by sector (alphabetically), then lower conditional median P/FCF "
         "within each sector. Unranked economics follow in Feature 7 order. Not a quality or return ranking."
     )
+    st.caption(
+        "Sorting changes presentation only. Conditional P/FCF and FCF yield are not verified "
+        "undervaluation measures and may not be comparable across business models."
+    )
     with st.expander("Selection logic and price limitations"):
         st.write(
             "Compounders: existing High Priority or Worth Underwriting, compounder setup, "
@@ -240,7 +310,7 @@ def render_discovery(
         visible = selections[:DISPLAY_LIMIT]
         choices.extend(item.company.ticker for item in visible)
         rows = []
-        for item in visible:
+        for item in selections:
             ticker = item.company.ticker
             review = by_ticker[ticker]
             latest = review.annual[-1] if review.annual else {}
@@ -272,17 +342,6 @@ def render_discovery(
                 warnings += "; evidence: " + _research_label(review.limitations[0].code)
             if card.get("warnings"):
                 warnings += "; " + str(card["warnings"][0])
-            normalized = (
-                f"{attention.median_multiple:.1f}x / {attention.median_yield:.2%} yield"
-                if attention.median_multiple is not None
-                and attention.median_yield is not None
-                else "Unresolved"
-            )
-            latest_yield = (
-                f"; latest conditional FCF yield {attention.latest_yield:.2%}"
-                if attention.latest_yield is not None
-                else "; latest FCF yield unresolved"
-            )
             sensitivity = (
                 f"{attention.denominator_ratio:.2f}x latest/median FCF/share"
                 if attention.denominator_ratio is not None
@@ -313,6 +372,26 @@ def render_discovery(
             )
             rows.append(
                 {
+                    "Ticker": ticker,
+                    "Sector": item.company.sector or "Unknown",
+                    "Economic setup": _research_label(item.screening.setup_type.value),
+                    "Economic priority": _research_label(item.screening.bucket.value),
+                    "Gate/warning summary": (
+                        _research_label(item.screening.gate.value) + "; " + warnings
+                        if item.screening.gate else warnings
+                    ),
+                    "Coverage": _research_label(item.screening.coverage_class.value),
+                    "Median P/FCF": attention.median_multiple,
+                    "Median FCF yield": attention.median_yield,
+                    "FCF/share latest/median": attention.denominator_ratio,
+                    "Latest P/FCF": attention.latest_multiple,
+                    "Latest FCF yield": attention.latest_yield,
+                    "Revenue growth": revenue_growth,
+                    "FCF/share growth": growth,
+                    "Valuation/evidence status": (
+                        "Conditional attention; not verified"
+                        if attention.ordering_eligible else attention.reason
+                    ),
                     "Company": f"{ticker} | {item.company.company_name}",
                     "Why surfaced": (
                         _research_label(item.screening.gate.value)
@@ -333,65 +412,34 @@ def render_discovery(
                             "latest_price_to_fcf": attention.latest_multiple,
                             "median_price_to_fcf": attention.median_multiple,
                         }
-                    )
-                    + latest_yield,
-                    "Conditional median P/FCF / yield": normalized,
-                    "Denominator sensitivity": sensitivity,
+                    ),
                     "Next research question": question,
                 }
             )
         st.dataframe(
-            frame(rows),
+            _discovery_frame(rows[:DISPLAY_LIMIT], gated=gated_lane),
             hide_index=True,
             width="stretch",
-            column_config={
-                "Financial warnings": st.column_config.TextColumn(
-                    help="Warnings and gates are separate from evidence limitations; no gate is not safety."
-                ),
-                "Price/valuation evidence": st.column_config.TextColumn(
-                    help="Latest persisted date per company. Conditional ratios are NOT_VERIFIED, never an attractiveness verdict."
-                ),
-                "Conditional median P/FCF / yield": st.column_config.TextColumn(
-                    help="Saved price divided by median canonical FCF/share; yield is its reciprocal. Ordering requires three consecutive positive annual references."
-                ),
-                "Denominator sensitivity": st.column_config.TextColumn(
-                    help="Latest positive FCF/share divided by its three-year median. A historical reference, not a forecast of sustainable cash flow."
-                ),
-            },
+            column_config=_discovery_columns(),
         )
         if len(selections) > DISPLAY_LIMIT:
             with st.expander(f"All {len(selections)} eligible in {title.lower()}"):
                 st.dataframe(
-                    frame(
-                        [
-                            {
-                                "Company": item.company.ticker,
-                                "Existing priority": _research_label(
-                                    item.screening.bucket.value
-                                ),
-                                "Existing gate": _research_label(
-                                    item.screening.gate.value
-                                )
-                                if item.screening.gate
-                                else "None (not safety)",
-                                "Valuation ordering": valuation_attention(
-                                    item,
-                                    cards.get(
-                                        item.company.ticker, {"error": "No worksheet"}
-                                    ),
-                                    by_ticker.get(item.company.ticker),
-                                    market_date,
-                                ).reason,
-                            }
-                            for item in selections
-                        ]
-                    ),
+                    _discovery_frame(rows, gated=gated_lane),
                     hide_index=True,
                     width="stretch",
+                    column_config=_discovery_columns(),
                 )
                 choices.extend(
                     item.company.ticker for item in selections[DISPLAY_LIMIT:]
                 )
+        with st.expander(f"Economics, valuation and screening details: {title.lower()}"):
+            st.dataframe(
+                _discovery_frame(rows, details=True),
+                hide_index=True,
+                width="stretch",
+                column_config=_discovery_columns(),
+            )
     if choices:
         ticker = st.selectbox(
             "Shortlisted company to investigate", choices, key="discovery_ticker"
@@ -489,8 +537,9 @@ def render_improving_economics_review(
             "Latest FCF (USD M)": st.column_config.NumberColumn(
                 "Latest FCF (USD M)", format="$%.1f", width="small"
             ),
-            "Diluted-share CAGR": st.column_config.TextColumn(
-                "Diluted-share CAGR", width="medium"
+            "Diluted-share CAGR": st.column_config.NumberColumn(
+                format="percent", width="small", step=0.0001,
+                help="Annualized diluted-share growth across the five-year history; 0.12 means 12%.",
             ),
             "Survival gate": st.column_config.TextColumn(
                 "Survival gate", width="medium"
@@ -554,14 +603,14 @@ def _improving_economics_table(
                     if latest.free_cash_flow is not None
                     else None
                 ),
-                "Diluted-share CAGR": (
-                    f"FY{first.fiscal_year}–FY{latest.fiscal_year} "
-                    f"{format_ratio(share_cagr, signed=True)}"
-                ),
+                "Diluted-share CAGR": share_cagr,
                 "Survival gate": result.gate.value if result.gate else "None",
             }
         )
-    return frame(rows)
+    table = frame(rows)
+    if not table.empty:
+        table["Diluted-share CAGR"] = table["Diluted-share CAGR"].astype("Float64")
+    return table
 
 
 def _format_dollar_per_share(value: float | None) -> str:

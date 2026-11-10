@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 from _fixtures import FakeSecClient
 
@@ -285,7 +286,8 @@ def test_review_lane_table_uses_compact_financial_summaries(
     assert row["Ticker / company"] == f"{result.ticker} — {company.company_name}"
     assert row["FCF/share"] == "FY2023 $3.00 → FY2025 $5.00"
     assert row["Latest FCF (USD M)"] == pytest.approx(0.000005)
-    assert row["Diluted-share CAGR"] == "FY2021–FY2025 +23.6%"
+    assert row["Diluted-share CAGR"] == pytest.approx((194 / 83) ** (1 / 4) - 1)
+    assert pd.api.types.is_numeric_dtype(table["Diluted-share CAGR"])
     assert row["Survival gate"] == reason.value
 
     markdown: list[str] = []
