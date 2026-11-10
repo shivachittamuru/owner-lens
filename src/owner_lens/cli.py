@@ -84,6 +84,12 @@ from owner_lens.position_sizing import (
     format_sizing,
     size_position,
 )
+from owner_lens.research_handoff import (
+    export_research_package,
+    load_document,
+    research_error,
+    review_research_response,
+)
 from owner_lens.screening import (
     format_screening_detail,
     format_screening_table,
@@ -131,6 +137,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     bridge = sub.add_parser("owner-earnings-bridge", help="Validate a research sidecar offline; no writes.")
     bridge.add_argument("--file", required=True, type=Path, help="Explicit Bridge v1 JSON path.")
+
+    research_export = sub.add_parser(
+        "research-export", help="Export a local Bridge v1 for manual ChatGPT research; no writes."
+    )
+    research_export.add_argument("--bridge", required=True, type=Path)
+    research_export.add_argument("--context-json", type=Path, help="Optional saved Copy Research Context JSON.")
+    research_review = sub.add_parser(
+        "research-review", help="Review local research JSON against a Bridge v1; no writes."
+    )
+    research_review.add_argument("--bridge", required=True, type=Path)
+    research_review.add_argument("--response", required=True, type=Path)
+    research_review.add_argument("--as-of", required=True, type=date.fromisoformat)
 
     ingest = sub.add_parser("ingest", help="Retrieve and persist one company.")
     ingest.add_argument("ticker", help="SEC-resolvable ticker symbol.")
@@ -1896,6 +1914,24 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch a subcommand; return an exit code."""
     parser = _build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.command in ("research-export", "research-review"):
+        try:
+            document = load_document(args.bridge)
+            if args.command == "research-export":
+                context = load_document(args.context_json) if args.context_json else None
+                if context is not None and not isinstance(context, dict):
+                    raise BridgeError("Research Context must be a JSON object.")
+                print(export_research_package(document, context), end="")
+                return 0
+            review = review_research_response(
+                document, load_document(args.response), as_of=args.as_of
+            )
+            print(review.to_json())
+            return 2 if review.outcome == "INVALID_RESEARCH_RESPONSE" else 0
+        except BridgeError as exc:
+            # Do not echo arbitrary input JSON or local paths into a shareable package.
+            print(f"Invalid research input:\n{research_error(exc)}", file=sys.stderr)
+            return 2
     if args.command == "owner-earnings-bridge":
         try:
             print(load_bridge(args.file).to_json())

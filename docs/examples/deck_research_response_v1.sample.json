@@ -1,0 +1,49 @@
+{
+  "response_version": "research-response/1",
+  "bridge_version": "owner-earnings-bridge/1",
+  "bridge_sha256": "61f34e0b721973f1fcdcd26a125b9b77b9005f4155279d55ed273ad5cf71c0bd",
+  "identity": {"store_namespace": "local-main-evidence", "security_id": 50, "ticker": "DECK"},
+  "research_as_of": "2026-11-10",
+  "sources": [
+    {"source_id": "income-fy2026", "title": "Persisted FMP DECK annual income statement", "url": null, "publication_date": "2026-05-22", "observed_at": "2026-10-31T08:29:57.215743+00:00", "verification_status": "BRIDGE_REFERENCE"},
+    {"source_id": "cash-fy2026", "title": "Persisted FMP DECK annual cash-flow statement", "url": null, "publication_date": "2026-05-22", "observed_at": "2026-10-31T08:29:57.495460+00:00", "verification_status": "BRIDGE_REFERENCE"},
+    {"source_id": "balance-fy2026", "title": "Persisted FMP DECK annual balance sheet", "url": null, "publication_date": "2026-05-22", "observed_at": "2026-10-31T08:29:57.353079+00:00", "verification_status": "BRIDGE_REFERENCE"},
+    {"source_id": "price-2026-10-30", "title": "Persisted FMP DECK dated closing price", "url": null, "publication_date": null, "observed_at": "2026-10-31T08:29:58.011503+00:00", "verification_status": "BRIDGE_REFERENCE"}
+  ],
+  "canonical_observation_ids": ["revenue-26", "ocf-26", "capex-26", "fcf-26", "shares-26", "fps-26", "cash-26", "sti-26", "current-debt-26", "long-debt-26", "debt-26", "net-cash-26", "roic-26"],
+  "claims": [
+    {"claim_id": "cash-baseline-citation", "topic": "CASH_FLOW_SUSTAINABILITY", "category": "CALCULATION", "text": "Canonical calculation, not normalized earnings.", "source_ids": ["cash-fy2026"], "observation_ids": ["fcf-26"], "supporting_ids": ["fcf-26"], "disconfirming_ids": [], "material": false, "unresolved": false, "observation_date": "2026-10-31"},
+    {"claim_id": "business-question", "topic": "BUSINESS_MODEL", "category": "JUDGMENT", "text": "Identify business model, customer demand drivers and cash conversion; this compact financial excerpt establishes no business-model conclusion.", "source_ids": [], "observation_ids": [], "supporting_ids": [], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": null},
+    {"claim_id": "driver-question", "topic": "ECONOMIC_DRIVERS", "category": "JUDGMENT", "text": "Test what drives revenue and margins over multiple periods; a single year cannot establish a recurring growth rate.", "source_ids": ["income-fy2026"], "observation_ids": ["revenue-26"], "supporting_ids": ["revenue-26"], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": "2026-10-31"},
+    {"claim_id": "brand-question", "topic": "COMPETITIVE_ADVANTAGE", "category": "JUDGMENT", "text": "Brand durability remains a question. No customer, pricing-power or competitive evidence is supplied.", "source_ids": [], "observation_ids": [], "supporting_ids": [], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": null},
+    {"claim_id": "deterioration-question", "topic": "TEMPORARY_VS_STRUCTURAL", "category": "JUDGMENT", "text": "Distinguish temporary cash timing from structural demand or reinvestment pressure using sourced multi-period evidence.", "source_ids": ["cash-fy2026"], "observation_ids": ["ocf-26"], "supporting_ids": ["ocf-26"], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": "2026-10-31"},
+    {"claim_id": "reinvestment-question", "topic": "REINVESTMENT", "category": "JUDGMENT", "text": "Canonical PP&E CapEx is not an evidenced maintenance/growth allocation. Do not add it all back.", "source_ids": ["cash-fy2026"], "observation_ids": ["capex-26"], "supporting_ids": ["capex-26"], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": "2026-10-31"},
+    {"claim_id": "resilience-question", "topic": "RESILIENCE_IMPAIRMENT", "category": "JUDGMENT", "text": "Reconcile debt-definition composition, lease obligations and impairment paths. No active gate is not proof of safety.", "source_ids": ["balance-fy2026"], "observation_ids": ["cash-26", "debt-26"], "supporting_ids": ["cash-26"], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": "2026-10-31"},
+    {"claim_id": "market-gap", "topic": "EXPECTATIONS_VS_ASSUMPTIONS", "category": "JUDGMENT", "text": "No comparable analyst estimates or proposed investor forecast in the bridge. Do not infer market expectations from the dated quote.", "source_ids": [], "observation_ids": [], "supporting_ids": [], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": null},
+    {"claim_id": "alternatives-question", "topic": "COMPETING_EXPLANATIONS", "category": "JUDGMENT", "text": "Recurring economic strength and temporary cash-conversion timing are competing hypotheses, not established findings. Collect disconfirming sources.", "source_ids": ["cash-fy2026"], "observation_ids": ["fcf-26"], "supporting_ids": ["fcf-26"], "disconfirming_ids": [], "material": true, "unresolved": true, "observation_date": "2026-10-31"}
+  ],
+  "adjustment_proposals": [
+    {"adjustment_id": "working-capital", "category": "JUDGMENT", "effect": null, "approval": "UNREVIEWED", "source_ids": ["cash-fy2026"], "input_ids": ["ocf-26"], "rationale": "No recurring working-capital baseline established.", "evidence_needed": ["Multi-period cash-conversion evidence and recurring working-capital needs."]},
+    {"adjustment_id": "maintenance-growth", "category": "JUDGMENT", "effect": null, "approval": "UNREVIEWED", "source_ids": ["cash-fy2026"], "input_ids": ["capex-26"], "rationale": "No sourced maintenance/growth spending split.", "evidence_needed": ["Sustaining reinvestment requirements and sourced management disclosures."]},
+    {"adjustment_id": "sbc-dilution", "category": "JUDGMENT", "effect": null, "approval": "UNREVIEWED", "source_ids": ["income-fy2026", "cash-fy2026"], "input_ids": ["shares-26"], "rationale": "Choose an economic treatment without double counting dilution and a cash haircut.", "evidence_needed": ["Compensation, share issuance and repurchase evidence plus investor policy."]}
+  ],
+  "preserved_gate": null,
+  "unresolved_adjustment_ids": ["working-capital", "maintenance-growth", "sbc-dilution"],
+  "preserved_limitation_codes": ["BOUNDED_EXCERPT", "DEBT_DEFINITION_DIFFERENCE", "NOT_POINT_IN_TIME_CERTIFIED", "PRICE_COMPARABILITY_NOT_VERIFIED", "QUALITATIVE_RESEARCH_REQUIRED"],
+  "market_expectations": {"status": "UNSUPPORTED", "source_ids": [], "claim_ids": [], "limitations": ["No comparable market expectations in the committed excerpt."]},
+  "scenario_proposals": [
+    {"driver": "revenue_cagr", "category": "ASSUMPTION", "range": null, "approval": "UNREVIEWED", "source_ids": ["income-fy2026"], "claim_ids": ["driver-question"], "adjustment_dependencies": [], "rationale": "One reported year cannot support a forward revenue-growth range.", "risks": ["Brand and demand durability unresolved."]},
+    {"driver": "fcf_margin_year5", "category": "ASSUMPTION", "range": null, "approval": "UNREVIEWED", "source_ids": ["cash-fy2026", "income-fy2026"], "claim_ids": ["cash-baseline-citation", "reinvestment-question"], "adjustment_dependencies": ["working-capital", "maintenance-growth", "sbc-dilution"], "rationale": "Reported cash generation informs questions, not a sustainable year-five margin.", "risks": ["Working capital, reinvestment and compensation policy unresolved."]},
+    {"driver": "share_count_cagr", "category": "ASSUMPTION", "range": null, "approval": "UNREVIEWED", "source_ids": ["income-fy2026"], "claim_ids": ["driver-question"], "adjustment_dependencies": ["sbc-dilution"], "rationale": "Annual weighted-average shares are not a forecast issuance/repurchase policy.", "risks": ["Do not double count an SBC adjustment and matching dilution."]},
+    {"driver": "terminal_fcf_multiple", "category": "ASSUMPTION", "range": null, "approval": "UNREVIEWED", "source_ids": [], "claim_ids": ["market-gap", "brand-question"], "adjustment_dependencies": [], "rationale": "No supported terminal multiple or comparable expectations supplied.", "risks": ["Quote currency and share basis unverified."]}
+  ],
+  "thesis": {
+    "dependencies": ["Demonstrate recurring cash conversion and reinvestment needs before choosing margin assumptions."],
+    "breakers": ["Evidence of structural demand impairment or rising sustaining capital requirements would challenge optimistic cash-flow beliefs."],
+    "alternative_explanations": ["Reported FCF could reflect sustainable economics or temporary cash timing; neither is established by this excerpt."],
+    "variant_perception": "No demonstrated edge without comparable market expectations and business research.",
+    "invalidation": "Disconfirming cash-conversion, competitive or financing evidence must revise the thesis before investor approval."
+  },
+  "evidence_gaps": ["Illustrative manual response assembled only from the committed bridge, not newly verified external research.", "Collect independent supporting and disconfirming sources before advancing."],
+  "research_decision": "INSUFFICIENT_EVIDENCE"
+}

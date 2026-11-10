@@ -5,6 +5,10 @@ description: Read-only structural validation and Decimal historical owner-earnin
 
 ## Scope and usage
 
+The additive [manual research handoff](feature_m2a4_3_research_handoff.md)
+exports validated bridge evidence for ChatGPT and checks unapproved research
+responses without importing them into Feature 8.
+
 The validator consumes the existing
 [Bridge v1 schema](../examples/owner_earnings_bridge_v1.schema.json) without
 changing it or Feature 8 Authoring v2. It reads one explicit JSON file, emits

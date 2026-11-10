@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ownerlens.local/research-response/1",
+  "title": "Manual research response, not an Authoring v2 payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["response_version", "bridge_version", "bridge_sha256", "identity", "research_as_of", "sources", "canonical_observation_ids", "claims", "adjustment_proposals", "preserved_gate", "unresolved_adjustment_ids", "preserved_limitation_codes", "market_expectations", "scenario_proposals", "thesis", "evidence_gaps", "research_decision"],
+  "properties": {
+    "response_version": {"const": "research-response/1"},
+    "bridge_version": {"const": "owner-earnings-bridge/1"},
+    "bridge_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["store_namespace", "security_id", "ticker"],
+      "properties": {
+        "store_namespace": {"$ref": "#/$defs/text"},
+        "security_id": {"type": ["integer", "null"], "minimum": 1},
+        "ticker": {"$ref": "#/$defs/text"}
+      }
+    },
+    "research_as_of": {"type": "string", "format": "date"},
+    "sources": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["source_id", "title", "url", "publication_date", "observed_at", "verification_status"],
+        "properties": {
+          "source_id": {"$ref": "#/$defs/text"},
+          "title": {"$ref": "#/$defs/text"},
+          "url": {"type": ["string", "null"], "format": "uri"},
+          "publication_date": {"type": ["string", "null"], "format": "date"},
+          "observed_at": {"type": ["string", "null"], "format": "date-time"},
+          "verification_status": {"enum": ["BRIDGE_REFERENCE", "UNVERIFIED_EXTERNAL"]}
+        }
+      }
+    },
+    "canonical_observation_ids": {"$ref": "#/$defs/ids"},
+    "claims": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["claim_id", "topic", "category", "text", "source_ids", "observation_ids", "supporting_ids", "disconfirming_ids", "material", "unresolved", "observation_date"],
+        "properties": {
+          "claim_id": {"$ref": "#/$defs/text"},
+          "topic": {"enum": ["BUSINESS_MODEL", "ECONOMIC_DRIVERS", "COMPETITIVE_ADVANTAGE", "TEMPORARY_VS_STRUCTURAL", "REINVESTMENT", "CASH_FLOW_SUSTAINABILITY", "RESILIENCE_IMPAIRMENT", "EXPECTATIONS_VS_ASSUMPTIONS", "COMPETING_EXPLANATIONS"]},
+          "category": {"enum": ["FACT", "CALCULATION", "EXPECTATION", "ASSUMPTION", "JUDGMENT"]},
+          "text": {"$ref": "#/$defs/text"},
+          "source_ids": {"$ref": "#/$defs/ids"},
+          "observation_ids": {"$ref": "#/$defs/ids"},
+          "supporting_ids": {"$ref": "#/$defs/ids"},
+          "disconfirming_ids": {"$ref": "#/$defs/ids"},
+          "material": {"type": "boolean"},
+          "unresolved": {"type": "boolean"},
+          "observation_date": {"type": ["string", "null"], "format": "date"}
+        }
+      }
+    },
+    "adjustment_proposals": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["adjustment_id", "category", "effect", "approval", "source_ids", "input_ids", "rationale", "evidence_needed"],
+        "properties": {
+          "adjustment_id": {"$ref": "#/$defs/text"},
+          "category": {"enum": ["CALCULATION", "ASSUMPTION", "JUDGMENT"]},
+          "effect": {"$ref": "#/$defs/optional_range"},
+          "approval": {"const": "UNREVIEWED"},
+          "source_ids": {"$ref": "#/$defs/ids"},
+          "input_ids": {"$ref": "#/$defs/ids"},
+          "rationale": {"$ref": "#/$defs/text"},
+          "evidence_needed": {"$ref": "#/$defs/texts"}
+        }
+      }
+    },
+    "preserved_gate": {"type": ["string", "null"]},
+    "unresolved_adjustment_ids": {"$ref": "#/$defs/ids"},
+    "preserved_limitation_codes": {"$ref": "#/$defs/ids"},
+    "market_expectations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "source_ids", "claim_ids", "limitations"],
+      "properties": {
+        "status": {"enum": ["SUPPORTED", "UNSUPPORTED"]},
+        "source_ids": {"$ref": "#/$defs/ids"},
+        "claim_ids": {"$ref": "#/$defs/ids"},
+        "limitations": {"$ref": "#/$defs/texts"}
+      }
+    },
+    "scenario_proposals": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["driver", "category", "range", "approval", "source_ids", "claim_ids", "adjustment_dependencies", "rationale", "risks"],
+        "properties": {
+          "driver": {"enum": ["revenue_cagr", "fcf_margin_year5", "share_count_cagr", "terminal_fcf_multiple"]},
+          "category": {"const": "ASSUMPTION"},
+          "range": {"$ref": "#/$defs/optional_range"},
+          "approval": {"const": "UNREVIEWED"},
+          "source_ids": {"$ref": "#/$defs/ids"},
+          "claim_ids": {"$ref": "#/$defs/ids"},
+          "adjustment_dependencies": {"$ref": "#/$defs/ids"},
+          "rationale": {"$ref": "#/$defs/text"},
+          "risks": {"$ref": "#/$defs/texts"}
+        }
+      }
+    },
+    "thesis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dependencies", "breakers", "alternative_explanations", "variant_perception", "invalidation"],
+      "properties": {
+        "dependencies": {"$ref": "#/$defs/texts"},
+        "breakers": {"$ref": "#/$defs/texts"},
+        "alternative_explanations": {"$ref": "#/$defs/texts"},
+        "variant_perception": {"$ref": "#/$defs/text"},
+        "invalidation": {"$ref": "#/$defs/text"}
+      }
+    },
+    "evidence_gaps": {"$ref": "#/$defs/texts"},
+    "research_decision": {"enum": ["ADVANCE_TO_UNDERWRITING", "WATCHLIST", "POTENTIAL_TRAP", "INSUFFICIENT_EVIDENCE"]}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "texts": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+    "ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+    "decimal": {"type": "string", "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$", "maxLength": 128},
+    "optional_range": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["lower", "upper", "unit"],
+          "properties": {
+            "lower": {"$ref": "#/$defs/decimal"},
+            "upper": {"$ref": "#/$defs/decimal"},
+            "unit": {"enum": ["USD", "ratio", "multiple"]}
+          }
+        }
+      ]
+    }
+  }
+}
