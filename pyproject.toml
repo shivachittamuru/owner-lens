@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
+    "jsonschema>=4.23",
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
 ]
@@ -26,6 +27,7 @@ dev = [
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.4",
+    "types-jsonschema>=4.23",
 ]
 # The local research workbench (Feature 7D). Kept out of the runtime
 # dependencies so importing owner_lens never pulls in a UI stack, and installed
@@ -36,6 +38,9 @@ workbench = [
 
 [tool.uv]
 default-groups = ["dev", "workbench"]
+
+[tool.uv.build-backend.data]
+data = "docs"
 
 [[tool.uv.index]]
 url = "https://packagefeedproxy.microsoft.io/pypi/simple"

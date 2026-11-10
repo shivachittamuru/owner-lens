@@ -70,6 +70,7 @@ from owner_lens.opportunity_comparison import (
     compare_underwritings,
     format_comparison,
 )
+from owner_lens.owner_earnings_bridge import BridgeError, load_bridge
 from owner_lens.persistence import (
     FilesystemRawSnapshotStore,
     OwnerLensStore,
@@ -127,6 +128,9 @@ _MISSING_USER_AGENT = (
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="owner-lens")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    bridge = sub.add_parser("owner-earnings-bridge", help="Validate a research sidecar offline; no writes.")
+    bridge.add_argument("--file", required=True, type=Path, help="Explicit Bridge v1 JSON path.")
 
     ingest = sub.add_parser("ingest", help="Retrieve and persist one company.")
     ingest.add_argument("ticker", help="SEC-resolvable ticker symbol.")
@@ -1892,6 +1896,13 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch a subcommand; return an exit code."""
     parser = _build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.command == "owner-earnings-bridge":
+        try:
+            print(load_bridge(args.file).to_json())
+        except BridgeError as exc:
+            print(f"Invalid Owner Earnings Bridge:\n{exc}", file=sys.stderr)
+            return 2
+        return 0
     if args.command == "ingest":
         return _cmd_ingest(args)
     if args.command == "refresh-sp500":

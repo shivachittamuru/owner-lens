@@ -5,6 +5,10 @@ description: Proposed v1 research sidecar, evidence bridge and unchanged Authori
 
 ## Status and scope
 
+The additive [M2-A4.2 validator](feature_m2a4_2_owner_earnings_validator.md)
+now implements structural and bounded historical arithmetic checks. The
+M2-A4.1 design and wire schema below remain unchanged.
+
 M2-A4.1 is a contract design, not an earnings-normalization engine.
 The [JSON Schema](../examples/owner_earnings_bridge_v1.schema.json) defines the
 serializable types. The [DECK sample](../examples/deck_owner_earnings_bridge_v1.sample.json)
