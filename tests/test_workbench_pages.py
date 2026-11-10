@@ -167,6 +167,13 @@ def test_the_compare_page_requires_at_least_two_companies(store_path: Path) -> N
     assert any("at least 2" in info.value for info in app.info)
 
 
+def test_compare_defaults_to_first_two_companies(store_path: Path) -> None:
+    app = _run("Compare")
+    _assert_clean(app, "Compare")
+    assert app.multiselect(key="compare_tickers").value == ["ADBE", "COST"]
+    assert app.dataframe
+
+
 def test_the_compare_page_renders_a_table_for_two_companies(store_path: Path) -> None:
     app = _run("Compare", compare_tickers=["ADBE", "V"])
     _assert_clean(app, "Compare")

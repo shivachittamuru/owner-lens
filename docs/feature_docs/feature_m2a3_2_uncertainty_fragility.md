@@ -339,6 +339,71 @@ Without those two test variables, fixture-based tests still run; the single
 local-evidence test skips. The M2-A4 integration checkpoint passed 1,952 tests.
 This presentation-only slice does not require another full-suite run.
 
+## M2-A5.2 discovery selection and comparison
+
+The discovery queue offers a multiselect for two to five companies from any
+lane. It displays ticker, company name and stable security ID. Remove names
+individually or use Clear comparison selection. The separate selection survives
+table sorting, expanders, reruns and navigation back to Screener. It is bound
+to the current store and provider; clear it before switching contexts.
+Securities without stable IDs or with conflicting identities cannot be used.
+The handoff rejects duplicate or ambiguous tickers because the existing
+comparison services identify their inputs by ticker.
+
+Compare selected opens Opportunity Comparison only when every selected
+security has an identity-matched, fully analyzed eligible underwriting.
+Its existing latest-eligible version, frozen prices and scenario calculations
+remain unchanged. Otherwise, all selected securities go to the existing
+Compare view and the missing eligible underwritings are named. No selected
+security is silently substituted. If evidence becomes unavailable, comparison
+stops explicitly rather than dropping a selection.
+
+Both views show a separate snapshot of the discovery evidence captured at
+selection: current gate and financial warnings, evidence limitations,
+conditional saved-price comparisons, median FCF yield, denominator sensitivity
+and ordering status. Expand the source section for fiscal periods, quote
+dates, currency/share-basis status, source IDs and complete review details.
+This snapshot is not the frozen underwriting. Periods and price dates can
+differ, generic FCF is inappropriate for some financial business models, and
+missing or unsupported valuation evidence remains N/A. No comparison adds a
+score, formula, recommendation or underwriting approval.
+
+To try the workflow using the existing pilot:
+
+```powershell
+$pilotRoot = (Resolve-Path -LiteralPath "data\historical-price-pilot-f8a480903eb34e4cb6f74371ed9c8565").Path
+$pilotDb = Join-Path $pilotRoot "ownerlens.db"
+$env:OWNER_LENS_RAW_DATA_PATH = Join-Path $pilotRoot "raw"
+uv run --no-sync owner-lens workbench --db "$pilotDb" --provider fmp
+```
+
+In Screener, enable Show Uncertainty & Fragility review:
+
+1. Select DECK, ADBE and CMG in Companies to compare. Sort the median P/FCF
+   header in either direction and verify the selection remains unchanged.
+2. Select Compare selected. Confirm all three are present and read the route
+   explanation. Inspect discovery evidence and its source details.
+3. Return to Screener and confirm the three security IDs remain selected.
+   Clear them, select NVDA and MU, and compare denominator sensitivity.
+4. Return to Screener and add ORCL. Compare again and confirm its cash-burn
+   gate remains visible. Add JPM when present in the gate lane; its generic
+   valuation is not assessed.
+5. Add ADSK and confirm its unsupported median remains N/A. Compare dates and
+   limitations before treating any conditional ratios as comparable.
+
+Run focused tests against fixture data and the optional persisted pilot:
+
+```powershell
+$pilotRoot = (Resolve-Path -LiteralPath "data\historical-price-pilot-f8a480903eb34e4cb6f74371ed9c8565").Path
+$env:OWNER_LENS_DISCOVERY_TEST_DB = Join-Path $pilotRoot "ownerlens.db"
+$env:OWNER_LENS_DISCOVERY_TEST_RAW = Join-Path $pilotRoot "raw"
+uv run --no-sync pytest -q tests\test_discovery.py tests\test_workbench_frames.py tests\test_workbench.py tests\test_workbench_pages.py tests\test_opportunity_comparison.py
+uv run --no-sync ruff check src tests
+uv run --no-sync mypy src
+git diff --check
+Remove-Item Env:\OWNER_LENS_DISCOVERY_TEST_DB, Env:\OWNER_LENS_DISCOVERY_TEST_RAW
+```
+
 ## Earlier evidence-service validation commands
 
 ```powershell

@@ -7,6 +7,7 @@ from typing import Any
 
 import streamlit as st
 
+from owner_lens.candidate_review import CandidateSelection
 from owner_lens.compounding import cagr
 from owner_lens.screening import (
     BUCKET_ORDER,
@@ -228,11 +229,110 @@ def _research_label(code: str) -> str:
     }.get(code, code.replace("_", " ").capitalize())
 
 
+def _selection_changed() -> None:
+    st.session_state["discovery_selection_ids"] = list(
+        st.session_state["discovery_selection_widget"]
+    )
+    if not st.session_state["discovery_selection_ids"]:
+        st.session_state.pop("discovery_selection_context", None)
+
+
+def _clear_discovery_selection() -> None:
+    st.session_state["discovery_selection_ids"] = []
+    st.session_state["discovery_selection_widget"] = []
+    st.session_state.pop("discovery_selection_context", None)
+    st.session_state.pop("discovery_selection_labels", None)
+
+
+def _comparison_selector(
+    lanes: DiscoveryLanes,
+    cards: dict[str, dict[str, Any]],
+    reviews: dict[str, UncertaintyFragilityReview],
+    market_date: str | None,
+    context: tuple[str, str],
+) -> None:
+    items = (*lanes.compounders, *lanes.improving, *lanes.fragility)
+    by_id: dict[int, CandidateSelection] = {}
+    ambiguous: set[int] = set()
+    for item in items:
+        identity = item.company.security_id
+        if identity is None:
+            continue
+        if identity in by_id and by_id[identity].company != item.company:
+            ambiguous.add(identity)
+        else:
+            by_id[identity] = item
+    for identity in ambiguous:
+        del by_id[identity]
+    saved = list(st.session_state.get("discovery_selection_ids", []))
+    labels = dict(st.session_state.get("discovery_selection_labels", {}))
+    selected_context = st.session_state.get("discovery_selection_context")
+    current_labels = {
+        identity: f"{item.company.ticker} - {item.company.company_name} (ID {identity})"
+        for identity, item in by_id.items()
+    }
+    labels.update({
+        identity: label for identity, label in current_labels.items()
+        if selected_context in (None, context) or identity not in saved
+    })
+    for identity in saved:
+        labels.setdefault(identity, f"Unavailable security ID {identity}")
+    st.session_state["discovery_selection_labels"] = labels
+    if "discovery_selection_widget" not in st.session_state:
+        st.session_state["discovery_selection_widget"] = saved
+    options = list(dict.fromkeys((*by_id, *saved)))
+    st.multiselect(
+        "Companies to compare (2-5)",
+        options,
+        format_func=labels.__getitem__,
+        max_selections=5,
+        key="discovery_selection_widget",
+        on_change=_selection_changed,
+        help="Select from any discovery lane. Selection is research only, not a recommendation.",
+    )
+    saved = list(st.session_state.get("discovery_selection_ids", []))
+    if saved and selected_context is None:
+        st.session_state["discovery_selection_context"] = context
+        selected_context = context
+    if ambiguous:
+        st.warning("Ambiguous security IDs are unavailable for comparison; no company was substituted.")
+    if any(item.company.security_id is None for item in items):
+        st.caption("Companies without a stable security ID cannot be selected.")
+    if saved and selected_context != context:
+        st.warning("This selection belongs to a different store or provider. Clear it before selecting here.")
+    missing = [identity for identity in saved if identity not in by_id]
+    if missing:
+        st.warning("A selected security is no longer in these discovery lanes. Remove it or clear the selection.")
+    left, right = st.columns(2)
+    left.button(
+        "Clear comparison selection", key="discovery_clear",
+        on_click=_clear_discovery_selection,
+    )
+    if right.button(
+        "Compare selected",
+        disabled=not (2 <= len(saved) <= 5) or bool(missing) or selected_context != context,
+        key="discovery_compare",
+    ):
+        chosen = [by_id[identity] for identity in saved]
+        st.session_state["discovery_comparison_pending"] = {
+            "context": context,
+            "items": chosen,
+            "reviews": {item.company.ticker: reviews[item.company.ticker] for item in chosen},
+            "cards": {item.company.ticker: cards.get(item.company.ticker, {
+                "error": "Valuation not assessed in the financial-gate lane."
+            }) for item in chosen},
+            "market_date": market_date,
+        }
+        st.rerun()
+
+
 def render_discovery(
     lanes: DiscoveryLanes,
     cards: dict[str, dict[str, Any]],
     reviews: tuple[UncertaintyFragilityReview, ...],
     results: tuple[ScreeningResult, ...],
+    *,
+    selection_context: tuple[str, str] = ("", "fmp"),
 ) -> None:
     st.subheader("Discovery research queue")
     market_date = attention_date(cards)
@@ -264,6 +364,7 @@ def render_discovery(
             "Conditional currency/share-basis status is never upgraded to verified undervaluation."
         )
     by_ticker = {review.ticker: review for review in reviews}
+    _comparison_selector(lanes, cards, by_ticker, market_date, selection_context)
     choices: list[str] = []
     for title, selections in (
         (

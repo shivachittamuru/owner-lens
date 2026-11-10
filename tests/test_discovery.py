@@ -50,8 +50,10 @@ def sample_lanes(source):
         },
     )
     companies = tuple(
-        replace(company, ticker=t)
-        for t in ("FIRST", "SECOND", "IMPROVING", "GATED", "LIMITED")
+        replace(company, ticker=t, security_id=index)
+        for index, t in enumerate(
+            ("FIRST", "SECOND", "IMPROVING", "GATED", "LIMITED"), start=1
+        )
     )
     results = (
         replace(strong, ticker="FIRST"),
@@ -358,7 +360,7 @@ def test_discovery_overview_lists_multiple_companies_and_inspects(
     )
     app.session_state["page"] = "Screener"
     app.run()
-    assert not app.exception and not app.error
+    assert not app.exception and not app.error, [item.value for item in app.error]
     assert any("Discovery research queue" in h.value for h in app.subheader)
     tables = [
         d.value for d in app.dataframe
@@ -376,6 +378,155 @@ def test_discovery_overview_lists_multiple_companies_and_inspects(
     app.button(key="discovery_inspect").click().run()
     assert not app.exception
     assert app.selectbox(key="uf_ticker").value == "IMPROVING"
+    monkeypatch.undo()
+    cache.clear_caches()
+
+
+@pytest.mark.parametrize("eligible", [False, True])
+def test_discovery_selection_routes_all_to_compare_and_survives_navigation(
+    source: WorkbenchSource, monkeypatch, eligible: bool,
+):
+    from contextlib import contextmanager
+
+    from owner_lens.persistence import SqliteStore
+    from owner_lens.workbench import cache, data
+    from owner_lens.workbench.data import build_comparison
+
+    cache.clear_caches()
+    company = load_persisted_companies(source, "fmp")[0]
+    detail = company_detail(source, company)
+    review = load_uncertainty_fragility(source, company, detail.screening)
+    companies, results, owners = sample_lanes(source)
+    if eligible:
+        from test_opportunity_comparison import persist, snapshot
+
+        from owner_lens.challenger import run_challenger
+
+        for ticker in ("FIRST", "SECOND"):
+            persist(source.store, ticker, snapshot())
+            run_challenger(source.store, source.store.list_underwriting(ticker)[0])
+        ids = {security.symbol: security.security_id for security in source.store.list_securities()}
+        companies = tuple(
+            replace(c, security_id=ids.get(c.ticker, c.security_id + 100))
+            for c in companies
+        )
+    lanes = discovery_lanes(companies, results, owners)
+    _, attention_reviews, card = attention_fixture(source)
+    cards = {"FIRST": deepcopy(card), "SECOND": deepcopy(card)}
+    reviews = tuple(
+        attention_reviews.get(r.ticker) or replace(
+            review, ticker=r.ticker, existing_gate=r.gate.value if r.gate else None
+        )
+        for r in results
+    )
+    expected = build_comparison(
+        replace(detail, company=company, screening=result)
+        for company, result in zip(companies, results, strict=True)
+        if company.ticker in {"FIRST", "SECOND", "GATED"}
+    )
+    @contextmanager
+    def read_only_source():
+        store = SqliteStore(Path(source.db_path), raw_store=source.raw_store, read_only=True)
+        try:
+            yield WorkbenchSource(store, source.raw_store, source.db_path, source.raw_data_path)
+        finally:
+            store.close()
+
+    monkeypatch.setattr(cache, "open_run_source", read_only_source)
+    monkeypatch.setattr(data, "load_persisted_companies", lambda *a: companies)
+    monkeypatch.setattr(cache, "discovery_overview", lambda *a: (lanes, cards))
+    monkeypatch.setattr(cache, "uncertainty_fragility_reviews", lambda *a: reviews)
+    monkeypatch.setattr(cache, "cached_screening", lambda *a, **k: results)
+    monkeypatch.setattr(cache, "cached_comparison", lambda *a, **k: expected)
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline"))
+    monkeypatch.setattr(httpx.AsyncClient, "send", lambda *a, **k: pytest.fail("offline"))
+    monkeypatch.setenv("OWNER_LENS_WORKBENCH_PROVIDER", "fmp")
+    app = AppTest.from_file(
+        str(Path(__file__).parents[1] / "src" / "owner_lens" / "workbench" / "app.py"),
+        default_timeout=120,
+    )
+    app.session_state["page"] = "Screener"
+    before = source.store._conn.total_changes
+    app.run()
+    assert not app.exception
+    picker = app.multiselect(key="discovery_selection_widget")
+    assert picker.proto.max_selections == 5
+    picker.set_value([companies[0].security_id]).run()
+    assert app.button(key="discovery_compare").disabled
+    ids_by_ticker = {company.ticker: company.security_id for company in companies}
+    chosen_tickers = ["FIRST", "SECOND"] if eligible else ["FIRST", "SECOND", "GATED"]
+    chosen_ids = [ids_by_ticker[ticker] for ticker in chosen_tickers]
+    assert all(any(option.startswith(ticker + " - ") for option in picker.options) for ticker in chosen_tickers)
+    picker.set_value(chosen_ids).run()
+    assert app.session_state["discovery_selection_ids"] == chosen_ids
+    app.button(key="discovery_inspect").click().run()
+    assert app.multiselect(key="discovery_selection_widget").value == chosen_ids
+    app.button(key="discovery_compare").click().run()
+    assert not app.exception and not app.error, [item.value for item in app.error]
+    if eligible:
+        assert app.session_state["page"] == "Opportunity Comparison"
+        assert app.session_state["opportunity_companies"] == chosen_tickers
+        assert any("latest eligible frozen underwriting" in c.value for c in app.caption)
+        assert any("FIRST:1" in frame.value.columns and "SECOND:1" in frame.value.columns for frame in app.dataframe)
+    else:
+        assert app.session_state["page"] == "Compare"
+        assert app.session_state["compare_tickers"] == chosen_tickers
+        assert any("lack an identity-matched completed underwriting" in c.value for c in app.caption)
+    evidence = next(d.value for d in app.dataframe if "Evidence" == d.value.index.name)
+    assert set(evidence.columns) == set(chosen_tickers)
+    if not eligible:
+        assert evidence.loc["Existing gate", "GATED"] == "PERSISTENT_CASH_BURN"
+        assert "not assessed" in evidence.loc["Saved price and conditional valuation", "GATED"]
+        assert expected.value("Coverage", "FIRST").value == app.dataframe[0].value.loc["Coverage", "FIRST"]
+    if eligible:
+        from owner_lens.opportunity_catalog import discover_comparison_companies
+        from owner_lens.workbench.views import opportunity_comparison
+
+        catalog = discover_comparison_companies(source.store)
+        incomplete = replace(catalog, companies=tuple(
+            entry for entry in catalog.companies if entry.ticker != "SECOND"
+        ))
+        with monkeypatch.context() as temporary:
+            temporary.setattr(opportunity_comparison, "discover_comparison_companies", lambda _: incomplete)
+            app.run()
+            assert any("no longer eligible" in item.value for item in app.error)
+            assert app.session_state["opportunity_companies"] == chosen_tickers
+    else:
+        with monkeypatch.context() as temporary:
+            temporary.setattr(data, "load_persisted_companies", lambda *a: companies[:-2] + companies[-1:])
+            app.run()
+            assert any("unavailable or ambiguous" in item.value for item in app.error)
+            assert app.session_state["compare_tickers"] == chosen_tickers
+    app.radio(key="page").set_value("Screener").run()
+    assert not app.exception
+    assert app.multiselect(key="discovery_selection_widget").value == chosen_ids
+    pending = dict(app.session_state["discovery_comparison_evidence"])
+    duplicate = replace(
+        pending["items"][1],
+        company=replace(pending["items"][1].company, ticker=pending["items"][0].company.ticker),
+    )
+    pending["items"] = [pending["items"][0], duplicate]
+    app.session_state["discovery_comparison_pending"] = pending
+    app.run()
+    assert any("ticker symbols are ambiguous" in item.value for item in app.error)
+    assert app.session_state["page"] == "Screener"
+    assert app.multiselect(key="discovery_selection_widget").value == chosen_ids
+    pending = dict(app.session_state["discovery_comparison_evidence"])
+    pending["context"] = ("other-store", "fmp")
+    app.session_state["discovery_comparison_pending"] = pending
+    app.run()
+    assert any("different store or provider" in item.value for item in app.error)
+    assert app.session_state["page"] == "Screener"
+    pending = dict(app.session_state["discovery_comparison_evidence"])
+    item = pending["items"][0]
+    pending["items"] = [replace(item, company=replace(item.company, security_id=99999)), *pending["items"][1:]]
+    app.session_state["discovery_comparison_pending"] = pending
+    app.run()
+    assert any("changed or has an ambiguous ticker" in item.value for item in app.error)
+    assert app.session_state["page"] == "Screener"
+    app.button(key="discovery_clear").click().run()
+    assert app.multiselect(key="discovery_selection_widget").value == []
+    assert source.store._conn.total_changes == before
     monkeypatch.undo()
     cache.clear_caches()
 
@@ -441,6 +592,12 @@ def _render_discovery_app(lanes, cards, reviews, results):
     from owner_lens.workbench.views.screener import render_discovery
 
     render_discovery(lanes, cards, reviews, results)
+
+
+def _render_discovery_comparison_app(evidence, selected):
+    from owner_lens.workbench.views.compare import render_discovery_evidence
+
+    render_discovery_evidence(evidence, selected)
 
 
 def test_compact_shortlist_remainder_details_and_all_gates(source, monkeypatch):
@@ -541,7 +698,7 @@ def test_real_persisted_discovery_presentation_read_only(monkeypatch):
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline"))
     monkeypatch.setattr(httpx.AsyncClient, "send", lambda *a, **k: pytest.fail("offline"))
     try:
-        targets = {"DECK", "CMG", "NVDA", "ADSK", "ORCL", "INTC"}
+        targets = {"DECK", "CMG", "NVDA", "MU", "ADSK", "ORCL", "INTC", "JPM"}
         companies = tuple(c for c in load_persisted_companies(source, "fmp") if c.ticker in targets)
         assert {c.ticker for c in companies} == targets
         histories = {c.ticker: load_canonical_history(source, c) for c in companies}
@@ -553,9 +710,9 @@ def test_real_persisted_discovery_presentation_read_only(monkeypatch):
             for ticker, history in histories.items()
         }
         lanes = discovery_lanes(companies, results, owners)
-        assert {i.company.ticker for i in lanes.compounders} == {"DECK", "CMG", "NVDA"}
+        assert {i.company.ticker for i in lanes.compounders} == {"DECK", "CMG", "NVDA", "MU"}
         assert {i.company.ticker for i in lanes.improving} == {"ADSK"}
-        assert {i.company.ticker for i in lanes.fragility} == {"ORCL", "INTC"}
+        assert {i.company.ticker for i in lanes.fragility} == {"ORCL", "INTC", "JPM"}
         reviews = tuple(
             load_uncertainty_fragility(source, c, next(r for r in results if r.ticker == c.ticker))
             for c in companies
@@ -587,8 +744,34 @@ def test_real_persisted_discovery_presentation_read_only(monkeypatch):
             for column in ("Latest P/FCF", "Median P/FCF", "Latest FCF yield", "Median FCF yield"):
                 assert pd.api.types.is_numeric_dtype(table[column])
         gates = next(d.value for d in app.dataframe if len(d.value.columns) == 4 and "Gate/warning summary" in d.value.columns)
-        assert set(gates["Ticker"]) == {"ORCL", "INTC"}
+        assert set(gates["Ticker"]) == {"ORCL", "INTC", "JPM"}
         assert gates["Gate/warning summary"].str.contains("Persistent cash burn").all()
+        all_items = (*lanes.compounders, *lanes.improving, *lanes.fragility)
+        selected = ["NVDA", "MU", "ADSK", "ORCL", "JPM"]
+        picked = [next(i for i in all_items if i.company.ticker == ticker) for ticker in selected]
+        comparison_evidence = {
+            "items": picked,
+            "reviews": {r.ticker: r for r in reviews},
+            "cards": {
+                ticker: cards.get(ticker, {"error": "Valuation not assessed in the financial-gate lane."})
+                for ticker in selected
+            },
+            "market_date": attention_date(cards),
+        }
+        rendered = AppTest.from_function(
+            _render_discovery_comparison_app, args=(comparison_evidence, selected)
+        ).run()
+        assert not rendered.exception
+        evidence = rendered.dataframe[0].value
+        assert set(evidence.columns) == set(selected)
+        assert evidence.loc["Median FCF yield", "ADSK"] == "N/A"
+        assert float(evidence.loc["FCF/share latest/median", "MU"][:-1]) > float(
+            evidence.loc["FCF/share latest/median", "NVDA"][:-1]
+        )
+        for ticker in ("ORCL", "JPM"):
+            assert evidence.loc["Existing gate", ticker] == "PERSISTENT_CASH_BURN"
+            assert evidence.loc["Median FCF yield", ticker] == "N/A"
+            assert "not assessed" in evidence.loc["Saved price and conditional valuation", ticker]
         assert store._conn.total_changes == 0
     finally:
         store.close()

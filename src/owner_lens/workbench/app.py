@@ -11,11 +11,13 @@ Launch it with ``uv run owner-lens workbench``.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import streamlit as st
 
 from owner_lens.canonical import CanonicalDataError
 from owner_lens.decisions import DecisionError
+from owner_lens.opportunity_catalog import discover_comparison_companies
 from owner_lens.opportunity_comparison import ComparisonError
 from owner_lens.persistence import SqliteStore
 from owner_lens.persistence.errors import PersistenceError
@@ -110,6 +112,13 @@ def main() -> None:
 
     usable = tuple(c for c in companies if c.available or provider == "fmp")
     prints = fingerprint(companies)
+    pending = st.session_state.pop("discovery_comparison_pending", None)
+    if pending is not None:
+        try:
+            with open_run_source() as source:
+                _route_discovery_comparison(pending, usable, provider, db_path, source.store)
+        except (ComparisonError, PersistenceError, OSError, WorkbenchError) as exc:
+            st.error(f"Cannot compare the selected securities: {exc}")
     comparison_ticker = st.session_state.pop("comparison_requested_company", None)
     if comparison_ticker is not None:
         st.session_state["selected_ticker"] = comparison_ticker
@@ -130,7 +139,9 @@ def main() -> None:
                     st.error("Opportunity comparison, decisions and shadow entries require SQLite.")
                     return
                 if page == "Opportunity Comparison":
-                    opportunity_comparison.render(source.store)
+                    opportunity_comparison.render(
+                        source.store, discovery_context=(db_path, provider)
+                    )
                 elif page == "Decisions":
                     decisions.render(source.store)
                 elif page == "Portfolio Context / Position Sizing":
@@ -231,7 +242,10 @@ def main() -> None:
                 overview_data = _guarded(lambda: discovery_overview(companies, results, db_path))
                 if overview_data is not None:
                     lanes, cards = overview_data
-                    screener.render_discovery(lanes, cards, reviews, results)
+                    screener.render_discovery(
+                        lanes, cards, reviews, results,
+                        selection_context=(db_path, provider),
+                    )
     elif page == "Company":
         _company_page(usable, provider, db_path)
     elif page == "Compare":
@@ -300,15 +314,86 @@ def _ticker_picker(
 def _multi_picker(companies: tuple[PersistedCompany, ...]) -> None:
     tickers = [c.ticker for c in companies]
     selected = st.session_state.get("compare_tickers", tickers[: compare.MIN_COMPANIES])
-    st.session_state["compare_tickers"] = [
-        ticker for ticker in selected if ticker in tickers
-    ]
+    if "compare_tickers" not in st.session_state:
+        st.session_state["compare_tickers"] = selected
+    unavailable = [ticker for ticker in selected if ticker not in tickers]
+    if unavailable:
+        st.warning(
+            "Unavailable selections remain selected until removed: "
+            + ", ".join(unavailable)
+        )
     st.multiselect(
         f"Companies ({compare.MIN_COMPANIES}–{compare.MAX_COMPANIES})",
-        options=tickers,
+        options=[*tickers, *unavailable],
         max_selections=compare.MAX_COMPANIES,
         key="compare_tickers",
     )
+
+
+def _route_discovery_comparison(
+    pending: dict[str, Any],
+    companies: tuple[PersistedCompany, ...],
+    provider: str,
+    db_path: str,
+    store: object,
+) -> None:
+    if pending["context"] != (db_path, provider):
+        raise WorkbenchError("The selection belongs to a different store or provider.")
+    if not isinstance(store, SqliteStore):
+        raise WorkbenchError("Discovery comparison requires a SQLite store.")
+    items = pending["items"]
+    if not 2 <= len(items) <= 5:
+        raise WorkbenchError("Select 2-5 securities.")
+    selected = [item.company for item in items]
+    identities = [company.security_id for company in selected]
+    tickers = [company.ticker for company in selected]
+    if None in identities or len(set(identities)) != len(identities):
+        raise WorkbenchError("Selected security identities are missing or duplicated.")
+    if len(set(tickers)) != len(tickers):
+        raise WorkbenchError("Selected ticker symbols are ambiguous; no company was substituted.")
+    for selected_company in selected:
+        matches = [company for company in companies if company.ticker == selected_company.ticker]
+        if len(matches) != 1 or matches[0] != selected_company:
+            raise WorkbenchError(
+                f"{selected_company.ticker} changed or has an ambiguous ticker. Reload and reselect."
+            )
+    catalog = discover_comparison_companies(store)
+    eligible: set[str] = set()
+    for selected_company in selected:
+        catalog_matches = [
+            entry for entry in catalog.companies
+            if entry.ticker == selected_company.ticker
+        ]
+        if len(catalog_matches) != 1:
+            continue
+        eligible_id = catalog_matches[0].latest.underwriting_id
+        records = store.list_underwriting(selected_company.ticker)
+        if any(
+            record.underwriting_id == eligible_id
+            and record.security_id == selected_company.security_id
+            for record in records
+        ):
+            eligible.add(selected_company.ticker)
+    missing = [ticker for ticker in tickers if ticker not in eligible]
+    st.session_state["discovery_comparison_evidence"] = pending
+    if missing:
+        st.session_state["compare_tickers"] = tickers
+        st.session_state["discovery_comparison_message"] = (
+            "Using Compare because these securities lack an identity-matched completed "
+            "underwriting: " + ", ".join(missing) + ". All selections were retained."
+        )
+        st.session_state["requested_page"] = "Compare"
+    else:
+        st.session_state["opportunity_companies"] = tickers
+        st.session_state["opportunity_extra_versions"] = []
+        for ticker in tickers:
+            st.session_state[f"opportunity_version.{ticker}"] = "Latest eligible"
+        st.session_state.pop("allocation_workflow", None)
+        st.session_state.pop("opportunity_requested_underwriting", None)
+        st.session_state["discovery_comparison_message"] = (
+            "Using Opportunity Comparison with each selected security's latest eligible frozen underwriting."
+        )
+        st.session_state["requested_page"] = "Opportunity Comparison"
 
 
 def _find(
@@ -373,6 +458,16 @@ def _company_page(
 def _compare_page(
     usable: tuple[PersistedCompany, ...], provider: str = "sec", db_path: str = ""
 ) -> None:
+    requested = st.session_state.get("compare_tickers", [])
+    missing = [ticker for ticker in requested if sum(c.ticker == ticker for c in usable) != 1]
+    if missing:
+        st.title("Compare")
+        st.error(
+            "Cannot compare unavailable or ambiguous selections: "
+            + ", ".join(missing)
+            + ". Remove them or restore their evidence; no substitute was chosen."
+        )
+        return
     selected = [
         c
         for c in usable
@@ -387,6 +482,11 @@ def _compare_page(
         )
     )
     compare.render(table)
+    evidence = st.session_state.get("discovery_comparison_evidence")
+    if evidence is not None and evidence["context"] == (db_path, provider):
+        compare.render_discovery_evidence(
+            evidence, st.session_state.get("compare_tickers", [])
+        )
 
 
 def _data_quality_page(

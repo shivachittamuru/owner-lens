@@ -40,7 +40,7 @@ def _open_company(selection: UnderwritingSelection) -> None:
     st.rerun()
 
 
-def render(store: SqliteStore) -> None:
+def render(store: SqliteStore, *, discovery_context: tuple[str, str] | None = None) -> None:
     st.title("Opportunity Comparison")
     workflow = st.session_state.get("allocation_workflow")
     if (
@@ -77,18 +77,39 @@ def render(store: SqliteStore) -> None:
             st.session_state["opportunity_extra_versions"] = []
     if not companies:
         st.info("No fully analyzed, comparison-eligible underwritings are available.")
-    if "opportunity_companies" in st.session_state:
+    evidence = st.session_state.get("discovery_comparison_evidence")
+    current = st.session_state.get("opportunity_companies", [])
+    handoff_missing = (
+        evidence is not None
+        and evidence["context"] == discovery_context
+        and set(current) == {item.company.ticker for item in evidence["items"]}
+        and any(ticker not in companies for ticker in current)
+    )
+    if "opportunity_companies" in st.session_state and not handoff_missing:
         st.session_state["opportunity_companies"] = [
             ticker for ticker in st.session_state["opportunity_companies"]
             if ticker in companies
         ]
     selected = st.multiselect(
         "Companies (2-5)",
-        options=list(companies),
-        format_func=lambda ticker: f"{ticker} — {companies[ticker].name}",
+        options=[*companies, *(ticker for ticker in current if ticker not in companies)] if handoff_missing else list(companies),
+        format_func=lambda ticker: (
+            f"{ticker} — {companies[ticker].name}"
+            if ticker in companies else f"{ticker} — no longer eligible"
+        ),
         max_selections=5,
         key="opportunity_companies",
     )
+    if any(ticker not in companies for ticker in selected):
+        st.error(
+            "A selected underwriting is no longer eligible. Remove it or return "
+            "to Screener and compare again; no selection was discarded or substituted."
+        )
+        return
+    if evidence is not None and evidence["context"] == discovery_context:
+        from owner_lens.workbench.views.compare import render_discovery_evidence
+
+        render_discovery_evidence(evidence, selected)
     overrides: dict[str, str] = {}
     with st.expander("Advanced: historical underwriting versions"):
         st.caption("Optional exact-version overrides; multiple versions of one company are supported.")
