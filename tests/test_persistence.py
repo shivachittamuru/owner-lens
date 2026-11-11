@@ -187,6 +187,36 @@ def test_filesystem_raw_store_uses_cik_subdir(tmp_path: Path) -> None:
     assert len(list((tmp_path / "raw").rglob("*.json"))) == 1
 
 
+def test_fresh_raw_store_resolves_unscoped_without_recursive_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "raw"
+    payload = b'[{"symbol":"ADBE"}]'
+    digest = compute_content_hash(payload)
+    FilesystemRawSnapshotStore(root).put(digest, payload)
+    fresh = FilesystemRawSnapshotStore(root)
+
+    def forbidden_search(*args: object, **kwargs: object) -> None:
+        pytest.fail("unscoped content should not require a recursive search")
+
+    monkeypatch.setattr(Path, "rglob", forbidden_search)
+    assert fresh.exists(digest)
+    assert fresh.get(digest) == payload
+
+
+def test_fresh_raw_store_falls_back_to_scoped_and_missing_paths(tmp_path: Path) -> None:
+    root = tmp_path / "raw"
+    payload = b'{"cik":796343}'
+    digest = compute_content_hash(payload)
+    FilesystemRawSnapshotStore(root).put(digest, payload)
+    fresh = FilesystemRawSnapshotStore(root)
+    assert fresh.get(digest) == payload
+    missing = compute_content_hash(b"missing")
+    assert not fresh.exists(missing)
+    with pytest.raises(StorageReadError, match="not found"):
+        fresh.get(missing)
+
+
 # -- Schema (T016) ----------------------------------------------------------
 
 

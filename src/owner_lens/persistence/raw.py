@@ -67,8 +67,8 @@ class FilesystemRawSnapshotStore:
     Payloads are laid out as ``<root>/<CIK>/<content-hash>.json``: the content
     hash is the identity and the CIK (derived from the payload, never the mutable
     ticker) groups a company's snapshots. ``get``/``exists`` resolve by content
-    hash alone via a cache and a filename fallback, so they work in a fresh
-    process without the payload in hand.
+    hash alone via a cache, the unscoped directory, and a filename fallback,
+    so they work in a fresh process without the payload in hand.
     """
 
     def __init__(self, root: Path) -> None:
@@ -99,6 +99,13 @@ class FilesystemRawSnapshotStore:
         cached = self._by_hash.get(content_hash)
         if cached is not None:
             return cached
+        if len(content_hash) == 64 and all(
+            character in "0123456789abcdef" for character in content_hash
+        ):
+            unscoped = self._root / _UNSCOPED / f"{content_hash}.json"
+            if unscoped.is_file():
+                self._by_hash[content_hash] = unscoped
+                return unscoped
         found = next(self._root.rglob(f"{content_hash}.json"), None)
         if found is not None:
             self._by_hash[content_hash] = found
