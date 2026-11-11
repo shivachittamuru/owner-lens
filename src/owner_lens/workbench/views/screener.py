@@ -244,6 +244,12 @@ def _clear_discovery_selection() -> None:
     st.session_state.pop("discovery_selection_labels", None)
 
 
+def _inspect_discovery(ticker: str) -> None:
+    st.session_state["show_uncertainty_fragility"] = True
+    st.session_state["uf_ticker"] = ticker
+    st.session_state["uf_flagged_only"] = False
+
+
 def _comparison_selector(
     lanes: DiscoveryLanes,
     cards: dict[str, dict[str, Any]],
@@ -333,8 +339,14 @@ def render_discovery(
     results: tuple[ScreeningResult, ...],
     *,
     selection_context: tuple[str, str] = ("", "fmp"),
+    show_review: bool = True,
 ) -> None:
     st.subheader("Discovery research queue")
+    if not show_review:
+        st.caption(
+            "Canonical financial checks support ordering and warnings. Detailed raw-source "
+            "definition and provenance checks have not run; enable the review to inspect them."
+        )
     market_date = attention_date(cards)
     st.caption(
         f"Valuation-attention ordering | Common saved market date: {market_date or 'unavailable'}. "
@@ -545,9 +557,12 @@ def render_discovery(
         ticker = st.selectbox(
             "Shortlisted company to investigate", choices, key="discovery_ticker"
         )
-        if st.button("Inspect shortlisted company evidence", key="discovery_inspect"):
-            st.session_state["uf_ticker"] = ticker
-            st.session_state["uf_flagged_only"] = False
+        st.button(
+            "Inspect shortlisted company evidence",
+            key="discovery_inspect",
+            on_click=_inspect_discovery,
+            args=(ticker,),
+        )
         if st.button(
             "Open shortlisted company research / underwriting", key="discovery_open"
         ):
@@ -587,7 +602,8 @@ def render_discovery(
                             ),
                         }
                     )
-    render_uncertainty_fragility(reviews, results)
+    if show_review:
+        render_uncertainty_fragility(reviews, results)
 
 
 def render(results: tuple[ScreeningResult, ...]) -> None:

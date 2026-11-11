@@ -14,8 +14,9 @@ investment recommendation.
 The inspector covers the active persisted universe in original Feature 7 order.
 The additive discovery queue has independent conditional valuation-attention
 ordering; it does not write back a new screening rank.
-Per-company cached results are plain data, keyed on company evidence and the
-original screening result. Loading is opt-in; no provider calls are made.
+Full per-company cached results are plain data, keyed on company evidence and
+the original screening result. The full review is opt-in; no provider calls
+are made.
 
 ## Business indicators
 
@@ -90,9 +91,12 @@ year duration when the provider omits period-start metadata.
 
 ### Integrated discovery queue
 
-M2-A3.3 adds a multi-company queue above the evidence inspector. It is visible
-by default below the existing Screener and Improving Economics views; uncheck
-Show Uncertainty & Fragility review to hide the additive section.
+The multi-company queue appears below the existing Screener and Improving
+Economics views. The detailed review is off by default. When it is off, the
+queue uses the existing canonical financial assessment for its candidates to
+preserve ordering and warnings. Raw-source definition and provenance checks
+are marked as not run. Enable Show Uncertainty & Fragility review, or select
+Inspect shortlisted company evidence, to load the full-universe review.
 
 Two opportunity lanes use existing eligibility, not missingness or accounting
 differences:

@@ -224,28 +224,32 @@ def main() -> None:
                 screener.render_improving_economics_review(candidates)
         else:
             screener.render(results)
-        if st.checkbox(
+        show_review = st.checkbox(
             "Show Uncertainty & Fragility review",
-            value=True,
+            value=False,
             key="show_uncertainty_fragility",
             help="Offline historical research prompts, existing financial warnings, and evidence limitations. No risk score.",
-        ):
-            from owner_lens.workbench.cache import (
-                discovery_overview,
-                uncertainty_fragility_reviews,
-            )
+        )
+        from owner_lens.workbench.cache import (
+            discovery_canonical_reviews,
+            discovery_overview,
+            uncertainty_fragility_reviews,
+        )
 
+        overview_data = _guarded(lambda: discovery_overview(companies, results, db_path))
+        if overview_data is not None:
+            lanes, cards = overview_data
             reviews = _guarded(
                 lambda: uncertainty_fragility_reviews(companies, results, db_path)
+                if show_review
+                else discovery_canonical_reviews(lanes, companies, db_path)
             )
             if reviews is not None:
-                overview_data = _guarded(lambda: discovery_overview(companies, results, db_path))
-                if overview_data is not None:
-                    lanes, cards = overview_data
-                    screener.render_discovery(
-                        lanes, cards, reviews, results,
-                        selection_context=(db_path, provider),
-                    )
+                screener.render_discovery(
+                    lanes, cards, reviews, results,
+                    selection_context=(db_path, provider),
+                    show_review=show_review,
+                )
     elif page == "Company":
         _company_page(usable, provider, db_path)
     elif page == "Compare":

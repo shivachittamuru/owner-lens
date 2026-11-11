@@ -22,6 +22,7 @@ only place caching is applied.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import streamlit as st
@@ -36,7 +37,9 @@ from owner_lens.screening import (
     screen_company,
 )
 from owner_lens.uncertainty_fragility import (
+    ReviewObservation,
     UncertaintyFragilityReview,
+    load_canonical_uncertainty_fragility,
     load_uncertainty_fragility,
 )
 from owner_lens.workbench.data import (
@@ -237,6 +240,46 @@ def uncertainty_fragility_reviews(
             )
             for result in sorted(results, key=lambda item: item.rank_key)
         )
+
+
+def discovery_canonical_reviews(
+    lanes: DiscoveryLanes, companies: tuple[PersistedCompany, ...], db_path: str
+) -> tuple[UncertaintyFragilityReview, ...]:
+    """Assess lane candidates without reading detailed raw-source diagnostics."""
+    items = (*lanes.compounders, *lanes.improving, *lanes.fragility)
+    if not items:
+        return ()
+    with open_run_source() as source:
+        current = {
+            company.ticker: company
+            for company in load_persisted_companies(source, companies[0].provider)
+        }
+        if any(current.get(company.ticker) != company for company in companies):
+            raise WorkbenchError("Discovery evidence changed; reload persisted data.")
+        reviews = []
+        for item in items:
+            review, history_available = load_canonical_uncertainty_fragility(
+                source, item.company, item.screening
+            )
+            if (
+                history_available
+                and item.company.provider == "fmp"
+                and (not isinstance(source.store, SqliteStore) or item.company.security_id is None)
+            ):
+                raise WorkbenchError("FMP review requires stable persisted security identity.")
+            reviews.append(
+                replace(
+                    review,
+                    limitations=(
+                        *review.limitations,
+                        ReviewObservation(
+                            "DETAILED_REVIEW_NOT_RUN",
+                            "Raw source definition and provenance checks have not been run.",
+                        ),
+                    ),
+                )
+            )
+        return tuple(reviews)
 
 
 @st.cache_data(show_spinner="Loading saved discovery price evidence…")

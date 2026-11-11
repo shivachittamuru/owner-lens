@@ -353,12 +353,12 @@ def assess_uncertainty_fragility(
     )
 
 
-def load_uncertainty_fragility(
+def load_canonical_uncertainty_fragility(
     source: WorkbenchSource,
     company: PersistedCompany,
     result: ScreeningResult,
-) -> UncertaintyFragilityReview:
-    """Read canonical-linked raw evidence only; no prices, refresh or writes."""
+) -> tuple[UncertaintyFragilityReview, bool]:
+    """Assess canonical evidence and indicate whether its history was available."""
     try:
         history = load_canonical_history(source, company)
     except WorkbenchError as exc:
@@ -380,12 +380,25 @@ def load_uncertainty_fragility(
             else (),
             (ReviewObservation("HISTORY_NOT_VERIFIED", str(exc)),),
             (),
-        )
-    review = assess_uncertainty_fragility(
+        ), False
+    return assess_uncertainty_fragility(
         assemble_screening_evidence(history),
         result,
         sector=company.sector,
+    ), True
+
+
+def load_uncertainty_fragility(
+    source: WorkbenchSource,
+    company: PersistedCompany,
+    result: ScreeningResult,
+) -> UncertaintyFragilityReview:
+    """Read canonical-linked raw evidence only; no prices, refresh or writes."""
+    review, history_available = load_canonical_uncertainty_fragility(
+        source, company, result
     )
+    if not history_available:
+        return review
     limits = list(review.limitations)
     sources: list[dict[str, Any]] = []
     if (

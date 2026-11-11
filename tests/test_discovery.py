@@ -347,6 +347,7 @@ def test_discovery_overview_lists_multiple_companies_and_inspects(
     )
     monkeypatch.setattr(cache, "discovery_overview", lambda *a: (lanes, cards))
     monkeypatch.setattr(cache, "uncertainty_fragility_reviews", lambda *a: reviews)
+    monkeypatch.setattr(cache, "discovery_canonical_reviews", lambda *a: reviews)
     monkeypatch.setattr(cache, "cached_screening", lambda *a, **k: results)
     monkeypatch.setattr(
         httpx.Client, "send", lambda *a, **k: pytest.fail("offline rendering")
@@ -380,6 +381,115 @@ def test_discovery_overview_lists_multiple_companies_and_inspects(
     assert app.selectbox(key="uf_ticker").value == "IMPROVING"
     monkeypatch.undo()
     cache.clear_caches()
+
+
+def test_lazy_discovery_preserves_order_selection_and_gates(
+    source: WorkbenchSource, monkeypatch
+):
+    from owner_lens.uncertainty_fragility import ReviewObservation
+    from owner_lens.workbench import cache
+
+    cache.clear_caches()
+    company = load_persisted_companies(source, "fmp")[0]
+    original = company_detail(source, company).screening
+    review = load_uncertainty_fragility(source, company, original)
+    companies, results, owners = sample_lanes(source)
+    lanes = discovery_lanes(companies, results, owners)
+    _, attention_reviews, card = attention_fixture(source)
+    cards = {"FIRST": deepcopy(card), "SECOND": deepcopy(card)}
+    cards["SECOND"]["median_price_to_fcf"] = 12.0
+    full = tuple(
+        attention_reviews.get(r.ticker) or replace(
+            review, ticker=r.ticker, existing_gate=r.gate.value if r.gate else None
+        )
+        for r in results
+    )
+    partial = tuple(
+        replace(r, limitations=(*r.limitations, ReviewObservation(
+            "DETAILED_REVIEW_NOT_RUN", "Raw source checks not run."
+        )))
+        for r in full
+    )
+    calls = []
+    monkeypatch.setattr(cache, "discovery_overview", lambda *a: (lanes, cards))
+    monkeypatch.setattr(cache, "discovery_canonical_reviews", lambda *a: partial)
+    monkeypatch.setattr(
+        cache, "uncertainty_fragility_reviews",
+        lambda *a: calls.append("full") or full,
+    )
+    monkeypatch.setattr(cache, "cached_screening", lambda *a, **k: results)
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline"))
+    monkeypatch.setattr(httpx.AsyncClient, "send", lambda *a, **k: pytest.fail("offline"))
+    monkeypatch.setenv("OWNER_LENS_DB_PATH", source.db_path)
+    monkeypatch.setenv("OWNER_LENS_RAW_DATA_PATH", source.raw_data_path)
+    monkeypatch.setenv("OWNER_LENS_WORKBENCH_PROVIDER", "fmp")
+    app = AppTest.from_file(
+        str(Path(__file__).parents[1] / "src" / "owner_lens" / "workbench" / "app.py"),
+        default_timeout=120,
+    )
+    app.session_state["page"] = "Screener"
+    before = source.store._conn.total_changes
+    app.run()
+    assert not app.exception and not app.error
+    assert not app.checkbox(key="show_uncertainty_fragility").value
+    assert calls == []
+    assert any("checks have not run" in c.value for c in app.caption)
+    assert not any(h.value == "Uncertainty & Fragility review" for h in app.subheader)
+    table = next(
+        d.value for d in app.dataframe
+        if "Median P/FCF" in d.value.columns and "Company" not in d.value.columns
+    )
+    assert table["Ticker"].tolist() == ["SECOND", "FIRST"]
+    gate_table = next(
+        d.value for d in app.dataframe
+        if "Gate/warning summary" in d.value.columns and "Company" not in d.value.columns
+    )
+    assert "Persistent cash burn" in gate_table["Gate/warning summary"].iloc[0]
+    chosen = [companies[0].security_id, companies[3].security_id]
+    app.multiselect(key="discovery_selection_widget").set_value(chosen).run()
+    app.checkbox(key="show_uncertainty_fragility").check().run()
+    assert calls and not app.exception
+    assert app.multiselect(key="discovery_selection_widget").value == chosen
+    enabled_table = next(
+        d.value for d in app.dataframe
+        if "Median P/FCF" in d.value.columns and "Company" not in d.value.columns
+    )
+    pd.testing.assert_frame_equal(
+        table[["Ticker", "Median P/FCF", "Median FCF yield"]],
+        enabled_table[["Ticker", "Median P/FCF", "Median FCF yield"]],
+    )
+    app.checkbox(key="show_uncertainty_fragility").uncheck().run()
+    assert app.multiselect(key="discovery_selection_widget").value == chosen
+    assert source.store._conn.total_changes == before
+    monkeypatch.undo()
+    cache.clear_caches()
+
+
+def test_canonical_discovery_review_matches_full_financial_state_without_raw_reads(
+    source: WorkbenchSource, monkeypatch
+):
+    from contextlib import nullcontext
+
+    from owner_lens.candidate_review import CandidateSelection
+    from owner_lens.workbench import cache
+    from owner_lens.workbench.discovery import DiscoveryLanes
+
+    company = load_persisted_companies(source, "fmp")[0]
+    result = company_detail(source, company).screening
+    full = load_uncertainty_fragility(source, company, result)
+    selected = CandidateSelection("COMPOUNDERS", company, result, "test")
+    lanes = DiscoveryLanes((selected,), (), ())
+    monkeypatch.setattr(cache, "open_run_source", lambda: nullcontext(source))
+    monkeypatch.setattr(source.raw_store, "get", lambda *a: pytest.fail("raw review"))
+    before = source.store._conn.total_changes
+    (partial,) = cache.discovery_canonical_reviews(lanes, (company,), source.db_path)
+    assert partial.financial_state == full.financial_state
+    assert partial.financial == full.financial
+    assert partial.business == full.business
+    assert partial.annual == full.annual
+    assert {x.code for x in partial.limitations} >= {"DETAILED_REVIEW_NOT_RUN"}
+    assert not partial.sources
+    assert source.store._conn.total_changes == before
 
 
 @pytest.mark.parametrize("eligible", [False, True])
@@ -419,6 +529,14 @@ def test_discovery_selection_routes_all_to_compare_and_survives_navigation(
         )
         for r in results
     )
+    from owner_lens.uncertainty_fragility import ReviewObservation
+
+    partial_reviews = tuple(
+        replace(r, limitations=(*r.limitations, ReviewObservation(
+            "DETAILED_REVIEW_NOT_RUN", "Raw source checks not run."
+        )))
+        for r in reviews
+    )
     expected = build_comparison(
         replace(detail, company=company, screening=result)
         for company, result in zip(companies, results, strict=True)
@@ -436,6 +554,7 @@ def test_discovery_selection_routes_all_to_compare_and_survives_navigation(
     monkeypatch.setattr(data, "load_persisted_companies", lambda *a: companies)
     monkeypatch.setattr(cache, "discovery_overview", lambda *a: (lanes, cards))
     monkeypatch.setattr(cache, "uncertainty_fragility_reviews", lambda *a: reviews)
+    monkeypatch.setattr(cache, "discovery_canonical_reviews", lambda *a: partial_reviews)
     monkeypatch.setattr(cache, "cached_screening", lambda *a, **k: results)
     monkeypatch.setattr(cache, "cached_comparison", lambda *a, **k: expected)
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline"))
@@ -459,7 +578,7 @@ def test_discovery_selection_routes_all_to_compare_and_survives_navigation(
     assert all(any(option.startswith(ticker + " - ") for option in picker.options) for ticker in chosen_tickers)
     picker.set_value(chosen_ids).run()
     assert app.session_state["discovery_selection_ids"] == chosen_ids
-    app.button(key="discovery_inspect").click().run()
+    assert not app.checkbox(key="show_uncertainty_fragility").value
     assert app.multiselect(key="discovery_selection_widget").value == chosen_ids
     app.button(key="discovery_compare").click().run()
     assert not app.exception and not app.error, [item.value for item in app.error]
@@ -474,6 +593,7 @@ def test_discovery_selection_routes_all_to_compare_and_survives_navigation(
         assert any("lack an identity-matched completed underwriting" in c.value for c in app.caption)
     evidence = next(d.value for d in app.dataframe if "Evidence" == d.value.index.name)
     assert set(evidence.columns) == set(chosen_tickers)
+    assert "DETAILED_REVIEW_NOT_RUN" in evidence.loc["Evidence limitations", "FIRST"]
     if not eligible:
         assert evidence.loc["Existing gate", "GATED"] == "PERSISTENT_CASH_BURN"
         assert "not assessed" in evidence.loc["Saved price and conditional valuation", "GATED"]
